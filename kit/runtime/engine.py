@@ -6,13 +6,16 @@ one per declared model, and every vision app goes through it. It has two
 interchangeable backends.
 
 **ctypes (default)** -- `kit.runtime.ctypes_rknn.CtypesRknnModel` drives
-`librknnrt.so` directly. This is the default because `rknn_toolkit_lite2` leaks:
-its Cython extension (`rknn_runtime.cpython-311-aarch64-linux-gnu.so`) does not
-free everything it allocates per `inference()`, measured at **43.8 kB per call**
-on a nine-output YOLOv8 graph -- ~2.2 MB/min at 18.8 fps, an OOM in hours on a
-2 GB board. Driving the identical `librknnrt` sequence without the extension is
-flat (6465 iterations, zero `[heap]` growth), which is what places the missing
-`free` inside the extension rather than in the vendor runtime.
+`librknnrt.so` directly. This is the default because `RKNNLite.inference()`
+leaves one set of reference cycles per call, holding that call's ctypes
+buffers: RSS grows **43.8 kB per call** on a nine-output YOLOv8 graph --
+~2.2 MB/min at 18.8 fps, an OOM in hours on a 2 GB board. The memory is cyclic
+garbage rather than a C-level leak (a periodic `gc.collect()` returns RSS to
+the same byte count every time, and `--gc-every 5` in the repro drops the rate
+269x), and `librknnrt` itself is clean -- driving the identical sequence
+without the wrapper is flat over 6465 iterations with no `gc` at all. The other
+valid fix is periodic `gc.collect()` in every inference loop; it costs ~23% on
+inference latency, which is why this kit bypasses the wrapper instead.
 
 The swap is numerically a no-op, and that was measured rather than argued: over
 64 inputs (60 real frames plus black/white/grey/noise) all 576 output tensors
@@ -20,12 +23,13 @@ came back **bit-identical**, and the decoded post-NMS boxes matched to 0.0 in
 both corner position and score.
 
 **rknnlite** -- the original `RKNNLite` wrapper, kept as the retreat. Select it
-with `ESK_RKNN_BACKEND=rknnlite`. It is a working implementation that leaks; it
-exists so a board whose `librknnrt.so` does not match the ctypes prototypes has
-somewhere to go, and so the leak can be re-measured without reinstalling an old
-package. When the ctypes backend is requested but cannot initialise, the fall
-back to rknnlite is **printed**, never silent -- a quiet downgrade would make
-the leak look like it came back on its own.
+with `ESK_RKNN_BACKEND=rknnlite`. It works, and grows RSS unless the caller runs
+`gc.collect()` periodically; it exists so a board whose `librknnrt.so` does not
+match the ctypes prototypes has somewhere to go, and so the growth can be
+re-measured without reinstalling an old package. When the ctypes backend is
+requested but cannot initialise, the fall back to rknnlite is **printed**, never
+silent -- a quiet downgrade would make the growth look like it came back on its
+own.
 
 Only dependencies: numpy, plus rknnlite for the non-default backend. No
 onnxruntime / torch.
@@ -56,7 +60,8 @@ def _requested_backend() -> str:
 
 
 class RknnLiteModel:
-    """The original rknn_toolkit_lite2 path. Works, and leaks 43.8 kB/call."""
+    """The original rknn_toolkit_lite2 path. Works, and accumulates 43.8 kB/call
+    of cyclic garbage unless the caller collects periodically."""
 
     backend = "rknnlite"
 
@@ -115,7 +120,8 @@ class RknnModel:
             except Exception as exc:  # noqa: BLE001 -- reported, then degraded
                 print(f"[kit.runtime.engine] ctypes backend unavailable for "
                       f"{path!r} ({type(exc).__name__}: {exc}); falling back to "
-                      f"rknnlite, which LEAKS ~43.8 kB per inference",
+                      f"rknnlite, which accumulates ~43.8 kB per inference "
+                      f"of gc-collectable cycles",
                       flush=True)
 
         if self._impl is None:

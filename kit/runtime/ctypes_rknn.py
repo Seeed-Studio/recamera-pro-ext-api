@@ -1,24 +1,32 @@
 """``librknnrt.so`` driven directly from Python, without rknn_toolkit_lite2.
 
-Why this exists: ``rknn_toolkit_lite2``'s Cython extension
-(``rknn_runtime.cpython-311-aarch64-linux-gnu.so``) does not free everything it
-allocates per ``inference()``. On the nine-output YOLOv8 graph the
-intrusion-detection app runs, that is **43.8 kB of RSS per call** -- ~2.2 MB/min
-at 18.8 fps, which is an OOM in hours on a 2 GB board, and it is the reason a
-long-running vision app on this device had to be restarted periodically.
+Why this exists: ``RKNNLite.inference()`` leaves one set of reference cycles
+per call, holding that call's ctypes buffers (the ``c_char_Array`` input copy,
+one ctypes array per output tensor, ``RKNNRtTensorAttr`` instances). Reference
+cycles are invisible to refcounting, so nothing is reclaimed until a cyclic
+collection runs, and at default ``gc`` thresholds the collector does not keep
+up. On the nine-output YOLOv8 graph the intrusion-detection app runs, RSS grows
+**43.8 kB per call** -- ~2.2 MB/min at 18.8 fps, an OOM in hours on a 2 GB
+board, and the reason a long-running vision app on this device had to be
+restarted periodically.
 
-The leak was localized rather than assumed. This module performs exactly the
-same ``librknnrt`` sequence the Cython extension performs --
-``rknn_inputs_set`` + ``rknn_run`` + ``rknn_outputs_get`` +
-``rknn_outputs_release`` with ``want_float=1``, which are precisely the entry
-points named in the extension's ``.dynstr`` -- against the same graph, with the
-same input, sampled by the same harness. 6465 iterations moved the ``[heap]``
-VMA by zero bytes, while the rknnlite path over the identical sequence moved it
-by 43.78 kB per call. Both call the same vendor code with the same arguments;
-the only difference is whether the extension is in the call path. So the missing
-``free`` is in the extension, and removing the extension is a fix, not a
-workaround -- there is no leak budget to tune and no context to rebuild on a
-timer.
+That is cyclic garbage, not a C-level leak: a diagnostic calling
+``gc.collect()`` every 100 inferences returns RSS to exactly 64632 kB on every
+collection, and running the repro with ``--gc-every 5`` drops the rate 269x
+(42.4321 -> 0.1578 kB/inference). ``librknnrt`` itself is clean -- this module
+performs exactly the same ``librknnrt`` sequence the Cython extension performs
+(``rknn_inputs_set`` + ``rknn_run`` + ``rknn_outputs_get`` +
+``rknn_outputs_release`` with ``want_float=1``, precisely the entry points
+named in the extension's ``.dynstr``) against the same graph, with the same
+input, sampled by the same harness, and 6465 iterations moved the ``[heap]``
+VMA by zero bytes with no ``gc`` involved.
+
+So there are two ways out, and this module is one of them. Periodic
+``gc.collect()`` in every inference loop works too, at ~23% on inference
+latency (p50 19.8 -> 24.3 ms). Bypassing the wrapper avoids the cycles at the
+source, needs no ``gc`` call in caller code, and measures a *lower* p50 than
+rknnlite; the cost is maintaining these bindings and the equivalence test
+below.
 
 Numerically this is a no-op by construction: ``want_float=1`` is what makes the
 runtime dequantize into float32, which is the same thing ``RKNNLite.inference()``
@@ -379,8 +387,8 @@ class CtypesRknnModel:
                 out.append(a)
         finally:
             # In the finally block on purpose: an exception between _get and
-            # _release would trade the leak this class exists to fix for the
-            # same leak by another route.
+            # _release would skip the release, which is an actual C-level leak
+            # -- worse than the cyclic garbage this class exists to avoid.
             rel = lib.rknn_outputs_release(self.ctx, self.n_output,
                                            self._outputs)
             if rel != RKNN_SUCC:
