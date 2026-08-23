@@ -1,0 +1,160 @@
+{
+  "id": "crayfish-fight",
+  "name": "Crayfish Fight Monitor",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/crayfish-fight.png",
+  "type": "self-hosted",
+  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close, reporting events (never video) plus a quota-limited image dump for retraining.",
+  "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为，只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
+  "models": [
+    {
+      "id": "crayfish_det",
+      "file": "models/det_v1_n_rawhead_int8.rknn",
+      "task": "detect",
+      "input": [1, 640, 640, 3],
+      "quant": "int8",
+      "classes": ["crayfish"]
+    },
+    {
+      "id": "sex_cls",
+      "file": "models/sex_cls_int8.rknn",
+      "task": "classify",
+      "input": [1, 128, 128, 3],
+      "quant": "int8",
+      "classes": ["female", "male"]
+    },
+    {
+      "id": "behavior_cls",
+      "file": "models/behavior_cls_int8.rknn",
+      "task": "classify",
+      "input": [1, 224, 224, 3],
+      "quant": "int8",
+      "classes": ["fight", "harass", "none"]
+    }
+  ],
+  "default_model": "crayfish_det",
+  "postproc": "detect",
+  "render": {
+    "boxes": {
+      "color_by": "sex",
+      "line_width": 2
+    }
+  },
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,cls,cls_name,score,track_id,sex,sex_conf} + events[]{kind=detection|behavior}",
+    "default_channel": ["ws"],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Crayfish box, original-frame xyxy pixels"},
+      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "Detector class id (single class, always 0)"},
+      {"name": "cls_name", "from": "results[].cls_name", "type": "string", "description": "Detector class label, always 'crayfish'"},
+      {"name": "score", "from": "results[].score", "type": "float", "description": "Detection confidence"},
+      {"name": "track_id", "from": "results[].track_id", "type": "integer", "description": "Stable per-animal identity, null when the detection is untracked this frame"},
+      {"name": "sex", "from": "results[].sex", "type": "string", "description": "Voted sex: female / male / unknown"},
+      {"name": "sex_conf", "from": "results[].sex_conf", "type": "float", "description": "Fraction of the track's votes that went to the reported sex"},
+      {"name": "detection_kind", "from": "events[kind=detection].kind", "type": "string", "event_kind": "detection", "description": "Event kind, always 'detection'"},
+      {"name": "detection_label", "from": "events[kind=detection].label", "type": "string", "event_kind": "detection", "description": "Class label of the detection event"},
+      {"name": "detection_score", "from": "events[kind=detection].score", "type": "float", "event_kind": "detection", "description": "Confidence of the detection event"},
+      {"name": "detection_box", "from": "events[kind=detection].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "detection", "description": "Box of the detection event"},
+      {"name": "detection_track_id", "from": "events[kind=detection].track_id", "type": "integer", "event_kind": "detection", "description": "Track id of the detected animal"},
+      {"name": "detection_sex", "from": "events[kind=detection].sex", "type": "string", "event_kind": "detection", "description": "Voted sex of the detected animal"},
+      {"name": "behavior_kind", "from": "events[kind=behavior].kind", "type": "string", "event_kind": "behavior", "description": "Event kind, always 'behavior'"},
+      {"name": "behavior_phase", "from": "events[kind=behavior].phase", "type": "string", "event_kind": "behavior", "description": "State-machine transition: start / change / end"},
+      {"name": "behavior_label", "from": "events[kind=behavior].label", "type": "string", "event_kind": "behavior", "description": "Behaviour label: fight or harass ('none' never raises an event)"},
+      {"name": "behavior_confidence", "from": "events[kind=behavior].confidence", "type": "float", "event_kind": "behavior", "description": "Classifier confidence on the confirming frame"},
+      {"name": "behavior_track_ids", "from": "events[kind=behavior].track_ids", "type": "array<integer>", "event_kind": "behavior", "description": "The two track ids taking part"},
+      {"name": "behavior_box", "from": "events[kind=behavior].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "behavior", "description": "Union ROI of the two animals, original-frame xyxy pixels"},
+      {"name": "behavior_duration_sec", "from": "events[kind=behavior].duration_sec", "type": "float", "event_kind": "behavior", "description": "Seconds since the event was raised"},
+      {"name": "behavior_frames", "from": "events[kind=behavior].frames", "type": "integer", "event_kind": "behavior", "description": "Confirming frames accumulated in this event"}
+    ],
+    "default_mapping": [
+      {"source": "detection.count", "target": "count", "topic": "recamera/{{ app }}/count", "task": "detection"},
+      {"source": "detection.entries", "target": "crayfish", "topic": "recamera/{{ app }}/detections", "task": "detection"},
+      {"source": "behavior.entries", "target": "behavior", "topic": "recamera/{{ app }}/behavior", "task": "behavior"}
+    ]
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {"key": "conf", "type": "number", "apply": "live", "title": "Confidence threshold", "title_zh": "置信度阈值", "default": 0.35, "min": 0.05, "max": 0.95, "step": 0.05},
+          {"key": "iou", "type": "number", "apply": "live", "title": "NMS IoU threshold", "title_zh": "NMS IoU 阈值", "default": 0.45, "min": 0.1, "max": 0.9, "step": 0.05},
+          {"key": "max_animals", "type": "integer", "apply": "live", "title": "Max animals per frame", "title_zh": "每帧最多虾数", "default": 8, "min": 1, "max": 32, "step": 1},
+          {"key": "track_max_lost", "type": "integer", "apply": "live", "title": "Track lost-frame budget", "title_zh": "跟踪丢失帧预算", "default": 30, "min": 1, "max": 120, "step": 1}
+        ]
+      },
+      {
+        "key": "sex",
+        "title": "Sex classification",
+        "title_zh": "性别分类",
+        "items": [
+          {"key": "sex_vote_frames", "type": "integer", "apply": "live", "title": "Vote frames per new track", "title_zh": "每条新轨迹的投票帧数", "default": 10, "min": 1, "max": 60, "step": 1},
+          {"key": "sex_min_conf", "type": "number", "apply": "live", "title": "Min softmax to count a vote", "title_zh": "计票所需最低置信度", "default": 0.65, "min": 0.3, "max": 0.99, "step": 0.05},
+          {"key": "sex_crop_pad", "type": "number", "apply": "live", "title": "Sex crop padding", "title_zh": "性别裁剪外扩比例", "default": 0.1, "min": -0.2, "max": 0.5, "step": 0.05}
+        ]
+      },
+      {
+        "key": "proximity",
+        "title": "Proximity trigger",
+        "title_zh": "靠近触发",
+        "items": [
+          {"key": "proximity_k", "type": "number", "apply": "live", "title": "Distance factor (x mean box diagonal)", "title_zh": "距离系数（平均框对角线倍数）", "default": 1.2, "min": 0.3, "max": 3.0, "step": 0.1},
+          {"key": "proximity_window", "type": "integer", "apply": "live", "title": "Sliding window (frames)", "title_zh": "滑窗长度（帧）", "default": 8, "min": 2, "max": 60, "step": 1},
+          {"key": "proximity_hits", "type": "integer", "apply": "live", "title": "Close frames needed in window", "title_zh": "窗口内需靠近的帧数", "default": 5, "min": 1, "max": 60, "step": 1},
+          {"key": "roi_pad", "type": "number", "apply": "live", "title": "Interaction ROI padding", "title_zh": "交互 ROI 外扩比例", "default": 0.15, "min": 0.0, "max": 0.6, "step": 0.05}
+        ]
+      },
+      {
+        "key": "behavior",
+        "title": "Behaviour events",
+        "title_zh": "行为事件",
+        "items": [
+          {"key": "behavior_streak", "type": "integer", "apply": "live", "title": "Consecutive frames to raise", "title_zh": "上报所需连续帧数", "default": 3, "min": 1, "max": 30, "step": 1},
+          {"key": "behavior_release", "type": "integer", "apply": "live", "title": "Consecutive misses to clear", "title_zh": "释放所需连续未确认帧数", "default": 3, "min": 1, "max": 30, "step": 1},
+          {"key": "behavior_min_conf", "type": "number", "apply": "live", "title": "Min behaviour confidence", "title_zh": "行为置信度下限", "default": 0.5, "min": 0.2, "max": 0.95, "step": 0.05}
+        ]
+      },
+      {
+        "key": "capture",
+        "title": "Sample capture",
+        "title_zh": "样本采集",
+        "items": [
+          {"key": "capture_enabled", "type": "boolean", "apply": "live", "title": "Save triggered samples", "title_zh": "保存触发样本", "default": true},
+          {"key": "capture_per_minute", "type": "integer", "apply": "live", "title": "Max saves per minute", "title_zh": "每分钟最多保存", "default": 6, "min": 0, "max": 60, "step": 1},
+          {"key": "capture_per_day", "type": "integer", "apply": "live", "title": "Max saves per day", "title_zh": "每天最多保存", "default": 2000, "min": 0, "max": 20000, "step": 100},
+          {"key": "capture_dir", "type": "string", "apply": "restart", "title": "Capture directory", "title_zh": "落盘目录", "default": "/userdata/crayfish"},
+          {"key": "capture_full_frame_px", "type": "integer", "apply": "restart", "title": "Saved full-frame size (px)", "title_zh": "整帧保存边长（像素）", "default": 1280, "min": 320, "max": 2048, "step": 64}
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "crayfish_count",
+      "name": "Crayfish Count",
+      "value_template": "{{ value_json.results_count }}",
+      "state_class": "measurement",
+      "icon": "mdi:jellyfish"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "fight_active",
+      "name": "Fight Detected",
+      "value_template": "{{ 'ON' if value_json.behavior is defined and value_json.behavior | selectattr('label','equalto','fight') | list | length > 0 else 'OFF' }}",
+      "device_class": "problem"
+    }
+  ]
+}
