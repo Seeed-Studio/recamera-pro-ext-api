@@ -26,9 +26,12 @@ frame):
            ROI, fed through `BehaviorStateMachine` (needs `behavior_streak`
            consecutive confirmations to raise, `behavior_release` misses to
            clear)
-        -> capture: on every trigger, quota permitting, dump frame + ROI + json
-           to /userdata/crayfish/<date>/ REGARDLESS of the verdict -- the
-           misfires are exactly the samples the negative class needs
+        -> capture: default `capture_mode="trigger"` dumps frame + ROI + json
+           to /userdata/crayfish/<date>/ on every trigger, quota permitting,
+           REGARDLESS of the verdict -- the misfires are exactly the samples
+           the negative class needs. Every dump is tagged `capture_reason`
+           (alarm/suspect/plain, see logic.CaptureDecider); `alarm_gated`
+           mode (held in reserve) captures only alarm/suspect
         -> self.emit()              per-animal `detection` events (with sex) +
                                     per-pair `behavior` events
 
@@ -62,8 +65,8 @@ from kit.runtime.postprocess import classify as clf
 from kit.runtime.postprocess.detect import postprocess as detect_post
 
 from logic import (BEHAVIOR_LABELS, SEX_LABELS, SEX_UNKNOWN, BehaviorStateMachine,
-                   CaptureQuota, ProximityWindow, SexVoter, pair_is_close,
-                   pair_key, to_norm, union_box)
+                   CaptureDecider, CaptureQuota, ProximityWindow, SexVoter,
+                   pair_is_close, pair_key, to_norm, union_box)
 
 # Manifest model ids and their input sides (manifest models[].input).
 DET_ID = "crayfish_det"
@@ -108,6 +111,8 @@ class CrayfishFightApp(App):
     capture_per_day = 2000
     capture_dir = "/userdata/crayfish"
     capture_full_frame_px = 1280
+    suspect_conf = 0.30
+    capture_mode = "trigger"
 
     def setup(self, config):
         """Build the four stateful helpers from the already-bound params."""
@@ -119,6 +124,7 @@ class CrayfishFightApp(App):
                                          self.behavior_release,
                                          self.behavior_min_conf)
         self._quota = CaptureQuota(self.capture_per_minute, self.capture_per_day)
+        self._decider = CaptureDecider(self.suspect_conf, self.capture_mode)
         self._prev_pairs = set()
         self._capture_warned = False
         print(f"[crayfish-fight] setup conf={self.conf} iou={self.iou} "
@@ -130,7 +136,8 @@ class CrayfishFightApp(App):
               f"release={self.behavior_release}, "
               f"min_conf={self.behavior_min_conf}) "
               f"capture={self.capture_enabled}@{self.capture_dir} "
-              f"({self.capture_per_minute}/min, {self.capture_per_day}/day)",
+              f"({self.capture_per_minute}/min, {self.capture_per_day}/day, "
+              f"mode={self.capture_mode}, suspect_conf={self.suspect_conf})",
               flush=True)
 
     # -- derived-object builders ------------------------------------------ #
@@ -173,6 +180,11 @@ class CrayfishFightApp(App):
         if changed & {"capture_per_minute", "capture_per_day"}:
             self._quota.per_minute = max(0, int(self.capture_per_minute))
             self._quota.per_day = max(0, int(self.capture_per_day))
+        if changed & {"suspect_conf", "capture_mode"}:
+            self._decider.suspect_conf = float(self.suspect_conf)
+            self._decider.mode = (self.capture_mode
+                                  if self.capture_mode in
+                                  ("trigger", "alarm_gated") else "trigger")
         if "track_max_lost" in changed:
             new = self._tracker_config().clamp()
             self._tracker.cfg.max_lost_frames_center = new.max_lost_frames_center
@@ -242,8 +254,15 @@ class CrayfishFightApp(App):
                 ev = self._fsm.update(key, head["label"], head["confidence"], t)
                 if ev is not None:
                     events.append(self._behavior_event(ev, key, ub, boxes))
-                # ★flywheel★ every trigger is a sample, verdict or not.
-                self._capture(frame, key, ub, head, t)
+                # ★flywheel★ tag alarm (confirmed) / suspect (raw verdict) /
+                # plain (default: still captured, quota permitting) --
+                # see CaptureDecider / `capture_mode`.
+                reason = self._decider.decide(
+                    is_alarm=self._fsm.active_label(key) is not None,
+                    label=head["label"], confidence=head["confidence"],
+                    quota_fraction=self._quota.minute_fraction(time.time()))
+                if reason is not None:
+                    self._capture(frame, key, ub, head, t, reason)
 
             # A pair that stopped being triggered must not leave an event open.
             for key in self._prev_pairs - set(triggered):
@@ -291,14 +310,16 @@ class CrayfishFightApp(App):
         return out
 
     # -- capture (data flywheel) ------------------------------------------- #
-    def _capture(self, frame, key, union, head, t) -> None:
+    def _capture(self, frame, key, union, head, t, reason) -> None:
         """Dump one triggered interaction: full frame + ROI + sidecar json.
 
-        Written on EVERY trigger the quota allows, whatever the classifier said:
-        a trigger the classifier called `none` is either a true negative worth
-        keeping (perspective overlap -- the hard negative class per PLAN §3.2)
-        or a miss worth relabelling. Filtering by verdict here would starve the
-        retraining set of exactly the samples that fix it.
+        `reason` is one of `logic.CAPTURE_REASONS` (alarm / suspect / plain),
+        already decided by `CaptureDecider` -- this method only spends quota
+        and writes. `alarm` and `suspect` are the classifier's positives
+        (confirmed or raw); `plain` is an ordinary proximity trigger with no
+        behaviour signal yet (still captured by default -- see `capture_mode`
+        on the app). The reason is recorded in the sidecar json so the
+        retraining pipeline can weight or filter by it.
 
         Failures are swallowed after one warning: a full or read-only
         /userdata must never take the detector down.
@@ -343,6 +364,7 @@ class CrayfishFightApp(App):
                              "labels": BEHAVIOR_LABELS},
                 "sex": {str(tid): self._sex.sex_of(tid) for tid in key},
                 "quota": self._quota.stats(),
+                "capture_reason": reason,
             }
             with open(os.path.join(out_dir, stem + ".json"), "w",
                       encoding="utf-8") as f:

@@ -132,6 +132,8 @@
         "title_zh": "样本采集",
         "items": [
           {"key": "capture_enabled", "type": "boolean", "apply": "live", "title": "Save triggered samples", "title_zh": "保存触发样本", "default": true},
+          {"key": "capture_mode", "type": "enum", "apply": "live", "title": "Capture mode", "title_zh": "采集模式", "default": "trigger", "options": ["trigger", "alarm_gated"], "option_labels": ["Every trigger (tagged alarm/suspect/plain)", "Alarm-gated (alarm/suspect only)"], "option_labels_zh": ["所有触发（标注 alarm/suspect/plain）", "报警门控（仅 alarm/suspect）"]},
+          {"key": "suspect_conf", "type": "number", "apply": "live", "title": "Suspect capture confidence", "title_zh": "疑似采集置信度阈值", "default": 0.30, "min": 0.05, "max": 0.9, "step": 0.05},
           {"key": "capture_per_minute", "type": "integer", "apply": "live", "title": "Max saves per minute", "title_zh": "每分钟最多保存", "default": 6, "min": 0, "max": 60, "step": 1},
           {"key": "capture_per_day", "type": "integer", "apply": "live", "title": "Max saves per day", "title_zh": "每天最多保存", "default": 2000, "min": 0, "max": 20000, "step": 100},
           {"key": "capture_dir", "type": "string", "apply": "restart", "title": "Capture directory", "title_zh": "落盘目录", "default": "/userdata/crayfish"},

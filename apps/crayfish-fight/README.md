@@ -49,7 +49,7 @@
 | 文件 | 内容 |
 |---|---|
 | `app.py` | 每帧流水线：pre / infer / post / crop / emit / 落盘 |
-| `logic.py` | **跨帧业务逻辑，纯 Python**：`SexVoter` / `ProximityWindow` / `BehaviorStateMachine` / `CaptureQuota` + 触发几何 |
+| `logic.py` | **跨帧业务逻辑，纯 Python**：`SexVoter` / `ProximityWindow` / `BehaviorStateMachine` / `CaptureQuota` / `CaptureDecider` + 触发几何 |
 | `tests/test_logic.py` | 上述逻辑的单测，Mac 上 `uv run pytest` 直接跑，不需要设备 |
 | `tools/export_onnx.py` | Mac 上导出 4 个 ONNX（检测 raw-head，分类整图） |
 | `tools/convert_rknn.sh` | x86 Docker 内 ONNX → RKNN int8（**本机不能跑**） |
@@ -155,15 +155,27 @@ WS `127.0.0.1:8124` 或 MQTT。每帧一条 payload：
 | `behavior_streak` | 3 | 连续几帧同判定才上报。分类器 top1 0.788，1 帧不算证据 |
 | `behavior_release` | 3 | 连续几帧未确认才释放（迟滞）。短暂分开的一次打斗算一次，不算三次 |
 | `behavior_min_conf` | 0.5 | 低于此置信度的帧不算确认 |
+| `capture_mode` | trigger | 采集策略开关，见下节。`trigger`=所有触发都采（标注原因）；`alarm_gated`=只采 alarm/suspect |
+| `suspect_conf` | 0.30 | `capture_reason=suspect` 的判定阈值：状态机未确认，但本帧原始判定 fight/harass 且置信度 ≥ 此值 |
 | `capture_per_minute` / `capture_per_day` | 6 / 2000 | 落盘配额。长时间打斗会每次推理都想存图，靠这个压住；日配额防止无人值守把 eMMC 写满 |
 
 调参次序建议：先 `conf` 让检测出框 → 再 `proximity_k` 让该触发的触发（看落盘量）→ 最后 `behavior_streak` / `behavior_min_conf` 压误报。
 
 ### 采集落盘
 
-`/userdata/crayfish/<YYYY-MM-DD>/HHMMSS_mmm_t<a>-<b>_{frame.jpg,roi.jpg,.json}`。
+`/userdata/crayfish/<YYYY-MM-DD>/HHMMSS_mmm_t<a>-<b>_{frame.jpg,roi.jpg,.json}`，sidecar json 里带 `capture_reason`（`alarm` / `suspect` / `plain`）：
 
-**每次触发都存，不看分类结果**：被判成 `none` 的触发，要么是真负例（透视重叠——正是 `none` 类最缺的难例），要么是漏判，两种都是再训练要的样本。按结果过滤会精确地饿死修复它的数据。写盘失败只告警一次，不会把检测拖垮。
+- `alarm`：`BehaviorStateMachine` 已确认事件（起始/切换/持续中）
+- `suspect`：状态机还没确认（`behavior_streak` 未攒够），但本帧分类器原始判定已经是 fight/harass 且置信度 ≥ `suspect_conf`
+- `plain`：以上都不是的普通靠近触发（含 `none` 判定）
+
+**默认 `capture_mode="trigger"`：所有触发都存，不看分类结果**——被判成 `none` 的触发，要么是真负例（透视重叠——正是 `none` 类最缺的难例），要么是漏判，两种都是再训练要的样本；按结果过滤会精确地饿死修复它的数据。之所以不默认按 alarm/suspect 过滤，是因为当前行为分类器召回还低（PLAN §3.1 的小样本 val），闸门会把大量真实打斗帧连同 `none` 一起挡在落盘之外。`capture_reason` 只做标注，供离线按类别配平/加权，不做在线过滤。
+
+配额紧张时 `plain` 先让路：`CaptureQuota` 最近一分钟用量达到 50% 后，本分钟内新的 `plain` 触发不再落盘，把剩余配额留给 `alarm`/`suspect`；`alarm`/`suspect` 只受配额硬上限约束，不受这个软阈值影响。
+
+`capture_mode="alarm_gated"` 留作以后行为分类器召回达标后切换：同样的 `alarm`/`suspect` 判定，但 `plain` 触发直接跳过，不进配额、不落盘，把落盘完全收窄到行为正例。
+
+写盘失败只告警一次，不会把检测拖垮。
 
 ---
 
@@ -185,4 +197,4 @@ cd /Users/harvest/project/recamera/recamera_pro
 uv run --with pytest pytest apps/crayfish-fight/tests/ -q
 ```
 
-覆盖：触发几何（尺度无关性、边界严格性、union+clip）、性别投票（多数票 / 低置信记 unknown / settle 后不再改 / 平票）、滑窗触发（N 中 M、容忍漏帧、分开后衰减、pair 遗忘）、行为状态机（连续确认才起、单帧噪声不释放、迟滞、fight↔harass 切换、超时关闭、`none` 永不触发）、落盘配额（分钟窗滚动、日配额跨天重置）。
+覆盖：触发几何（尺度无关性、边界严格性、union+clip）、性别投票（多数票 / 低置信记 unknown / settle 后不再改 / 平票）、滑窗触发（N 中 M、容忍漏帧、分开后衰减、pair 遗忘）、行为状态机（连续确认才起、单帧噪声不释放、迟滞、fight↔harass 切换、超时关闭、`none` 永不触发）、落盘配额（分钟窗滚动、日配额跨天重置、`minute_fraction` 用量占比）、采集决策 `CaptureDecider`（alarm 恒采且不受配额压力影响、suspect 阈值判定、`trigger` 模式下 plain 触发采集且配额过半让路、`alarm_gated` 模式跳过 plain、非法 mode 回退 trigger）。

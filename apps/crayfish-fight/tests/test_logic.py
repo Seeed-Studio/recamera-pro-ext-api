@@ -16,9 +16,9 @@ _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
-from logic import (BehaviorStateMachine, CaptureQuota, ProximityWindow,  # noqa: E402
-                   SexVoter, SEX_UNKNOWN, box_iou, pair_is_close, pair_key,
-                   to_norm, union_box)
+from logic import (BehaviorStateMachine, CaptureDecider, CaptureQuota,  # noqa: E402
+                   ProximityWindow, SexVoter, SEX_UNKNOWN, box_iou,
+                   pair_is_close, pair_key, to_norm, union_box)
 
 
 # --------------------------------------------------------------------------- #
@@ -282,3 +282,75 @@ def test_quota_per_day_and_rollover():
 def test_quota_zero_disables():
     assert not CaptureQuota(per_minute=0).allow(0.0, "d")
     assert not CaptureQuota(per_day=0).allow(0.0, "d")
+
+
+def test_quota_minute_fraction_tracks_usage_and_ages_out():
+    q = CaptureQuota(per_minute=4, per_day=100)
+    assert q.minute_fraction(0.0) == 0.0
+    q.allow(0.0, "d")
+    q.allow(0.0, "d")
+    assert q.minute_fraction(0.0) == pytest.approx(0.5)
+    # the same two writes age out of the 60 s window
+    assert q.minute_fraction(61.0) == 0.0
+
+
+def test_quota_minute_fraction_disabled_reads_as_full():
+    assert CaptureQuota(per_minute=0).minute_fraction(0.0) == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# capture decision (alarm / suspect / plain, + capture_mode)
+# --------------------------------------------------------------------------- #
+def test_decider_alarm_always_wins_even_under_quota_pressure():
+    d = CaptureDecider(suspect_conf=0.3)
+    assert d.decide(is_alarm=True, label="none", confidence=0.1,
+                    quota_fraction=0.99) == "alarm"
+
+
+def test_decider_suspect_on_raw_verdict_before_confirmation():
+    d = CaptureDecider(suspect_conf=0.3)
+    assert d.decide(is_alarm=False, label="fight", confidence=0.5,
+                    quota_fraction=0.0) == "suspect"
+    # below suspect_conf and not yet confirmed -> falls through to plain
+    assert d.decide(is_alarm=False, label="fight", confidence=0.2,
+                    quota_fraction=0.0) == "plain"
+
+
+def test_decider_default_mode_captures_plain_triggers():
+    """capture_mode='trigger' (the default): every proximity trigger is still
+    captured, tagged 'plain' when it carries no behaviour signal."""
+    d = CaptureDecider()
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.0) == "plain"
+
+
+def test_decider_plain_yields_once_quota_pressure_hits_half():
+    d = CaptureDecider()
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.49) == "plain"
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.5) is None
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.9) is None
+    # alarm/suspect are unaffected by the same pressure
+    assert d.decide(is_alarm=True, label="none", confidence=0.1,
+                    quota_fraction=0.9) == "alarm"
+    assert d.decide(is_alarm=False, label="fight", confidence=0.9,
+                    quota_fraction=0.9) == "suspect"
+
+
+def test_decider_alarm_gated_mode_skips_plain_entirely():
+    d = CaptureDecider(suspect_conf=0.3, mode="alarm_gated")
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.0) is None
+    assert d.decide(is_alarm=False, label="fight", confidence=0.5,
+                    quota_fraction=0.0) == "suspect"
+    assert d.decide(is_alarm=True, label="none", confidence=0.1,
+                    quota_fraction=0.0) == "alarm"
+
+
+def test_decider_unknown_mode_falls_back_to_trigger():
+    d = CaptureDecider(mode="not-a-real-mode")
+    assert d.mode == "trigger"
+    assert d.decide(is_alarm=False, label="none", confidence=0.9,
+                    quota_fraction=0.0) == "plain"

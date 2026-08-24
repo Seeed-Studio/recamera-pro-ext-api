@@ -456,7 +456,97 @@ class CaptureQuota:
     def today_count(self) -> int:
         return self._day_count
 
+    def minute_fraction(self, now: float) -> float:
+        """Recent per-minute usage as a fraction in [0, 1] (>= 1 at/over cap).
+
+        Prunes the same rolling 60 s window `allow()` uses, so a caller can
+        check pressure WITHOUT consuming budget. `per_minute<=0` (capture
+        disabled) reads as 1.0 -- maximally tight, so any consumer that only
+        acts below some fraction (e.g. `CaptureDecider`'s random-keep gate)
+        correctly never fires.
+        """
+        if self.per_minute <= 0:
+            return 1.0
+        while self._recent and now - self._recent[0] >= 60.0:
+            self._recent.popleft()
+        return len(self._recent) / float(self.per_minute)
+
     def stats(self) -> dict:
         return {"minute": len(self._recent), "day": self._day,
                 "day_count": self._day_count,
                 "per_minute": self.per_minute, "per_day": self.per_day}
+
+
+# ---------------------------------------------------------------------------
+# 5. capture decision (alarm / suspect / plain, + optional gating)
+# ---------------------------------------------------------------------------
+CAPTURE_REASONS = ("alarm", "suspect", "plain")
+CAPTURE_MODES = ("trigger", "alarm_gated")
+
+
+class CaptureDecider:
+    """Tag WHY a triggered pair is captured this frame, and (in one mode)
+    decide WHETHER it is captured at all.
+
+    The behaviour classifier's recall is still low, so the default policy
+    (`capture_mode="trigger"`) keeps the ORIGINAL "capture every proximity
+    trigger, quota permitting" behaviour unchanged -- gating on the
+    classifier's own verdict would filter out exactly the true-fight frames
+    it is currently missing. What changes is that every capture now carries a
+    `capture_reason` so the retraining pipeline can tell positives from
+    background:
+
+      * `alarm`   -- the pair has a CONFIRMED event this frame (state machine
+                     is active: just started, changed, or mid-event).
+      * `suspect` -- not yet confirmed by the state machine's streak, but this
+                     frame's RAW classifier verdict already reads fight/harass
+                     at >= `suspect_conf`.
+      * `plain`   -- neither of the above: an ordinary proximity trigger with
+                     no behaviour signal yet (includes `none` verdicts, which
+                     are still useful negatives/hard-negatives).
+
+    `capture_mode="alarm_gated"` is held in reserve for once the behaviour
+    classifier's recall is trusted: it captures ONLY `alarm`/`suspect` and
+    skips `plain` triggers outright, cutting the flywheel down to behaviour
+    positives.
+
+    In BOTH modes, when the per-minute quota is under pressure, `plain`
+    triggers yield first (`alarm` > `suspect` > `plain`): a `plain` capture is
+    additionally skipped once the caller's recent per-minute usage
+    (`quota_fraction`) reaches 50%, reserving the remaining half of the
+    minute's budget for positives. `alarm`/`suspect` are gated only by the
+    caller's hard `CaptureQuota.allow()` cap, never by this soft threshold.
+
+    `label`/`confidence` passed to `decide()` are the classifier's PER-FRAME
+    verdict, before `BehaviorStateMachine` hysteresis -- exactly what the
+    caller already computed for `BehaviorStateMachine.update()`, so this adds
+    no extra inference.
+    """
+
+    def __init__(self, suspect_conf: float = 0.30,
+                mode: str = "trigger") -> None:
+        self.suspect_conf = float(suspect_conf)
+        self.mode = mode if mode in CAPTURE_MODES else "trigger"
+
+    def decide(self, *, is_alarm: bool, label: str, confidence: float,
+              quota_fraction: float) -> Optional[str]:
+        """Return one of `CAPTURE_REASONS`, or None to skip this trigger.
+
+        `is_alarm`: the pair's `BehaviorStateMachine` state is active this
+        frame (`fsm.active_label(key) is not None` AFTER calling `update()`).
+        `quota_fraction`: caller's recent per-minute quota usage in [0, 1],
+        e.g. `quota.minute_fraction(now)` -- gates `plain` only.
+        """
+        if is_alarm:
+            reason = "alarm"
+        elif label in BEHAVIOR_EVENT_LABELS and confidence >= self.suspect_conf:
+            reason = "suspect"
+        else:
+            reason = "plain"
+
+        if reason == "plain":
+            if self.mode == "alarm_gated":
+                return None
+            if quota_fraction >= 0.5:
+                return None
+        return reason
