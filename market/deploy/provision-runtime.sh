@@ -23,13 +23,11 @@
 #
 #   (C) the native lib `librecamera_ext.so.1` loads
 #         recamera_ext dlopen's librecamera_ext.so.1, which ships in
-#         /oem/usr/lib -- NOT on the default musl loader search path
-#         (root-cause #3: "librecamera_ext.so.1: cannot open shared object
-#         file"). appmgr/supervisor.py now injects
-#         LD_LIBRARY_PATH=/oem/usr/lib:/oem/lib into every app it launches, so
-#         apps started from the UI / HTTP API / boot-restore all inherit it.
-#         This script only VERIFIES the .so is present (it lives on the OTA'd
-#         /oem rootfs, provisioned by the extension-API firmware, not by us).
+#         /usr/lib, alongside the system OpenCV ABI. appmgr/supervisor.py keeps
+#         /usr/lib first, then adds /oem/usr/lib:/oem/lib so RGA/RKNN/MPP
+#         libraries that exist only in the OEM image remain loadable without
+#         letting old OEM FreeType/PNG copies shadow system dependencies. This
+#         script verifies the extension .so and the exact launch-time order.
 #
 # Idempotent: safe to run any number of times. Prints a PASS/FAIL summary and
 # exits non-zero if a hard prerequisite (the SDK python tree, the .so, or the
@@ -42,8 +40,8 @@ set -u
 RKNNENV=/userdata/rknnenv
 VENV_PY="$RKNNENV/bin/python"
 SDK_PY_DIR=/userdata/sdk/python                      # holds recamera_ext/
-EXT_SO=/oem/usr/lib/librecamera_ext.so.1             # dlopen'd by recamera_ext
-EXT_LIBDIRS=/oem/usr/lib:/oem/lib                    # must match supervisor.py
+EXT_SO=/usr/lib/librecamera_ext.so.1                 # dlopen'd by recamera_ext
+EXT_LIBDIRS=/usr/lib:/oem/usr/lib:/oem/lib           # must match supervisor.py
 
 rc=0
 ok()   { echo "[provision] OK   $*"; }
@@ -84,7 +82,7 @@ else
     fail "no venv site-packages under $RKNNENV/lib/python*/ -- cannot install .pth"
 fi
 
-# --- (C) native lib present (LD_LIBRARY_PATH is injected by supervisor.py) --- #
+# --- (C) native lib present and safe launch-time lookup order ---------------- #
 if [ -e "$EXT_SO" ]; then
     ok "native lib present: $EXT_SO (supervisor injects LD_LIBRARY_PATH=$EXT_LIBDIRS)"
 else
@@ -110,6 +108,6 @@ if [ "$rc" -eq 0 ]; then
     echo "[provision] RESULT: PASS -- recamera_ext is importable by app launches"
 else
     echo "[provision] RESULT: FAIL -- see FAIL lines above (some prerequisites are"
-    echo "[provision]         firmware-provided: SDK python tree + /oem/usr/lib .so)"
+    echo "[provision]         firmware-provided: SDK python tree + /usr/lib .so)"
 fi
 exit "$rc"

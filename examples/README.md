@@ -99,7 +99,8 @@
    - `numpy`（`frame.array` 依赖）
    - `opencv-python`（仅 `frame.to_bgr()` 需要；示例 03 用；示例 01 默认走无依赖的 PGM 存盘）
 
-4. **握手 SDK 内部自动完成。** 三条 socket 连接后都先走一次 Hello/HelloAck 握手，无需手写 protobuf。
+4. **握手 SDK 内部自动完成。** frame/result/probe/inference-control 四条 socket
+   连接后都先走 Hello/HelloAck，无需手写 protobuf。
 
 ## 部署到设备
 

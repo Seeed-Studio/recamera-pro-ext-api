@@ -1,4 +1,4 @@
-"""KIT_PARENT must stay in sync with where the kit installer puts the package.
+"""KIT_PARENT must name the immutable platform Kit package parent.
 
 Why this test exists
 --------------------
@@ -12,9 +12,9 @@ fatal: on device, all 9 apps died at once with
 
     ModuleNotFoundError: No module named 'kit'
 
-Two files have to agree and they live in different trees, so they drifted. These
-tests pin them together, and pin the launch command to the self-locating form so
-a future PYTHONPATH mistake cannot take every app down again.
+The production firmware now installs Kit in system site-packages.  The historic
+release/kit-extra sideload still targets /userdata and is deliberately not the
+production default; APPMGR_KIT_PARENT remains its explicit compatibility hook.
 """
 import os
 import re
@@ -34,18 +34,21 @@ INSTALL_SH = os.path.join(_REPO, "release", "kit-extra", "INSTALL.sh")
 
 class KitParentLayoutTests(unittest.TestCase):
 
-    def test_kit_dir_matches_the_installer(self):
-        """`<KIT_PARENT>/kit` must equal the installer's KIT_DST."""
+    def test_platform_default_is_immutable_system_site_packages(self):
+        self.assertEqual(paths.KIT_PARENT, "/usr/lib/python3.11/site-packages")
+        self.assertEqual(paths.KIT_DIR,
+                         "/usr/lib/python3.11/site-packages/kit")
+
+    def test_legacy_sideload_is_not_the_platform_default(self):
+        """The old writable installer remains explicit compatibility only."""
         with open(INSTALL_SH, encoding="utf-8") as f:
             src = f.read()
         m = re.search(r'^KIT_DST=(\S+)', src, re.M)
         self.assertIsNotNone(m, "INSTALL.sh no longer defines KIT_DST")
         kit_dst = m.group(1).strip().strip('"').strip("'")
 
-        self.assertEqual(
-            paths.KIT_DIR, kit_dst,
-            f"paths.KIT_DIR ({paths.KIT_DIR}) != installer KIT_DST ({kit_dst}). "
-            "KIT_PARENT must be the directory CONTAINING the kit package.")
+        self.assertEqual(kit_dst, "/userdata/local/kit")
+        self.assertNotEqual(paths.KIT_DIR, kit_dst)
 
     def test_kit_parent_is_the_parent_not_the_package(self):
         self.assertEqual(os.path.basename(paths.KIT_DIR), "kit")

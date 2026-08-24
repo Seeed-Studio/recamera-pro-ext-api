@@ -40,6 +40,20 @@ from appmgr import server, paths, state, installer  # noqa: E402
 
 class UninstallTests(unittest.TestCase):
     def setUp(self):
+        # pytest imports sibling modules before executing tests, so paths may
+        # already have been imported with another fixture layout.
+        self._saved_paths = {
+            "APPS_DIR": paths.APPS_DIR,
+            "APPMGR_DIR": paths.APPMGR_DIR,
+            "VENVS_DIR": paths.VENVS_DIR,
+            "STATE_FILE": paths.STATE_FILE,
+        }
+        paths.APPS_DIR = _APPS
+        paths.APPMGR_DIR = _APPMGR
+        paths.VENVS_DIR = _VENVS
+        paths.STATE_FILE = os.path.join(_APPS, "state.json")
+        self.addCleanup(lambda: [setattr(paths, key, value)
+                                 for key, value in self._saved_paths.items()])
         paths.ensure_dirs()
         os.makedirs(_VENVS, exist_ok=True)
         os.makedirs(_MODELS, exist_ok=True)

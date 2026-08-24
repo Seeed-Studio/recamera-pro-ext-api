@@ -190,6 +190,7 @@ class Asr:
         self.sample_rate = int(sample_rate)
         self.backend_name = str(backend).lower()
         self._debug = bool(debug)
+        self._closed = False
 
         t0 = time.time()
         if rknn_backend is not None:
@@ -203,7 +204,12 @@ class Asr:
             # the CPU path never pulls rknnlite.
             from kit.asr_rknn_backend import build_rknn_backend
             self._backend = build_rknn_backend(
-                model=model, tokens=tokens, language=self.language, debug=debug)
+                model=model,
+                tokens=tokens,
+                language=self.language,
+                use_itn=self.use_itn,
+                debug=debug,
+            )
         else:
             self._backend = _build_cpu_backend(
                 model, tokens,
@@ -212,6 +218,41 @@ class Asr:
                 language=self.language,
             )
         self.load_sec = time.time() - t0
+
+    def close(self) -> None:
+        """Release backend resources exactly once.
+
+        The RK backend destroys every RKNN context before releasing its shared
+        broker lease.  CPU/third-party voxedge backends are feature-detected so
+        they remain source compatible.  A cleanup error leaves ``_closed``
+        false, allowing a retry while the RK backend retains its lease
+        fail-closed.
+        """
+
+        if self._closed:
+            return
+        backend = self._backend
+        cleanup = getattr(backend, "unload", None)
+        if not callable(cleanup):
+            cleanup = getattr(backend, "close", None)
+        if callable(cleanup):
+            cleanup()
+        self._closed = True
+
+    unload = close
+
+    def __enter__(self) -> "Asr":
+        if self._closed:
+            raise RuntimeError("cannot enter a closed ASR backend")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        try:
+            self.close()
+        except BaseException:
+            if exc is None:
+                raise
+        return False
 
     @property
     def backend(self):
@@ -247,6 +288,8 @@ class Asr:
         which also unpacks as `(text, info_dict)`. We keep our own timing
         (elapsed / audio_sec / rtf); voxedge supplies text + language.
         """
+        if self._closed:
+            raise RuntimeError("cannot transcribe with a closed ASR backend")
         sr = int(sample_rate or self.sample_rate)
         audio = self._to_float32(pcm)
         audio_sec = float(audio.size) / sr if audio.size else 0.0

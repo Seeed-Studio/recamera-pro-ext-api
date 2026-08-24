@@ -16,8 +16,9 @@ cwd=/userdata/local (root-owned), but /userdata itself is 0777, so an app that
 chdir'd into a writable subdir would be searching a world-writable directory for
 shared objects -- a local library-injection point for uid 1000.
 
-`_join_pathlist` drops empties and later duplicates while keeping order (search
-order is semantic: /oem/usr/lib must stay ahead of anything appended later).
+`_join_pathlist` drops empties and later duplicates while keeping order. Search
+order is semantic: /usr/lib must precede OEM compatibility copies, while the
+OEM dirs must remain visible ahead of app/runtime paths appended later.
 """
 import os
 import sys
@@ -55,8 +56,10 @@ class JoinPathListTests(unittest.TestCase):
             ["/oem/usr/lib", "/oem/lib", "/oem/usr/lib", "/oem/lib", "/userdata/lib"])
         self.assertEqual(got, f"/oem/usr/lib{SEP}/oem/lib{SEP}/userdata/lib")
 
-    def test_vendor_dirs_stay_ahead_of_appended_ones(self):
-        got = supervisor._join_pathlist(["/oem/usr/lib", "/oem/lib", "/userdata/lib"])
+    def test_controlled_dirs_stay_ahead_of_appended_ones(self):
+        got = supervisor._join_pathlist(
+            ["/usr/lib", "/oem/usr/lib", "/oem/lib", "/userdata/lib"])
+        self.assertLess(got.index("/usr/lib"), got.index("/oem/usr/lib"))
         self.assertLess(got.index("/oem/usr/lib"), got.index("/userdata/lib"))
 
     def test_empty_input_yields_empty_string_not_a_bare_separator(self):
@@ -84,29 +87,50 @@ class BuiltEnvTests(unittest.TestCase):
         self.assertNotIn(f"{SEP}{SEP}", val)
         self.assertFalse(val.endswith(SEP))
         self.assertEqual(val.split(SEP).count("/oem/usr/lib"), 1)
+        self.assertEqual(val.split(SEP).count("/usr/lib"), 1)
 
-    def test_vendor_dirs_are_still_present(self):
+    def test_system_and_oem_dirs_are_still_present(self):
         """Cleaning must not drop what the variable exists for."""
         env = self._env_for("")
-        self.assertIn("/oem/usr/lib", env["LD_LIBRARY_PATH"].split(SEP))
-        self.assertIn("/oem/lib", env["LD_LIBRARY_PATH"].split(SEP))
+        parts = env["LD_LIBRARY_PATH"].split(SEP)
+        self.assertEqual(parts[0], "/usr/lib")
+        self.assertIn("/oem/usr/lib", parts)
+        self.assertIn("/oem/lib", parts)
 
     def test_an_unrelated_inherited_dir_is_preserved(self):
         env = self._env_for("/opt/vendor/lib")
         self.assertIn("/opt/vendor/lib", env["LD_LIBRARY_PATH"].split(SEP))
 
-    def test_vendor_dirs_come_BEFORE_anything_inherited(self):
-        """Order at the call site, not just inside the join helper.
-
-        Search order is semantic: /oem/usr/lib holds librecamera_ext.so.1 and the
-        RK libs the apps are built against. If an inherited directory were placed
-        ahead of it, a same-named library found there would win -- so this asserts
-        the concatenation order, which a direct _join_pathlist test cannot see.
-        """
+    def test_system_then_oem_dirs_come_before_inherited_paths(self):
+        """Assert the production call-site order, not only join behaviour."""
         parts = self._env_for("/opt/vendor/lib")["LD_LIBRARY_PATH"].split(SEP)
+        self.assertEqual(parts[0], "/usr/lib")
+        self.assertLess(parts.index("/usr/lib"), parts.index("/oem/usr/lib"))
         self.assertLess(parts.index("/oem/usr/lib"), parts.index("/opt/vendor/lib"))
         self.assertLess(parts.index("/oem/lib"), parts.index("/opt/vendor/lib"))
-        self.assertEqual(parts[0], "/oem/usr/lib")
+
+    def test_inherited_oem_first_order_cannot_shadow_system_libraries(self):
+        """Regression: OEM FreeType/PNG must not break the system cv2 ABI."""
+        inherited = f"/oem/usr/lib{SEP}/oem/lib{SEP}/usr/lib"
+        parts = self._env_for(inherited)["LD_LIBRARY_PATH"].split(SEP)
+        self.assertEqual(parts[:3], ["/usr/lib", "/oem/usr/lib", "/oem/lib"])
+
+    def test_npu_managed_marker_is_never_inherited(self):
+        previous = os.environ.get("RECAMERA_NPU_MANAGED")
+        os.environ["RECAMERA_NPU_MANAGED"] = "spoofed"
+        try:
+            env = supervisor._build_env("yolo-detector", {})
+        finally:
+            if previous is None:
+                os.environ.pop("RECAMERA_NPU_MANAGED", None)
+            else:
+                os.environ["RECAMERA_NPU_MANAGED"] = previous
+        self.assertNotIn("RECAMERA_NPU_MANAGED", env)
+
+    def test_npu_marker_is_added_only_for_explicit_managed_launch(self):
+        env = supervisor._build_env(
+            "yolo-detector", {}, npu_managed=True)
+        self.assertEqual(env["RECAMERA_NPU_MANAGED"], "appmgr-v1")
 
 
 if __name__ == "__main__":

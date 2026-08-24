@@ -1,0 +1,98 @@
+#!/bin/sh
+# S93inferenced -- platform-owned multi-model RKNN scheduling service.
+
+NAME=recamera-inferenced
+PIDFILE=/run/$NAME.pid
+SOCKET=/run/recamera/inferenced.sock
+AUTH_DIR=/run/recamera/inference-authorizations
+LOGFILE=/var/log/$NAME.log
+PYTHON=/usr/bin/python3
+PYTHONPATH_VALUE=/usr/lib/recamera:/usr/lib/python3.11/site-packages
+LD_LIBRARY_PATH_VALUE=/usr/lib:/oem/usr/lib:/oem/lib
+
+is_service_pid() {
+    [ -n "$1" ] || return 1
+    cmd=$({ tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null) || return 1
+    case "${cmd%% *}" in *python*) ;; *) return 1 ;; esac
+    case "$cmd" in *"-m inferenced"*) return 0 ;; *) return 1 ;; esac
+}
+
+resolve_pid() {
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    is_service_pid "$pid" || return 1
+    echo "$pid"
+}
+
+start() {
+    pid=$(resolve_pid) && {
+        echo "$NAME already running (pid $pid)"
+        return 0
+    }
+    rm -f "$PIDFILE"
+    mkdir -p /run/recamera || return 1
+    [ ! -L "$AUTH_DIR" ] || {
+        echo "$NAME refuses symlink authorization directory $AUTH_DIR"
+        return 1
+    }
+    mkdir -p "$AUTH_DIR" || return 1
+    chmod 0700 "$AUTH_DIR" || return 1
+    echo "Starting $NAME"
+    umask 007
+    PYTHONPATH="$PYTHONPATH_VALUE" \
+    LD_LIBRARY_PATH="$LD_LIBRARY_PATH_VALUE" \
+        "$PYTHON" -m inferenced --socket "$SOCKET" \
+        --authorization-dir "$AUTH_DIR" >>"$LOGFILE" 2>&1 &
+    pid=$!
+    echo "$pid" >"$PIDFILE"
+    i=0
+    while [ "$i" -lt 10 ]; do
+        if ! is_service_pid "$pid"; then
+            rm -f "$PIDFILE"
+            echo "$NAME failed to start (see $LOGFILE)"
+            return 1
+        fi
+        [ -S "$SOCKET" ] && {
+            echo "$NAME started (pid $pid)"
+            return 0
+        }
+        sleep 1
+        i=$((i + 1))
+    done
+    kill -TERM "$pid" 2>/dev/null
+    rm -f "$PIDFILE"
+    echo "$NAME did not create $SOCKET"
+    return 1
+}
+
+stop() {
+    pid=$(resolve_pid) || {
+        rm -f "$PIDFILE"
+        [ -S "$SOCKET" ] && rm -f "$SOCKET"
+        echo "$NAME not running"
+        return 0
+    }
+    echo "Stopping $NAME (pid $pid)"
+    kill -TERM "$pid" 2>/dev/null
+    i=0
+    while [ "$i" -lt 10 ] && is_service_pid "$pid"; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if is_service_pid "$pid"; then
+        kill -KILL "$pid" 2>/dev/null
+        sleep 1
+    fi
+    rm -f "$PIDFILE"
+    [ -S "$SOCKET" ] && rm -f "$SOCKET"
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) stop && start ;;
+    status)
+        pid=$(resolve_pid) || { echo "$NAME not running"; exit 3; }
+        echo "$NAME running (pid $pid)"
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

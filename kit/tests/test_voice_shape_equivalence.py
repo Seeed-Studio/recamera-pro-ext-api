@@ -125,8 +125,11 @@ class _StubAudioSource:
                            pad_silence_sec=pad_silence_sec, **kw)
         self._i = 0
         self.closed = False
+        self.open_calls = 0
+        self.close_calls = 0
 
     def open(self):
+        self.open_calls += 1
         return self
 
     def read(self):
@@ -137,6 +140,7 @@ class _StubAudioSource:
         return c
 
     def close(self):
+        self.close_calls += 1
         self.closed = True
 
 
@@ -221,6 +225,7 @@ class _StubAsr:
     def __init__(self, **kw):
         self.kwargs = kw
         self.calls = []
+        self.close_calls = 0
 
     def transcribe(self, pcm):
         seg_id = len(self.calls) + 1
@@ -229,6 +234,9 @@ class _StubAsr:
                           audio_sec=len(pcm) * 0.1,
                           rtf=0.25 + 0.01 * seg_id,
                           language="zh")
+
+    def close(self):
+        self.close_calls += 1
 
 
 class _FakeClock:
@@ -495,7 +503,8 @@ class _Base(unittest.TestCase):
 
         def _model_tripwire(app_self, path):
             self.model_loads.append(path)
-            raise AssertionError("an RKNN model was loaded by an audio app")
+            raise AssertionError(
+                "kit's frame-oriented RKNN loader was used by an audio app")
 
         kit_app.App._load_model = _model_tripwire
         self._saved_modules = {}
@@ -575,6 +584,81 @@ def _core(payload):
 
 
 class VoiceEquivalenceTests(_Base):
+
+    def test_state_machine_preserves_loop_error_when_close_also_fails(self):
+        from kit.logic.voice_sm import VoiceStateMachine
+
+        primary = ValueError("PRIMARY_READ")
+        cleanup = RuntimeError("SECONDARY_CLOSE")
+
+        class Source:
+            def __init__(self):
+                self.open_calls = 0
+                self.close_calls = 0
+                self.close_error = cleanup
+
+            def open(self):
+                self.open_calls += 1
+                return self
+
+            def read(self):
+                raise primary
+
+            def close(self):
+                self.close_calls += 1
+                if self.close_error is not None:
+                    raise self.close_error
+
+        class Wake:
+            def reset(self):
+                pass
+
+        src = Source()
+        sm = VoiceStateMachine(src, Wake(), object(), object(), verbose=False)
+        with self.assertRaises(ValueError) as caught:
+            sm.run()
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(src.open_calls, 1)
+        self.assertEqual(src.close_calls, 1)
+        self.assertTrue(sm._opened)
+        self.assertTrue(any("SECONDARY_CLOSE" in note
+                            for note in getattr(primary, "__notes__", ())))
+
+        src.close_error = None
+        sm.close()
+        self.assertEqual(src.close_calls, 2)
+        self.assertFalse(sm._opened)
+
+    def test_state_machine_closes_preopened_source_when_wake_reset_fails(self):
+        from kit.logic.voice_sm import VoiceStateMachine
+
+        primary = KeyboardInterrupt()
+
+        class Source:
+            def __init__(self):
+                self.open_calls = 0
+                self.close_calls = 0
+
+            def open(self):
+                self.open_calls += 1
+                return self
+
+            def close(self):
+                self.close_calls += 1
+
+        class Wake:
+            def reset(self):
+                raise primary
+
+        src = Source()
+        sm = VoiceStateMachine(src, Wake(), object(), object(), verbose=False)
+        sm.open()
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            sm.run()
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(src.open_calls, 1)
+        self.assertEqual(src.close_calls, 1)
+        self.assertFalse(sm._opened)
 
     def test_deep_equal_across_chunks(self):
         old, _old_app, old_stubs = self._run_old()
@@ -662,24 +746,143 @@ class VoiceEquivalenceTests(_Base):
         _sink, app, _stubs = self._run_new()
         print(f"\nopen_frame_source calls: {self.frame_source_opens} "
               f"(tripwire raises if non-empty)")
-        print(f"model loads: {self.model_loads}")
+        print(f"kit frame-model loads: {self.model_loads}")
         print(f"needs_frames={app.needs_frames} owns_loop={app.owns_loop} "
               f"needs_model={app.needs_model}")
         self.assertEqual(self.frame_source_opens, [],
                          "a camera frame source was opened")
-        self.assertEqual(self.model_loads, [], "an RKNN model was loaded")
+        self.assertEqual(self.model_loads, [],
+                         "kit's frame-model loader was invoked")
         self.assertFalse(app.needs_frames)
         self.assertTrue(app.owns_loop)
         # and frames() refuses with the reason rather than silently yielding 0
-        app.start(None, sink=_RecordingSink(), verbose=False, app_dir=APP_DIR,
-                  manifest=self.manifest, config=dict(self.eff))
+        stubs = _Stubs()
+        saved, saved_time = self._install(stubs)
         try:
-            with self.assertRaises(RuntimeError) as cm:
-                next(iter(app.frames()))
-            print(f"frames() -> {cm.exception}")
-            self.assertIn("needs_frames = False", str(cm.exception))
+            app.start(None, sink=_RecordingSink(), verbose=False,
+                      app_dir=APP_DIR, manifest=self.manifest,
+                      config=dict(self.eff))
+            try:
+                with self.assertRaises(RuntimeError) as cm:
+                    next(iter(app.frames()))
+                print(f"frames() -> {cm.exception}")
+                self.assertIn("needs_frames = False", str(cm.exception))
+            finally:
+                app.finish()
         finally:
+            self._restore(saved, saved_time)
+
+    def test_asr_is_ready_before_start_returns_and_closed_exactly_once(self):
+        """ASR initialization is inside App.start's appmgr READY transaction."""
+        stubs = _Stubs()
+        saved, saved_time = self._install(stubs)
+        app = None
+        try:
+            mod = _load_new_app_module()
+            app = mod.VoiceTranscribeApp()
+            app.start(None, sink=_RecordingSink(), verbose=False,
+                      app_dir=APP_DIR, manifest=self.manifest,
+                      config=dict(self.eff))
+            self.assertIsNotNone(stubs.asr)
+            self.assertIs(app._asr, stubs.asr)
+            self.assertEqual(stubs.asr.close_calls, 0)
+            self.assertIsNotNone(app._voice_sm)
+            self.assertEqual(stubs.audio.open_calls, 1)
+            self.assertEqual(stubs.audio.close_calls, 0)
+
             app.finish()
+            app.finish()
+            self.assertEqual(stubs.asr.close_calls, 1)
+            self.assertEqual(stubs.audio.close_calls, 1)
+            self.assertIsNone(app._asr)
+            self.assertIsNone(app._voice_sm)
+        finally:
+            if app is not None:
+                app.finish()
+            self._restore(saved, saved_time)
+
+    def test_prepared_audio_source_is_not_reopened_by_run(self):
+        stubs = _Stubs()
+        saved, saved_time = self._install(stubs)
+        app = None
+        try:
+            mod = _load_new_app_module()
+            app = mod.VoiceTranscribeApp()
+            app.start(None, sink=_RecordingSink(), verbose=False,
+                      app_dir=APP_DIR, manifest=self.manifest,
+                      config=dict(self.eff))
+            self.assertEqual(stubs.audio.open_calls, 1)
+
+            app.run()
+            self.assertEqual(stubs.audio.open_calls, 1)
+            self.assertEqual(stubs.audio.close_calls, 1)
+
+            app.finish()
+            app.finish()
+            self.assertEqual(stubs.audio.close_calls, 1)
+        finally:
+            if app is not None:
+                app.finish()
+            self._restore(saved, saved_time)
+
+    def test_audio_probe_failure_aborts_start_and_rolls_back_asr(self):
+        error = RuntimeError("injected audio probe failure")
+
+        class FailingAudio(_StubAudioSource):
+            def open(self):
+                self.open_calls += 1
+                raise error
+
+        stubs = _Stubs()
+
+        def make_failing_audio(*args, **kwargs):
+            stubs.audio = FailingAudio(*args, **kwargs)
+            return stubs.audio
+
+        stubs._mk_audio = make_failing_audio
+        saved, saved_time = self._install(stubs)
+        app = None
+        try:
+            mod = _load_new_app_module()
+            app = mod.VoiceTranscribeApp()
+            with self.assertRaisesRegex(RuntimeError, "audio probe") as caught:
+                app.start(None, sink=_RecordingSink(), verbose=False,
+                          app_dir=APP_DIR, manifest=self.manifest,
+                          config=dict(self.eff))
+            self.assertIs(caught.exception, error)
+            self.assertEqual(stubs.audio.open_calls, 1)
+            self.assertEqual(stubs.audio.close_calls, 1)
+            self.assertEqual(stubs.asr.close_calls, 1)
+            self.assertIsNone(app._voice_sm)
+            self.assertIsNone(app._asr)
+        finally:
+            if app is not None:
+                app.finish()
+            self._restore(saved, saved_time)
+
+    def test_start_failure_after_asr_preload_rolls_voice_resource_back(self):
+        stubs = _Stubs()
+        saved, saved_time = self._install(stubs)
+        app = None
+        try:
+            mod = _load_new_app_module()
+            app = mod.VoiceTranscribeApp()
+
+            def fail_after_setup():
+                raise RuntimeError("injected post-setup startup failure")
+
+            app._install_reload_handler = fail_after_setup
+            with self.assertRaisesRegex(RuntimeError, "post-setup"):
+                app.start(None, sink=_RecordingSink(), verbose=False,
+                          app_dir=APP_DIR, manifest=self.manifest,
+                          config=dict(self.eff))
+            self.assertIsNotNone(stubs.asr)
+            self.assertEqual(stubs.asr.close_calls, 1)
+            self.assertIsNone(app._asr)
+        finally:
+            if app is not None:
+                app.finish()
+            self._restore(saved, saved_time)
 
     def test_emit_goes_through_the_manifest_output_block(self):
         """(b) `emit` reaches the ConfigurableSink assembled from the manifest,
@@ -750,8 +953,8 @@ class VoiceEquivalenceTests(_Base):
         # run() takes no positional args (the new-shape signature)
         self.assertFalse(kit_app._run_takes_positional(cls.run))
 
-    def test_live_params_autobind_and_rebind_on_sighup(self):
-        """Auto-binding + SIGHUP re-bind work for a self-paced app too."""
+    def test_captured_voice_params_require_restart_but_sink_still_reloads(self):
+        """SIGHUP must not claim to mutate the already-open Voice graph."""
         sink = _RecordingSink()
         stubs = _Stubs()
         saved, saved_time = self._install(stubs)
@@ -790,8 +993,10 @@ class VoiceEquivalenceTests(_Base):
                   f"min_silence_sec={app.min_silence_sec} "
                   f"wake_backend={app.wake_backend!r} "
                   f"sink reloads={len(sink.reloads)}")
-            self.assertEqual(app.wakeword, "hey cam", "live knob not re-bound")
-            self.assertEqual(app.min_silence_sec, 1.2, "live knob not re-bound")
+            self.assertEqual(app.wakeword, "hello camera",
+                             "captured wakeword was changed without restart")
+            self.assertEqual(app.min_silence_sec, 0.6,
+                             "captured VAD threshold changed without restart")
             self.assertEqual(app.wake_backend, "kws",
                              "an apply:'restart' knob was hot-reloaded")
             self.assertEqual(len(sink.reloads), 1,

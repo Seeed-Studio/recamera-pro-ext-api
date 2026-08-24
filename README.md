@@ -1,14 +1,18 @@
 # reCamera Pro 扩展 API
 
-reCamera Pro（RV1126B / recamera_v2）扩展 API：方案商**不改固件源码、不重编固件**，在设备上跑自己的进程，通过 `/run/recamera/` 下的 Unix domain socket 拿相机帧、把推理结果回注官方 OSD/录像/推送、观测内建流水线、经 HTTP 做配置与控制。进程边界即契约。
+reCamera Pro（RV1126B / recamera_v2）扩展 API：设备先安装包含扩展 endpoint、
+且与 SDK 协议匹配的固件；此后方案商无需为每个 AI 应用重编固件，可把应用
+作为独立进程运行，通过 `/run/recamera/` 下的 Unix domain socket 拿帧、取得
+NPU 租约、回注结果并观测流水线。进程边界即契约。
 
-三条 socket 端点：
+四条 socket 端点：
 
 | 端点 | socket | 作用 |
 |------|--------|------|
 | 帧代理 | `/run/recamera/frame.sock` | 零拷贝拿相机原始帧，自己推理 |
 | 结果注入 | `/run/recamera/result-in.sock` | 把结果回注官方 OSD / 录像 / WS 三路分发 |
 | 观测面 | `/run/recamera/probe.sock` | 采样内建推理流水线各级张量 |
+| NPU 仲裁 | `/run/recamera/inference-control.sock` | 停妥内建模型后授予单 external owner 的连接生命周期租约 |
 
 ## 目录导航
 
@@ -20,7 +24,7 @@ reCamera Pro（RV1126B / recamera_v2）扩展 API：方案商**不改固件源�
 | [`kit/`](kit/) | 可复用 Python 推理套件：L0 适配器、runtime 前后处理、logic 库、`app.py`。 |
 | [`apps/`](apps/) | 示例应用（yolo-detector / face-analysis / fall-detection / voice-transcribe 等）。 |
 | [`examples/`](examples/) | SDK 最小用法示例（拿帧 / 注入结果 / 帧→推理→OSD / GPIO 触发 / C 帧）。 |
-| [`release/`](release/) | 交付产物：`recamera-ext-api-v<版本>.tar` + `pkg/`（rkipc / entry.cgi / SDK / install.sh）。 |
+| [`release/`](release/) | 历史交付快照；当前 `release/pkg` **不可部署**，正式产物必须由已固定 commit 的源码构建重新生成。 |
 
 ## 快速上手
 
@@ -39,32 +43,44 @@ with FrameSource() as src, ResultSink(source_id="my-app") as sink:
 
 ## 安装 / 环境
 
-设备上运行扩展应用需要指向 SDK 的库与 Python 包路径：
+通过当前顶层源码构建生成的固件会把 native library 安装到 `/usr/lib`，把
+Python 包安装到 Python 3.11 的系统 site-packages，正常无需手工设置搜索路径。
+只有调试历史 `/userdata/sdk` 手工副本时才需要：
 
 ```sh
 export PYTHONPATH=/userdata/sdk/python:$PYTHONPATH
 export LD_LIBRARY_PATH=/userdata/sdk/lib:$LD_LIBRARY_PATH
 ```
 
-或直接 sideload [`release/`](release/) 下的发布包（`recamera-ext-api-v<版本>.tar`），按 `pkg/install.sh` 安装 rkipc / entry.cgi / SDK。前置条件（socket 权限、握手）见 [docs/guide/README.md](docs/guide/README.md) §1.2；部署与运维见 [docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)。
+固件集成应走本 SDK 的顶层 `project/app` 源码构建；当前仓内
+[`release/pkg`](release/pkg/) 是校验值互相矛盾、且不含新 NPU broker 的历史
+快照，`install.sh` 已 fail-closed，**不要 sideload**。前置条件（socket 权限、
+握手）见 [docs/guide/README.md](docs/guide/README.md)；发布边界见
+[docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)。
 
 ## 发布物 / Release
 
-`release/` 下有两个发布包：
+`release/` 下保留的包仅供历史追溯：
 
 | 包 | 用途 | 说明 |
 |---|---|---|
-| [`release/recamera-ext-api-v1.5.0.tar`](release/) | **固件 sideload 包** | patched `rkipc` + `entry.cgi` + SDK + `install.sh`/`rollback.sh`。覆盖 `/oem`（持久，OTA 会还原）。设备端安装步骤见 [`release/pkg/README.md`](release/pkg/README.md)。 |
-| [`release/recamera-ext-kit-v1.5.0.tar.gz`](release/) | **kit 分享包** | `kit/` + `sdk/` + `examples/` + `INSTALL.sh`（一键装到 `/userdata`）。**不含固件**，给已刷好扩展 API 固件、要在设备上开发 app 的方案商。 |
+| `recamera-ext-api-v*.tar` / [`release/pkg`](release/pkg/) | **已禁用的历史 sideload** | 二进制、manifest 与安装脚本不一致，且缺 `inference-control@1`；不可安装。 |
+| `recamera-ext-kit-v*.tar.gz` | 历史 kit 分享包 | 不代表当前 Python 1.4 API/native/server 的一致发布集。 |
 
-如何更新 release（重打包 / 换 rkipc / 升版本）见 [RELEASING.md](RELEASING.md)；用 [`release/build-release.sh`](release/build-release.sh) 可复现地从仓内源组装。
+新的 release 必须从 manifest 固定的 `recamera_ipc`、Vigil、本仓和 Web backend
+源码构建，生成统一 BOM/hash 后再启用安装。现有
+[`release/build-release.sh`](release/build-release.sh) 仍属于 legacy artifact
+assembler，不能作为“源码可复现”证明。
 
 ## 版本
 
 两条版本轴，勿混淆：
 
-- **发布 train（产品发布包）**：当前 **v1.5.0**（`release/` 下 `recamera-ext-api` / `recamera-ext-kit` / `appmgr` / `frontend` / `apps` 五包同号）。部署见 [docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)。
-- **SDK / C ABI 版本**：当前 **1.2.0**（soname `librecamera_ext.so.1`，API `frame@1 / result@1 / probe@1`）。ABI 向后兼容、soname 不变时**不随发布 train 跳版**；SDK 变更记录见 [CHANGELOG.md](CHANGELOG.md)、[sdk/VERSION](sdk/VERSION)。
+- **产品发布 train**：当前工作树尚未生成可部署的新 train；历史 v1.x 包已归档禁用。
+- **Python distribution**：`recamera-ext 1.4.0`，包含 broker-backed `InferenceLease`。
+- **native SDK / C ABI**：`sdk/VERSION` 为 **1.3.0**，soname 仍为
+  `librecamera_ext.so.1`；能力为 `frame@1 / result@1 / probe@1 /
+  inference-control@1`。Python 包版本与 C ABI/SONAME 是不同版本轴。
 
 ## License
 

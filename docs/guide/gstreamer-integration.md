@@ -8,7 +8,8 @@
 
 方案商在自己的进程里，把帧代理扇出的相机帧接进标准 GStreamer pipeline，去做编码、推流、转码、显示或二次处理。
 
-- **纯方案商侧代码。不改固件源码、不重编固件、不动分区。** 你的进程连
+- **在设备已有匹配扩展固件后，桥接是纯方案商侧代码。** 无需为每个
+  GStreamer 应用再改/重编固件或动分区；你的进程连
   `/run/recamera/frame.sock` 拿帧，用 GStreamer 的公开 dmabuf API 把 fd 包成
   `GstBuffer`，其余是标准 pipeline。
 - **首选零拷贝**：dma-buf fd → `GstDmaBufAllocator` 包 `GstBuffer`（带 plane 布局的

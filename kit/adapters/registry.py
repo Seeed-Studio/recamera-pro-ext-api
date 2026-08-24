@@ -2,9 +2,12 @@
 Capability registry for the L0 adapter layer (docs/guide/kit-design.md §L0,
 docs/guide/adapter-bootstrap.md §3).
 
-At startup the kit probes whether the *official* firmware endpoints exist, and
-every adapter factory picks its implementation from the resulting capability
-set:
+At startup the kit records whether official endpoint socket inodes exist.
+Filesystem evidence is only ``UNKNOWN`` -- it is discovery, not a protocol
+handshake -- so ``auto`` keeps the workaround path. Matching patched firmware
+must therefore opt in explicitly (for example
+``RECAMERA_ADAPTER_PREFER=official``); a future native handshake may safely
+mark a capability ``AVAILABLE`` and let ``auto`` switch on its own.
 
     FrameSource  = caps.frame_broker   ? OfficialFrameSource  : FfmpegRtspSource
     ResultSink   = WsResultSink (DEFAULT, software overlay :8124);
@@ -15,19 +18,19 @@ set:
     ControlPlane = caps.control_api    ? OfficialControl       : CgiControl
     ProbeSource  = ProbeSource (SDK)   -- v1 baseline (probe@1), no workaround alt
 
-On today's firmware (6.1.157) none of the official endpoints exist, so every
-factory selects the existing verified workaround and behaviour is byte-for-byte
-unchanged. When a firmware upgrade adds an official endpoint, the next probe
-hits, the factory returns the `Official*` implementation, and **no application
-code and no repackaging is required** -- exactly the "smooth migration" contract
-in docs/guide/adapter-bootstrap.md §3.
+Without an explicit opt-in or verified handshake, every factory selects the
+existing workaround.  Socket presence alone never changes the data path.
 
 Overrides (both for real deployments and for testing the switch logic)
 ----------------------------------------------------------------------
-* `RECAMERA_FRAME_SOCK` / `RECAMERA_AUDIO_SOCK` -- point the probe at a custom
-  socket path (lets a test create a fake socket and prove the switch).
-* `RECAMERA_RESULT_INGRESS` / `RECAMERA_CONTROL_API` -- "1"/"0" to force those
-  (currently un-probeable) capabilities on/off.
+* `RECAMERA_*_SOCK` values affect filesystem diagnostics only.  The current
+  native ABI fixes endpoint paths; official adapters reject a non-default path
+  rather than pretending to route it.
+* `RECAMERA_RESULT_INGRESS` marks result ingress present for diagnostics only;
+  it still remains ``UNKNOWN`` and does not auto-select OSD burn-in.
+* `RECAMERA_CONTROL_API=1` is an explicit control-plane opt-in: selection uses
+  `OfficialControl` even though the capability is still reported as
+  ``UNKNOWN`` until a versioned handshake exists.
 * `RECAMERA_ADAPTER_PREFER` = `auto` (default) | `official` | `workaround`
   -- a global manifest-style override of the per-capability auto selection
   (docs/guide/adapter-bootstrap.md §3: "可留 manifest 里 prefer: official|workaround 供覆盖").
@@ -35,8 +38,18 @@ Overrides (both for real deployments and for testing the switch logic)
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Optional
+
+from kit.capabilities import (
+    Capabilities,
+    Capability,
+    CapabilityStatus,
+    audio_socket_path,
+    capabilities,
+    frame_socket_path,
+    probe_capabilities,
+    probe_socket_path,
+    result_socket_path,
+)
 
 
 # -- capability probing ------------------------------------------------------- #
@@ -44,82 +57,44 @@ from typing import Optional
 # under /run/recamera/). These are the *real* names the shipped librecamera_ext
 # uses -- singular `frame.sock` and `result-in.sock`.
 def _frame_sock_path() -> str:
-    return os.environ.get("RECAMERA_FRAME_SOCK", "/run/recamera/frame.sock")
+    return frame_socket_path()
 
 
 def _result_sock_path() -> str:
-    return os.environ.get("RECAMERA_RESULT_SOCK", "/run/recamera/result-in.sock")
+    return result_socket_path()
 
 
 def _audio_sock_path() -> str:
-    return os.environ.get("RECAMERA_AUDIO_SOCK", "/run/recamera/audio.sock")
+    return audio_socket_path()
 
 
 def _probe_sock_path() -> str:
-    return os.environ.get("RECAMERA_PROBE_SOCK", "/run/recamera/probe.sock")
+    return probe_socket_path()
 
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
 
 
-@dataclass(frozen=True)
-class Capabilities:
-    """Result of one capability probe (mirrors docs/guide/adapter-bootstrap.md §3 `caps`)."""
-    frame_broker: bool = False
-    result_ingress: bool = False
-    audio_broker: bool = False
-    control_api: bool = False
-    # probe@1 is the ABI v1 baseline observability tap (spec §4). Unlike the
-    # capabilities above it has no reverse-engineered workaround -- the SDK's
-    # ProbeSource is the only implementation. The probe here is informational
-    # (lets appmgr log/skip when the socket is absent); selection never branches.
-    probe: bool = False
-
-
-def probe_capabilities() -> Capabilities:
-    """Probe the official firmware endpoints. Cheap + side-effect free."""
-    return Capabilities(
-        frame_broker=os.path.exists(_frame_sock_path()),
-        # Both frame + result sockets are filesystem-probeable now that the real
-        # paths are known. RECAMERA_RESULT_INGRESS still force-overrides (used by
-        # tests, and to opt in before the socket-perms are relaxed).
-        result_ingress=(os.path.exists(_result_sock_path())
-                        or _env_bool("RECAMERA_RESULT_INGRESS")),
-        audio_broker=os.path.exists(_audio_sock_path()),
-        control_api=_env_bool("RECAMERA_CONTROL_API"),
-        probe=os.path.exists(_probe_sock_path()),
-    )
-
-
-_CACHED: Optional[Capabilities] = None
-
-
-def capabilities(refresh: bool = False) -> Capabilities:
-    """Return the cached capability probe (probed once per process).
-
-    `refresh=True` re-probes -- used by tests that mutate the environment, and
-    available to appmgr if it ever needs to re-evaluate after a firmware event.
-    """
-    global _CACHED
-    if refresh or _CACHED is None:
-        _CACHED = probe_capabilities()
-    return _CACHED
-
-
 # -- selection policy --------------------------------------------------------- #
-def _prefer_official(cap_present: bool) -> bool:
-    """Apply the global prefer override on top of the auto (cap-present) choice."""
+def _prefer_official(capability: Capability) -> bool:
+    """Select official only by explicit policy or a verified handshake.
+
+    A Unix-socket inode is useful discovery evidence but remains ``UNKNOWN``;
+    auto-selection must not route an application into a stale/incompatible
+    protocol.  Until the native capability handshake is recovered, deployments
+    with the matching patched firmware opt in explicitly.
+    """
     pref = str(os.environ.get("RECAMERA_ADAPTER_PREFER", "auto")).strip().lower()
     if pref == "official":
         return True
     if pref == "workaround":
         return False
-    return cap_present  # auto
+    return capability.status is CapabilityStatus.AVAILABLE
 
 
 # -- factories ---------------------------------------------------------------- #
-def select_frame_source(url: str, prefer: str = "ffmpeg", **kw):
+def select_frame_source(url: str | None = None, prefer: str = "ffmpeg", **kw):
     """Pick a FrameSource implementation.
 
     `prefer` selects the *workaround backend* ("ffmpeg" streaming | "snapshot"
@@ -128,7 +103,10 @@ def select_frame_source(url: str, prefer: str = "ffmpeg", **kw):
     which is honoured verbatim.
     """
     caps = capabilities()
-    if prefer != "snapshot" and _prefer_official(caps.frame_broker):
+    if url is None:
+        from .frame_source import DEFAULT_SUB_STREAM
+        url = DEFAULT_SUB_STREAM
+    if prefer != "snapshot" and _prefer_official(caps.get("frame")):
         from .official import OfficialFrameSource
         return OfficialFrameSource(url=url, sock=_frame_sock_path(), **kw)
     from .frame_source import FfmpegRtspSource, SnapshotSource
@@ -178,10 +156,18 @@ def select_result_sink(kind: str = "ws", **kw):
     """
     if kind != "stdout" and (kind == "osd" or _result_osd_opt_in()):
         from .official import OsdInjectResultSink
+        kw.setdefault("sock", _result_sock_path())
         return OsdInjectResultSink(**kw)
-    from .result_sink import StdoutSink, WsResultSink
+    from .result_sink import GatewayResultSink, StdoutSink, WsResultSink
     if kind == "stdout":
         return StdoutSink(**kw)
+    gateway_sock = os.environ.get("RECAMERA_RESULT_GATEWAY_SOCK", "").strip()
+    if gateway_sock:
+        # Managed launch: fail closed inside GatewayResultSink if the UDS or
+        # instance identity is unavailable.  Never fall back to a child-owned
+        # :8124 listener, which would reintroduce the multi-app port race.
+        kw["sock"] = gateway_sock
+        return GatewayResultSink(**kw)
     return WsResultSink(**kw)
 
 
@@ -215,7 +201,7 @@ def select_audio_source(prefer: str = "ai_asr", **kw):
     supersedes all three.
     """
     caps = capabilities()
-    if _prefer_official(caps.audio_broker):
+    if _prefer_official(caps.get("audio")):
         from .official import OfficialPcmSource
         return OfficialPcmSource(sock=_audio_sock_path(), **kw)
     if prefer == "rtsp":
@@ -231,15 +217,17 @@ def select_audio_source(prefer: str = "ai_asr", **kw):
 def select_control(**kw):
     """Pick a ControlPlane implementation.
 
-    The official versioned control API (`OfficialControl`) is preferred when
-    probed present (or forced via RECAMERA_ADAPTER_PREFER=official). On today's
-    firmware it is not present, so this falls back to `CgiControl`, the
-    workaround plane that drives the device's existing `entry.cgi` endpoints
-    (localhost, no JWT) for set_inference and proxies a FrameSource frame for
-    snapshot.
+    `RECAMERA_CONTROL_API=1` is an explicit opt-in for the migration stub and
+    therefore force-selects `OfficialControl` even though the capability probe
+    can only report ``UNKNOWN`` today. Otherwise the official versioned control
+    API is selected only by a verified handshake or the global
+    `RECAMERA_ADAPTER_PREFER=official` override. On today's firmware this
+    usually falls back to `CgiControl`, the workaround plane that drives the
+    device's existing `entry.cgi` endpoints (localhost, no JWT) for
+    set_inference and proxies a FrameSource frame for snapshot.
     """
     caps = capabilities()
-    if _prefer_official(caps.control_api):
+    if _env_bool("RECAMERA_CONTROL_API") or _prefer_official(caps.get("control")):
         from .official import OfficialControl
         return OfficialControl(**kw)
     from .cgi_control import CgiControl

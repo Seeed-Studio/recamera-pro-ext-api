@@ -87,7 +87,10 @@ POST /cgi-bin/entry.cgi/system/login          body {"sUserName":"admin","sPasswo
 | `result@1.limits` | 结果回注：每连接 60 msg/s、≤8 source、≤4 连接、单条 ≤64KB | §3.3 |
 | `probe@1.stages` | 观测面 tap 点 | §4.1 |
 
-> **v1 baseline 承诺**：`frame@1`/`result@1`/`probe@1` 一经发布不可移除；能力演进 = 新增 Capability 或提升 version；limits 数值可变，客户端必须按握手/本端点返回值自适应，**不得硬编码**（§1.2 / §8.2 扩展五规则）。
+> **v1 baseline 承诺**：`frame@1`/`result@1`/`probe@1`/
+> `inference-control@1` 一经发布不可移除；能力演进 = 新增 Capability 或提升
+> version；limits 数值可变，客户端必须按握手/本端点返回值自适应，
+> **不得硬编码**（§1.2 / §8.2 扩展五规则）。
 
 示例：
 

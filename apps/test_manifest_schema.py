@@ -92,6 +92,24 @@ _DELIBERATE_NUMBER_KEYS = {
 }
 
 
+class RuntimeApplySemanticsTests(unittest.TestCase):
+
+    def test_voice_graph_parameters_require_restart(self):
+        """These values are captured by source/VAD/KWS/SM constructors."""
+
+        man = _load(os.path.join(_ROOT, "apps", "voice-transcribe",
+                                 "manifest.json"))
+        specs = kitconfig.schema_items(man)
+        captured = {
+            "wakeword", "min_silence_sec", "max_utterance_sec",
+            "preroll_ms", "listen_timeout_sec", "audio_filter",
+        }
+        self.assertEqual(
+            {key: specs[key]["apply"] for key in captured},
+            {key: "restart" for key in captured},
+        )
+
+
 class IntegerSemanticsTests(unittest.TestCase):
 
     def _specs(self, app):

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+echo "FATAL: this archived deploy-firmware flow predates inference-control@1 and is disabled." >&2
+echo "Build and validate a new firmware from manifest-pinned source commits instead." >&2
+exit 1
 #
 # deploy-firmware.sh -- reCamera Pro v1.5.0 MASKING FIRMWARE deploy (HIGH RISK).
 #

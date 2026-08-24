@@ -1,4 +1,48 @@
 {
+  "manifest_version": 2,
+  "release": {"sequence": 1, "channel": "stable"},
+  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "imports": ["kaldi_native_fbank", "sentencepiece", "sherpa_onnx", "voxedge"],
+    "wheels": [
+      {"name": "kaldi-native-fbank", "version": "1.22.3", "filename": "kaldi_native_fbank-1.22.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", "file": "wheels/kaldi_native_fbank-1.22.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", "sha256": "d48e5dd8e897bf4509be2c6eeb4bbab728eaaef1f214ae0510c96219c4253d17", "size": 299054, "tags": ["cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64"], "source": "bundled"},
+      {"name": "sentencepiece", "version": "0.2.0", "filename": "sentencepiece-0.2.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", "file": "wheels/sentencepiece-0.2.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", "sha256": "27f90c55a65013cbb8f4d7aab0599bf925cde4adc67ae43a0d323677b5a1c6cb", "size": 1259182, "tags": ["cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64"], "source": "bundled"},
+      {"name": "sherpa-onnx", "version": "1.13.5", "filename": "sherpa_onnx-1.13.5-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", "file": "wheels/sherpa_onnx-1.13.5-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", "sha256": "dfedcebfe90d5079b98231e0d8ab008460c52cd44199698b464569c90dfd2124", "size": 4166120, "tags": ["cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64"], "source": "bundled"},
+      {"name": "sherpa-onnx-core", "version": "1.13.5", "filename": "sherpa_onnx_core-1.13.5-py3-none-manylinux2014_aarch64.whl", "file": "wheels/sherpa_onnx_core-1.13.5-py3-none-manylinux2014_aarch64.whl", "sha256": "4cd751063a378a49f0c72eba5ba959fe375397f5baf93a53f3db64097d00e2aa", "size": 13051193, "tags": ["py3-none-manylinux2014_aarch64"], "source": "bundled"},
+      {"name": "voxedge", "version": "0.0.9a0", "filename": "voxedge-0.0.9a0-py3-none-any.whl", "file": "wheels/voxedge-0.0.9a0-py3-none-any.whl", "sha256": "1af3abb53e149cda35ee637c574393e6e9f383b9c8993be90c8fe6fde17d93d7", "size": 280356, "tags": ["py3-none-any"], "source": "bundled"}
+    ]
+  },
+  "artifacts": [
+    {"id": "sensevoice-rknn", "kind": "rknn", "source": "bundled", "file": "models/asr/sensevoice_rv1126b_w4a16.rknn", "sha256": "3fa40ad9ab011f5f4134a355b0104c979d272450a0ff3c17ec34cba97f4f1c12", "size": 133468923, "mount": "models/asr/sensevoice_rv1126b_w4a16.rknn", "required": true, "share_scope": "content"},
+    {"id": "sensevoice-cmvn", "kind": "data", "source": "bundled", "file": "models/asr/am.mvn", "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5", "size": 11203, "mount": "models/asr/am.mvn", "required": true, "share_scope": "content"},
+    {"id": "sensevoice-embedding", "kind": "data", "source": "bundled", "file": "models/asr/embedding.npy", "sha256": "83cf1fc5680fdf6d7edb411be5ce351cad4eca03b29a5bf5050aa19dfcc12267", "size": 35968, "mount": "models/asr/embedding.npy", "required": true, "share_scope": "content"},
+    {"id": "sensevoice-tokenizer", "kind": "data", "source": "bundled", "file": "models/asr/chn_jpn_yue_eng_ko_spectok.bpe.model", "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8", "size": 377341, "mount": "models/asr/chn_jpn_yue_eng_ko_spectok.bpe.model", "required": true, "share_scope": "content"},
+    {"id": "silero-vad", "kind": "onnx", "source": "bundled", "file": "models/asr/silero_vad.onnx", "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3", "size": 2327524, "mount": "models/asr/silero_vad.onnx", "required": true, "share_scope": "content"},
+    {"id": "kws-encoder", "kind": "onnx", "source": "bundled", "file": "models/asr/kws/encoder.int8.onnx", "sha256": "1e721676515bcd42a186979733981213c66c80db680e1cc582dfedf3be76e678", "size": 4807159, "mount": "models/asr/kws/encoder.int8.onnx", "required": true, "share_scope": "content"},
+    {"id": "kws-decoder", "kind": "onnx", "source": "bundled", "file": "models/asr/kws/decoder.int8.onnx", "sha256": "e40ff43297abe815e8898494c17e71bba2152d9d40fa3eb803f75d0f7533329a", "size": 277985, "mount": "models/asr/kws/decoder.int8.onnx", "required": true, "share_scope": "content"},
+    {"id": "kws-joiner", "kind": "onnx", "source": "bundled", "file": "models/asr/kws/joiner.int8.onnx", "sha256": "eae9da0c7e1e6c6a3f4cc42d167899c388f6c6701b94cb96320e4f55df79624c", "size": 163380, "mount": "models/asr/kws/joiner.int8.onnx", "required": true, "share_scope": "content"},
+    {"id": "kws-tokens", "kind": "dictionary", "source": "bundled", "file": "models/asr/kws/tokens.txt", "sha256": "fd2ded4050a55d2b1578870ba8697d02371980217806b7558bd0a5cc60f3ba53", "size": 5006, "mount": "models/asr/kws/tokens.txt", "required": true, "share_scope": "content"},
+    {"id": "kws-keywords", "kind": "dictionary", "source": "bundled", "file": "models/asr/kws/keywords.txt", "sha256": "6952c427ca8bd27b20c79c22d6bd611cf62401fa72fda14a447960f1b74c8a8d", "size": 22, "mount": "models/asr/kws/keywords.txt", "required": true, "share_scope": "content"}
+  ],
+  "resources": {
+    "profiles": [
+      {"when": {"asr_backend": "rk"}, "claims": [
+        {"name": "audio.capture", "mode": "shared", "required": true},
+        {"name": "npu.rknn", "mode": "scheduled", "required": true},
+        {"name": "result.publish", "mode": "brokered", "required": true}
+      ]},
+      {"when": {"asr_backend": "sherpa"}, "claims": [
+        {"name": "audio.capture", "mode": "shared", "required": true},
+        {"name": "result.publish", "mode": "brokered", "required": true}
+      ]}
+    ],
+    "limits": {"memory_mb": 768, "cpu_percent": 400, "storage_mb": 256, "shutdown_grace_sec": 15}
+  },
+  "permissions": {"sdk": ["audio.read", "npu.infer", "result.publish"], "filesystem": {"read": ["app", "appdata", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs", "rkipc.rtsp"]}},
+  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 180, "stabilization_sec": 5, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 2, "window_sec": 300, "backoff_sec": [2, 10]}},
+  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
   "id": "voice-transcribe",
   "name": "Voice Transcribe",
   "name_zh": "语音转录",
@@ -7,12 +51,10 @@
   "type": "self-hosted",
   "scene": "Voice & Audio",
   "scene_zh": "语音音频",
-  "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux available as a fallback), spots a wake word with a streaming sherpa-onnx KeywordSpotter, endpoints the following utterance with silero VAD, and transcribes it with SenseVoice int8 -- all on the ARM cores, no NPU. Streams state (idle/listening/transcribing) and transcript text to the /appcenter panel.",
-  "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。通过 rkipc 的 RTSP 音频轨采集麦克风（不接管 /dev/snd，不影响视频），用流式 sherpa-onnx KeywordSpotter 检测唤醒词，用 silero VAD 对后续语句断句，再用 SenseVoice int8 转录，全程运行在 ARM 核心上，不使用 NPU。向 /appcenter 面板输出状态（空闲/聆听/转录）与转录文本。",
+  "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux is a fallback). Streaming sherpa-onnx KWS and silero VAD run on the ARM cores; the default `rk` ASR backend runs SenseVoice w4a16 on the RV1126B NPU under the shared rkipc broker lease. The optional `sherpa` ASR backend is CPU-only and requires an extra ONNX model. Streams state and transcript text to the /appcenter panel.",
+  "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。默认通过官方 ALSA `ai_asr` 共享采集 PCM（dsnoop，与 rkipc 共用麦克风、不接管设备、不影响视频；也可回退到 RTSP 音频轨）。流式 sherpa-onnx KWS 与 silero VAD 运行在 ARM 核心；默认 `rk` 识别后端通过共享的 rkipc broker 租约，在 RV1126B NPU 上运行 SenseVoice w4a16。可选 `sherpa` 识别后端仅使用 CPU，且需额外提供 ONNX 模型。向 /appcenter 面板输出状态与转录文本。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
-  "kit": ">=0.1.0",
-  "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
     "audio",
     "output"
@@ -24,7 +66,7 @@
     "voice",
     "asr",
     "audio",
-    "cpu"
+    "npu"
   ],
   "render": {
     "events": {
@@ -42,7 +84,6 @@
   },
   "output": {
     "sink": "ws",
-    "port": 8124,
     "schema": "events[]{kind=state|wake|transcript|listen_timeout, state, text, keyword, backend, audio_sec, rtf, language} + top-level {state, summary{state,text}}",
     "default_channel": [
       "ws"
@@ -99,7 +140,7 @@
           {
             "key": "wakeword",
             "type": "string",
-            "apply": "live",
+            "apply": "restart",
             "title": "Wake phrase (ASR backend)",
             "title_zh": "唤醒短语（ASR 后端）",
             "default": "hello camera"
@@ -148,8 +189,8 @@
               "CPU sherpa"
             ],
             "default": "rk",
-            "help": "rk = NPU w4a16 SenseVoice (uses the shared sensevoice_rv1126b_w4a16.rknn). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
-            "help_zh": "rk = NPU w4a16 SenseVoice（使用共享的 sensevoice_rv1126b_w4a16.rknn）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
+            "help": "rk = NPU w4a16 SenseVoice (uses the authenticated model bundled with this app release). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
+            "help_zh": "rk = NPU w4a16 SenseVoice（使用本应用版本随包认证的模型）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
           },
           {
             "key": "language",
@@ -178,7 +219,7 @@
           {
             "key": "min_silence_sec",
             "type": "number",
-            "apply": "live",
+            "apply": "restart",
             "title": "Silence to end utterance (s)",
             "title_zh": "断句静音时长（秒）",
             "min": 0.2,
@@ -189,7 +230,7 @@
           {
             "key": "max_utterance_sec",
             "type": "number",
-            "apply": "live",
+            "apply": "restart",
             "title": "Max recording length (s)",
             "title_zh": "最长录音时长（秒）",
             "min": 2.0,
@@ -200,7 +241,7 @@
           {
             "key": "preroll_ms",
             "type": "number",
-            "apply": "live",
+            "apply": "restart",
             "title": "Pre-roll look-back (ms)",
             "title_zh": "句头回看补偿（毫秒）",
             "min": 0.0,
@@ -211,7 +252,7 @@
           {
             "key": "listen_timeout_sec",
             "type": "number",
-            "apply": "live",
+            "apply": "restart",
             "title": "Listen timeout after wake (s)",
             "title_zh": "唤醒后聆听超时（秒）",
             "min": 2.0,
@@ -223,9 +264,11 @@
             "key": "model_dir",
             "type": "string",
             "apply": "restart",
-            "title": "Shared model dir",
-            "title_zh": "共享模型目录",
-            "default": "/userdata/local/models/asr"
+            "title": "Model asset directory",
+            "title_zh": "模型资源目录",
+            "default": "models/asr",
+            "help": "Managed manifest-v2 RK inference authorizes only this package-relative bundled directory. A custom/shared directory is supported only for standalone or legacy launches.",
+            "help_zh": "由应用中心管理的 manifest v2 RK 推理只授权此包内相对目录；自定义或共享目录仅用于独立运行或旧版兼容。"
           },
           {
             "key": "audio_source",
@@ -244,7 +287,7 @@
           {
             "key": "audio_filter",
             "type": "string",
-            "apply": "live",
+            "apply": "restart",
             "title": "Mic gain filter (ffmpeg -af)",
             "title_zh": "麦克风增益滤镜（ffmpeg -af）",
             "default": "loudnorm=I=-16:TP=-1.5"

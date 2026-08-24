@@ -325,6 +325,92 @@ void rc_ext_probe_release(rc_ext_probe_t *h, rc_ext_probe_sample_t *s);
 void rc_ext_probe_close(rc_ext_probe_t *h);
 
 // ===========================================================================
+// M5 external NPU lease -- crash-safe RKNN ownership
+// ===========================================================================
+//
+// rkipc owns the system NPU arbitration decision. A workflow MUST acquire this
+// lease before constructing an RKNN context and keep the returned handle alive
+// for the entire inference session. The AF_UNIX connection is the lease: when a
+// process exits, is SIGKILLed, or loses rkipc, socket HUP revokes the generation
+// and releases all server-side external ownership.
+//
+// ACQUIRE is acknowledged only after rkipc has destroyed its built-in RKNN
+// handle, reached state "stopped", and reported actual_fps == 0. This is the
+// safety boundary; an HTTP 200 from the legacy CGI is not equivalent.
+
+#define RC_EXT_INFERENCE_APP_ID_MAX      64u
+#define RC_EXT_INFERENCE_INSTANCE_ID_MAX 64u
+#define RC_EXT_INFERENCE_STATE_MAX       16u
+#define RC_EXT_INFERENCE_SOURCE_MAX      64u
+
+typedef struct rc_ext_inference_lease rc_ext_inference_lease_t;
+
+typedef enum {
+	RC_EXT_INFERENCE_BUILTIN = 0,
+	RC_EXT_INFERENCE_PREPARING_EXTERNAL = 1,
+	RC_EXT_INFERENCE_EXTERNAL_ACQUIRED = 2,
+	RC_EXT_INFERENCE_EXTERNAL_READY = 3,
+	RC_EXT_INFERENCE_NONE = 4,
+	RC_EXT_INFERENCE_FAULT = 5,
+} rc_ext_inference_state_t;
+
+// Versionable returned snapshot. Callers should zero-initialize and set
+// struct_size=sizeof(rc_ext_inference_status_t) before rc_ext_inference_status;
+// current clients may also leave it zero, which selects the current layout.
+typedef struct {
+	uint32_t struct_size;
+	uint32_t state; // rc_ext_inference_state_t
+	uint64_t lease_id;
+	uint64_t epoch;       // changes whenever rkipc restarts
+	uint64_t generation;  // increases for every granted external owner
+	uint32_t actual_fps;
+	int32_t peer_pid;
+	uint8_t builtin_enabled;
+	uint8_t handle_present;
+	uint8_t fallback_builtin;
+	uint8_t reserved0;
+	char builtin_state[RC_EXT_INFERENCE_STATE_MAX];
+	char source_id[RC_EXT_INFERENCE_SOURCE_MAX];
+} rc_ext_inference_status_t;
+
+// Connects to /run/recamera/inference-control.sock, requests exclusive external
+// ownership, and waits up to timeout_ms for the built-in RKNN context to drain
+// (0 selects the server default). app_id/instance_id are diagnostic identifiers;
+// SO_PEERCRED remains authoritative. fallback_builtin!=0 asks rkipc to restore
+// built-in inference if this process crashes. Returns NULL + *err on failure.
+rc_ext_inference_lease_t *rc_ext_inference_lease_open(
+	const char *app_id, const char *instance_id, uint32_t timeout_ms,
+	int fallback_builtin, int *err);
+
+// Marks initialization complete after the caller has successfully loaded its
+// model and opened its frame/result endpoints. Returns 0 or -rc_ext_err_t.
+int rc_ext_inference_lease_ready(rc_ext_inference_lease_t *lease);
+
+// Changes the disconnect/crash fallback policy for the live lease. This is
+// useful before a deliberate application stop. Returns 0 or -rc_ext_err_t.
+int rc_ext_inference_lease_set_fallback(rc_ext_inference_lease_t *lease,
+                                        int fallback_builtin);
+
+// Fetches an authoritative status snapshot over the live control connection.
+int rc_ext_inference_lease_status(rc_ext_inference_lease_t *lease,
+                                  rc_ext_inference_status_t *out);
+
+// Non-blocking liveness check: 1 means the connection is still live, 0 means
+// HUP/EOF/revocation, and a negative value is -rc_ext_err_t.
+int rc_ext_inference_lease_alive(rc_ext_inference_lease_t *lease);
+
+// Best-effort RELEASE followed by close. NULL-safe. Process death needs no call:
+// rkipc observes HUP and performs the same server-side revocation.
+void rc_ext_inference_lease_close(rc_ext_inference_lease_t *lease);
+
+// Fork-child cleanup only. It closes the child's inherited descriptor without
+// sending RELEASE, so the parent process keeps its lease. The handle must not
+// be used afterwards. Do not call this in the owning process.
+void rc_ext_inference_lease_abandon_after_fork(
+	rc_ext_inference_lease_t *lease);
+
+
+// ===========================================================================
 // M4 privacy-mask control (hardware COVER incremental control)
 // ===========================================================================
 //

@@ -1,6 +1,12 @@
-# 发布维护指南 (RELEASING)
+# 发布维护指南（当前 legacy 流程已禁用）
 
 面向**维护者**：如何重新打包并更新 `release/` 下的两个发布物。日常开发/使用不需要读本文，只在要出新版或改了随包内容（SDK / kit / examples）时用。
+
+> **当前发布阻断**：`release/pkg` 的实文件、MANIFEST 和 install.sh 哈希不
+> 一致，历史 factory/ext rkipc 集合还互相重叠；它也不含
+> `inference-control@1`。`install.sh` 已主动 fail-closed。下文记录旧包形状，
+> 不能按旧步骤重打或部署。下一发布必须先把各仓提交纳入 manifest，再从
+> 源码构建 rkipc、entry.cgi、native SDK 和 Python 包，并生成统一 BOM。
 
 ## 两个包，各自用途
 
@@ -9,7 +15,9 @@
 | `release/recamera-ext-api-v<ver>.tar` | **固件 sideload 包**：patched `rkipc` + `entry.cgi` + SDK + **`wheels/`（rknnlite 运行时）** + `install.sh`/`rollback.sh`/`MANIFEST.txt` | 给设备刷入扩展 API 固件的人 | 覆盖 `/oem`（持久，OTA 会还原）+ provision `/userdata/rknnenv`。设备端步骤见 `release/pkg/README.md` |
 | `release/recamera-ext-kit-v<ver>.tar.gz` | **kit 分享包**：`kit/` + `sdk/`（含 `.so` 软链）+ `examples/` + **`wheels/`（rknnlite 运行时）** + `INSTALL.sh` + `SHARE-README.md`。**不含固件** | 给已刷好固件、要在设备上开发 app 的方案商 | `INSTALL.sh` 装到 `/userdata/local/kit` + `/userdata/sdk` + provision `/userdata/rknnenv` |
 
-两者都由 `release/build-release.sh` 从仓内源可复现地组装。
+历史上两者由 `release/build-release.sh` **从传入的预编译二进制组装**；该脚本
+不是源码 builder，也不能证明产物可复现。当前流程禁用，须由新的源码发布
+流水线替代后才能产出下一 train。
 
 ## Python 推理运行时 (rknnlite) 随包 provision
 
@@ -32,7 +40,8 @@ LD_LIBRARY_PATH=/oem/usr/lib \
 `/userdata/local`（仍需要 `/userdata/sdk/python` —— 那是扩展 SDK 的 `recamera_ext`，
 与 kit 无关）。appmgr 拉起 app 走的是等价的 `-m kit.run` 形式。
 
-换 rknnlite 版本 → 替换 `release/pkg/wheels/` 下 wheel + 更新 `MANIFEST.txt` 的 md5/size，重打两个包即可。
+旧流程曾通过替换 `release/pkg/wheels/` 后重打；当前禁止这样发布。新流水线须把
+wheel 锁文件、来源、SHA-256、目标 ABI 与离线安装测试写入统一 BOM。
 
 ## 何时重打
 
@@ -40,32 +49,21 @@ LD_LIBRARY_PATH=/oem/usr/lib \
 - 换了 `rkipc` / `entry.cgi`（新固件构建产物）→ 重打固件包（并核对 md5）。
 - 升版本号 → 两个都重打（文件名带版本）。
 
-## 从哪拿 rkipc / entry.cgi
+## rkipc / entry.cgi 的唯一允许来源
 
-固件包需要两个二进制，来源二选一：
-
-1. **wsl 构建产物**：`recamera_ipc` 构建输出目录 `out/bin/`（`rkipc`），以及 M4 控制面 `entry.cgi`。跨机开发见 `recamera-rk-build` skill（代码/编译在 wsl2-local）。
-2. **设备现役**：从已验证设备的 `/oem/usr/bin/rkipc`、`/oem/usr/www/cgi-bin/entry.cgi` 拉回（`adb pull` 或 `scp`）。
-3. **仓内现役副本**：`release/pkg/rkipc`、`release/pkg/entry.cgi` 就是当前发布的现役二进制（`de5b3aa4` / `75a693c8`）。内容不变时直接用它们重打即可。
+下一发布只允许使用 manifest 固定 commit 后，由同一次 CI/SDK 构建生成的
+`recamera_ipc` 和 `recamera_web_backend` 产物。禁止从设备反向拉取二进制作为
+发布源，也禁止复用 `release/pkg/rkipc`、`release/pkg/entry.cgi`；后两者只是
+已知不一致的历史快照。
 
 ## 重打步骤
 
-```sh
-# 版本不变、仅随包内容变化（如修了 examples），用仓内现役二进制：
-release/build-release.sh \
-  --rkipc release/pkg/rkipc \
-  --entry-cgi release/pkg/entry.cgi \
-  --version 1.2.0
+当前没有获准的 sideload 重打命令。恢复发布前必须先实现并通过：源码 commit
+BOM、同构建 train 的 rkipc/entry.cgi/lib/header/Python 一致性、factory 与
+extension 哈希集合不相交断言、两次构建字节一致、RV1126B kill/restart/OTA
+矩阵。不要通过删除 `install.sh` guard 或更新单个 md5 绕过这些门禁。
 
-# 换了固件二进制 / 升版本：
-release/build-release.sh \
-  --rkipc <path/to/new/rkipc> \
-  --entry-cgi <path/to/new/entry.cgi> \
-  --version 1.3.0 \
-  [--factory-md5 <原厂 rkipc md5>]   # 不传则沿用 install.sh 现有值
-```
-
-脚本会：
+旧 `build-release.sh` 曾执行下列组装动作（仅供迁移新流水线时参考）：
 1. 计算 `rkipc`/`entry.cgi`/`.so` 的 md5 与 size；
 2. **自动写回** `release/pkg/{install.sh,rollback.sh,MANIFEST.txt,README.md}` 的 md5 常量、size、版本、构建日期（消除手工同步漂移）；
 3. 确定性组装两个包（成员排序、`mtime=0`、`gzip` 去时间戳）→ 同输入得同 md5；
@@ -82,15 +80,15 @@ tar tf  release/recamera-ext-api-v<ver>.tar                                     
 tar tf  release/recamera-ext-api-v<ver>.tar | grep wheels                                            # 4 个 rknnlite wheel 在包内
 tar tzf release/recamera-ext-kit-v<ver>.tar.gz | grep wheels                                         # kit 包同样带 wheels
 
-# 重复跑一次，两次 md5 应完全相同（确定性）：
-release/build-release.sh --rkipc release/pkg/rkipc --entry-cgi release/pkg/entry.cgi --version <ver>
+# 新流水线完成后，应以 CI 生成的 staging 输入连续构建两次并比较 SHA-256；
+# 不得把 release/pkg 内的历史二进制作为输入。
 ```
 
 设备端端到端验证（刷固件包后）见 `docs/guide/deploy-ops.md` §5 自检清单。
 
 ## 提交
 
-`release/build-release.sh` 会顺带改动 `release/pkg/` 的元数据文件。按功能拆 commit：
+以下是旧 assembler 的历史提交形状，不能作为当前发布步骤：
 
 ```sh
 git add release/pkg/{install.sh,rollback.sh,MANIFEST.txt,README.md}   # 若 md5/版本有变

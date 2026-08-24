@@ -11,7 +11,8 @@
 # 产出 (默认 release/dist/,已在 .gitignore 内,不进 git):
 #   voice-runtime-<ver>.tar.gz     wheels/ + README.md (含每个 wheel 的 sha256)
 #
-# 设备侧安装: 浏览器 POST /api/appMgr/upload 上传本包 -> POST /api/appMgr/runtime
+# 设备侧 legacy 迁移: 本机 loopback POST /api/appMgr/upload -> /runtime。
+# 公网 nginx 对 raw upload 返回 410；新应用应使用 manifest v2 bundled artifacts。
 # {path}。appmgr 用 pip --no-index --find-links 离线装进 /userdata/rknnenv,
 # 与 release/kit-extra/INSTALL.sh 里 rknnlite 的做法同一条路径。
 #
@@ -99,8 +100,8 @@ echo "=== write README.md (校验值随包) ==="
   echo "reCamera Pro 按需音频运行时 (INSTALL_ASSETS_SPEC §3)。"
   echo "目标: aarch64 / CPython 3.11 / /userdata/rknnenv"
   echo
-  echo "设备安装:"
-  echo '  POST /api/appMgr/upload   (raw bytes, X-Filename: voice-runtime-'"$VERSION"'.tar.gz)'
+  echo "设备本机 legacy 迁移安装（公网 raw upload 返回 410）:"
+  echo '  POST http://127.0.0.1:8130/api/appMgr/upload   (raw bytes, X-Filename: voice-runtime-'"$VERSION"'.tar.gz)'
   echo '  POST /api/appMgr/runtime  {"name":"voice","path":"<上一步返回的 path>"}'
   echo
   echo "就位判定不是看文件,而是在 venv 里 \`import voxedge, sherpa_onnx\`。"

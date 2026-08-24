@@ -27,7 +27,9 @@
    里的一组普通函数，CLI（`python3 -m appmgr <cmd>`）和 HTTP API 共用同一份代码。
 2. **最小 HTTP API**：监听 **loopback `127.0.0.1:8130`**
    （`paths.py:68-69`，`HTTP_HOST`/`HTTP_PORT`），由 nginx 边缘（`ext_appmgr.conf`）用官方 JWT
-   会话把关，路径 `/api/appMgr/`。
+   会话把关。Web 应用中心使用独立版本域 `/api/app-center/v1/`；历史工具仍可使用
+   `/api/appMgr/`。不得把 Web 应用中心重新映射到 `/api/v1/`，该路径属于固件现有的
+   SenseCraft/cloud proxy。
 
 ### app 的运行形态
 
@@ -263,14 +265,16 @@ app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方
 - `gen_catalog.py` 把它们哈希后，作为 **catalog 顶层 `models[]` 条目**发出
   `{url, filename, sha256, size, target_path}`（**与 manifest 里那份 per-app 的 `models[]` 不是同一个东西**：
   manifest `models[]` 描述模型元数据供 kit/supervisor 用，catalog `models[]` 描述"装机前要下载并落到哪个目录"）；
-- 安装时**浏览器先把这些文件下载 + sha256 校验，再 `POST /api/appMgr/putModel` 写到 `target_path`，
-  然后才装 app 包**（install 流程见 §6）。
+- 这是 legacy catalog 的共享模型形态；`putModel` 现在只允许设备本机 loopback
+  迁移工具调用，公网 nginx 返回 410。当前 Web/manifest v2 首版把所需模型作为
+  package 的 authenticated bundled artifact 一起上传和安装（流程见 §6）。
 
-**活样本 voice-transcribe**：manifest `models: []`、`needs_model: false`、
-`interpreter: /userdata/rknnenv/bin/python`；共享模型 4 个文件
-（`sensevoice_rv1126b_w4a16.rknn` 133 MB + `am.mvn` + `embedding.npy` +
-`chn_jpn_yue_eng_ko_spectok.bpe.model`）→ `target_path=/userdata/local/models/asr`
-（`models.json:3-11`）。其余 8 个 app 的 catalog `models[]` 为空（模型仍在包里）。
+**legacy 样本 voice-transcribe**：旧 catalog 曾以 `models: []`、
+`needs_model: false` 配合 `target_path=/userdata/local/models/asr` 分发共享模型。
+当前 manifest v2 仍以 `needs_model: false` 表示“不走 kit 的视频模型加载器”，但 RK ASR、
+VAD、BPE 与 KWS 文件均在 `artifacts[]` 中声明并随签名包安装到
+`apps/voice-transcribe/models/asr/`；per-release venv 也由 `python.wheels[]` 构建。
+RK 后端通过 `inferenced` 时只授权这个安装路径。
 
 ---
 
@@ -335,9 +339,13 @@ zip-slip/tar-bomb 防护，最后才解包。
 | 密钥 | 位置 | 在仓库？ | 在设备？ |
 |---|---|---|---|
 | 私钥 `release_priv.pem` | `~/.recamera_release_key/`（chmod 600） | 否，永不 | 否，永不 |
-| 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随 appmgr 部署到 `/userdata/local/appmgr/keys/`） |
+| Vendor 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随固件部署到只读 `/usr/lib/recamera/appmgr/keys/`） |
+| Owner 公钥 `*.pem` | 设备所有者配置 | 否 | `/userdata/local/appmgr/keys/owners/` |
 
-设备侧唯一信任锚就是这份公钥（`paths.py:46-47`，可用 `APPMGR_RELEASE_PUBKEY` 覆盖）。
+Vendor 公钥始终是不可变信任锚；owner trust store 只能扩展、不能替换它。公钥与
+owner 目录均禁止 symlink 和 group/world writable，且受公钥数量/大小上限约束。验签结果返回
+`signer_kind`（`vendor`/`owner`）及规范 SPKI 的 SHA-256 `key_fingerprint`。应用包本身禁止携带
+PEM/私钥容器或 trust-store 目录。
 
 ### 怎么签一个包
 
@@ -364,15 +372,12 @@ python3 sign.py --verify    # 可选：拿公钥回验
   仓库里 `dist/` 的 **9 个包**都有有效 `.sig` 且已嵌入 `catalog.json`
   （含较新的 voice-transcribe，现已签名上架），
   `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 公钥。
-- 但这是**单密钥自签模型**，不是 CA / 开发者证书体系：
-  - 只有**一对**密钥。谁跑了 `keygen.sh`、谁手里就有能让全设备信任的私钥。仓库里这枚公钥
-    对应的私钥由发布方（Seeed，样本 `author` 为 "Seeed reCamera Pro"）持有。
-  - **没有面向第三方方案商的证书签发流程**。方案商自己签的包，出厂设备的信任锚（Seeed 公钥）
-    验不过 → 默认策略下装不上。
-- 因此，方案商要让包装进"出厂设备的应用中心"，当前只有三条路，**都需要额外配合或降级**：
+- 这不是 CA / 开发者证书体系：Seeed 发布包由 vendor 私钥签名；设备所有者可显式配置自己的
+  P-256 公钥，但仓库仍未定义面向第三方方案商的证书签发/吊销流程。
+- 因此，方案商要让包装进"出厂设备的应用中心"，当前有三条路：
   1. **由 Seeed 侧签发**（把包交给持私钥方签名）—— 需 Seeed 配合，流程未在本仓库定义；
-  2. **自管设备群**：把设备上的 `release_pub.pem` 换成自己的公钥，用自己的私钥签
-     （或用 `APPMGR_RELEASE_PUBKEY` 指向自己的锚）；
+  2. **自管设备群**：把自己的公钥安全放进持久化 owner trust store，用自己的私钥签；vendor
+     公钥保持不变且继续受信；
   3. **关闭强制**：`APPMGR_REQUIRE_SIGNATURE=0` 允许无签名安装（牺牲真伪保证）。
 
 > 结论：**签名基础设施已就绪，但"第三方开发者证书 / 上架签发"这一环是半成品，需 Seeed 侧配合才能形成
@@ -466,8 +471,10 @@ url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策
 ### 装到设备的流程
 
 设备在常见 USB 组网下没有外网路由（`gen_catalog.py:5-10`），所以**由浏览器代下**。
-浏览器侧 install 分两阶段（前端 `AppStore.js` 的 install 逻辑 + `appmgrClient.putModel()`，
-在官方 web-native 前端仓；契约核实自 `server.py`/`modelstore.py`）：
+以下两阶段流程只描述 **legacy loopback 迁移链路**，不再是 Web-native 前端行为；
+公网 exact `/api/appMgr/putModel` 和 `/api/appMgr/upload` 均返回 410。当前 Web 前端
+上传 manifest v2 package 到 `/api/app-center/v1/uploads`，模型/依赖作为经过 BOM
+认证的 bundled artifacts 随包进入同一 preflight/install 事务：
 
 ```
 [阶段 0：共享模型 models-first 循环]  —— 仅当 catalog 该 app 的 models[] 非空
@@ -499,7 +506,7 @@ for m in app.models:
   拒绝覆盖目标处已存在的符号链接；大小 `1..256 MB`（`APPMGR_MAX_MODEL_BYTES`，与 nginx
   `client_max_body_size 256m` 对齐）；**原子写**（同目录 temp + fsync + `os.replace`）；
   给了 `X-Sha256` 就复核，**不符即删**（绝不在盘上留半截/被篡改的模型）。
-- **鉴权**：走现有 nginx `/api/appMgr/` 的同一道 JWT 边界（`ext_appmgr.conf`），无新增边界。
+- **边界**：仅 loopback 迁移工具可用；公网 nginx exact location 返回 410。
   单元测试见 `market/appmgr/tests/test_modelstore.py`。
 
 设备本地也可直接用 CLI（`__main__.py`）：`python3 -m appmgr install <pkg.tar.gz>`
@@ -557,8 +564,36 @@ arch/package/models，`gen_catalog.py:265-275`）；设备安装后从包里读 
 
 ## 7. 安装/管理 API 参考
 
-Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（同源 cookie `token`）把关。
-路径尾部斜杠会被 strip（`server.py:443,481`）。核实自 `server.py`。
+Loopback `127.0.0.1:8130`；公网侧用官方 JWT（同源 cookie `token`）把关。官方 React
+应用中心只调用 `/api/app-center/v1/`；`/api/appMgr/` 是兼容旧工具的接口。两者都由
+appmgr 提供，但 nginx **没有** `/api/v1/` 别名，以免覆盖 SenseCraft/cloud proxy。
+浏览器的动态请求还受同源 `Origin` 检查保护（WebSocket 也一样）；跨站 Origin
+直接返回 403。设备本机脚本可直接访问 loopback。经 nginx 调用的非浏览器脚本应
+显式提供与设备 URL 一致的 `Origin`，并携带有效登录 Cookie；不要依赖浏览器会
+自动附带的 Cookie 作为跨站 API 凭据。
+
+Web-native manifest v2 主流程：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/app-center/v1/uploads` | 流式 multipart 上传并 preflight，返回 `upload_id`、manifest、权限、签名和 `release_id` |
+| POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限及 developer mode，提交异步安装 |
+| GET | `/api/app-center/v1/apps` | 列出多应用状态 |
+| POST | `/api/app-center/v1/apps/<id>/{start,stop,restart}` | 提交异步生命周期操作 |
+| GET/PUT | `/api/app-center/v1/apps/<id>/config` | 读取或更新单应用配置 |
+| GET | `/api/app-center/v1/apps/<id>/logs` | 读取有界日志尾部 |
+| DELETE | `/api/app-center/v1/apps/<id>` | 提交异步卸载 |
+| GET | `/api/app-center/v1/operations` | 查询异步操作状态 |
+| GET | `/api/app-center/v1/resources` | 查询系统/应用资源视图 |
+| GET | `/api/app-center/v1/events` | SSE 状态更新流 |
+
+以下是 legacy `/api/appMgr/` 兼容参考：
+
+> 安全边界：`/api/appMgr/upload` 与 `/api/appMgr/putModel` 的历史实现会把完整
+> raw body 放进 appmgr 内存，因此 nginx 公网边界对这两个 exact path 固定返回
+> **410 Gone**。它们只保留给 loopback 迁移工具。Web 应用必须使用流式、有总配额的
+> `/api/app-center/v1/uploads`，依赖/模型按 manifest v2 bundled 或 content-addressed
+> artifact 声明。
 
 | 方法 | 路径 | 入参 | 返回 | 源码 |
 |---|---|---|---|---|
@@ -567,8 +602,8 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 | POST | `/api/appMgr/uninstall` | `{id}` | `{id, uninstalled:true, stopped, was_active}`（先停→清 active→删 app 目录 + per-app venv；共享 models 不动） | `server.py:513-517` / `do_uninstall:209` / `installer.uninstall:180` |
 | POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:518-522` / `do_switch:243` |
 | POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:523-524` / `do_stop:268` |
-| POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:484-492` / `do_upload:134` |
-| POST | `/api/appMgr/putModel` | raw model 字节 + 头 `X-Filename`/`X-Target-Path`/`X-Sha256?` | `{path, filename, size, sha256}`（sha256 不符即删并报 400） | `server.py:495-505` / `do_putmodel:180` / `modelstore.write_model:98` |
+| POST | `/api/appMgr/upload` | **仅 loopback**；公网 nginx 返回 410 | 历史 raw package staging | `server.py` / `do_upload` |
+| POST | `/api/appMgr/putModel` | **仅 loopback**；公网 nginx 返回 410 | 历史 raw model staging | `server.py` / `modelstore.write_model` |
 | GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:446-453` / `do_get_config:279` |
 | POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:525-531` / `do_set_config:288` |
 | GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:454-455` / `do_get_mqtt:389` |
@@ -601,7 +636,8 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 - **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:63-65`）。
 - **当前样本**：`apps/` 有 9 个 app 目录，`catalog.json`（现为 CDN 形态）**9 个应用全部已签名收录**
   （face-analysis / facemesh-reader / fall-detection / fitness-trainer / ppocr-reader /
-  qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。其中 8 个模型随包 bundle
-  （catalog `models[]` 为空）；**voice-transcribe 是共享模型链路的活样本**——manifest `models: []`、
-  catalog `models[]` 有 4 个文件（133 MB rknn + 3 个资源）→ `/userdata/local/models/asr`，
-  装机前由浏览器 `putModel` 落盘（见 §3、§6）。
+  qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。manifest v2 的 9 个样本所需
+  模型均以 authenticated bundled artifacts 随包安装（catalog `models[]` 为空）；
+  voice-transcribe 的 `models: []` 只是不使用 kit 的视频模型加载器，其 ASR/VAD/KWS 资产在
+  `artifacts[]` 中并落到 app root 的 `models/asr/`。旧 catalog 的共享模型/`putModel` 链路
+  仅供 loopback 迁移，公网已关闭（见 §3、§6）。

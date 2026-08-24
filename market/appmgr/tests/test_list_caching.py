@@ -361,21 +361,19 @@ class SweepThrottleTests(_Pinned):
         self.assertEqual(len(drained), 4)
 
 
-class StopIsNeverThrottledTests(_Pinned):
-    """The active path must reclaim a dead pid immediately, whatever the poll
-    throttle last did."""
+class ReadPathNeverSweepsTests(_Pinned):
+    """GET stays non-destructive; the active stop path still reclaims records."""
 
-    def test_stop_clears_a_stale_pidfile_right_after_a_throttled_list(self):
+    def test_list_and_metrics_leave_stale_record_for_stop(self):
         installer.install(_make_pkg("1.0.0"))
-        supervisor._last_sweep = 0.0
-        server.do_list()                       # arms the throttle (this one sweeps)
         # a pid that cannot be running and is definitely not ours
         with open(paths.pidfile(APP), "w") as f:
             f.write("2147483646")
-        server.do_list()                       # throttled: sweep skipped
+        server.do_list()
+        server.do_metrics()
         self.assertTrue(os.path.exists(paths.pidfile(APP)),
-                        "sweep was not throttled -- test would be vacuous")
-        supervisor.stop(APP)                   # active path -- must not wait
+                        "a polled GET destructively swept the run record")
+        supervisor.stop(APP)
         self.assertFalse(os.path.exists(paths.pidfile(APP)),
                          "stop() left the stale pidfile behind")
 

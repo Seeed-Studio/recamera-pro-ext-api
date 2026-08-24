@@ -28,7 +28,7 @@ Interface source of truth (verified against the authoritative SDK, not guessed)
 * SDK Python:  sdk/python/recamera_ext/__init__.py  (authoritative; the old
                recamera_rk/m2_scratch/sdk_work copy is DEPRECATED). Provides:
                  FrameSource(config, timeout_ms, lib_path) iterable
-                     -> Frame(.array / .to_bgr() / .pts_us / .planes / ._c.fd)
+                     -> Frame(.array / .to_bgr() / .pts_us / .planes / .fd)
                  ResultSink(source_id) with the FULL v1 result API:
                      .send_detections(pts_us, boxes)
                      .send_classification(pts_us, items)
@@ -56,8 +56,8 @@ Contract references
 """
 from __future__ import annotations
 
-import sys
 from abc import ABC, abstractmethod
+import os
 from typing import Iterator, List, Optional
 
 import numpy as np
@@ -68,6 +68,11 @@ from .result_sink import ResultSink
 # audio_source.py and re-exported here so OfficialPcmSource and the workaround
 # AlsaTakeoverSource share one identical interface.
 from .audio_source import AudioSource, PcmFrame
+from kit.diagnostics import WarningLimiter, get_logger
+from kit.errors import CapabilityError, InputValidationError, KitError, TransportError
+
+
+log = get_logger("adapters.official")
 
 # Canonical official endpoint paths (spec §1: all extension IPC lives under
 # /run/recamera/; /var/run is the usual symlink to /run). Overridable via env
@@ -128,6 +133,16 @@ class OfficialFrameSource(FrameSource):
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
+        if os.path.normpath(sock) != OFFICIAL_FRAME_SOCK:
+            raise CapabilityError(
+                "the current native frame ABI uses a fixed endpoint; "
+                "RECAMERA_FRAME_SOCK overrides are unsupported",
+                operation="frame.open",
+                details={
+                    "requested_endpoint": str(sock),
+                    "native_endpoint": OFFICIAL_FRAME_SOCK,
+                },
+            )
         self.url = url
         self.sock = sock
         self.width = int(width)
@@ -227,7 +242,7 @@ class OfficialFrameSource(FrameSource):
         if off0 != 0:
             raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
         small = self._rga.resize_nv12_to_rgb(
-            fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
+            fd=frame.fd, width=int(frame.width), height=int(frame.height),
             y_stride=int(stride0), y_vstride=int(vstride0),
             dst_width=sw, dst_height=sh)
         padded = np.full((net_h, net_w, 3), 114, dtype=np.uint8)
@@ -289,7 +304,7 @@ class OfficialFrameSource(FrameSource):
                     # RGA fd-wrap assumes plane[0] starts at the buffer origin.
                     raise RuntimeError("Y-plane offset %d unsupported by fd-wrap" % off0)
                 return self._rga.convert(
-                    fd=frame._c.fd, width=int(frame.width), height=int(frame.height),
+                    fd=frame.fd, width=int(frame.width), height=int(frame.height),
                     y_stride=int(stride0), y_vstride=int(vstride0),
                 ), model_data, model_info
             except Exception as e:
@@ -303,7 +318,7 @@ class OfficialFrameSource(FrameSource):
 
     def _log(self, msg: str) -> None:
         if self.verbose:
-            print("[OfficialFrameSource] %s" % msg, file=sys.stderr, flush=True)
+            log.info("OfficialFrameSource: %s", msg)
 
     # -- hw-roi: on-demand dma-buf ROI crop --------------------------------- #
     def _roi_out(self, out_size: int):
@@ -338,7 +353,7 @@ class OfficialFrameSource(FrameSource):
             buf[:] = 0
             return buf.copy(), roi_map
         self._rga.crop_nv12_to_rgb(
-            fd=ext_frame._c.fd, width=int(ext_frame.width),
+            fd=ext_frame.fd, width=int(ext_frame.width),
             height=int(ext_frame.height),
             y_stride=int(stride0), y_vstride=int(vstride0),
             src_rect=src_valid, dst_size=out_size, dst_window=dst_window,
@@ -360,6 +375,11 @@ class OfficialFrameSource(FrameSource):
         # device with the extension-API firmware. Importing here keeps this
         # module importable off-device (packaging, unit tests, the registry).
         from recamera_ext import FrameSource as ExtFrameSource, FrameConfig
+        try:
+            from recamera_ext import AcquireTimeoutError, RecameraError
+        except ImportError:  # compatibility with old host-side test doubles
+            AcquireTimeoutError = TimeoutError
+            RecameraError = RuntimeError
 
         cfg = None
         if self.width or self.height or self.fps_divisor:
@@ -371,8 +391,47 @@ class OfficialFrameSource(FrameSource):
         self._log("subscribed: %dx%d fourcc=0x%08x pool_depth=%d max_outstanding=%d"
                   % (self._src.width, self._src.height, self._src.fourcc,
                      self._src.pool_depth, self._src.max_outstanding))
+        primary_error: BaseException | None = None
         try:
-            for ext_frame in self._src:
+            acquire = getattr(self._src, "acquire", None)
+
+            def strict_frames():
+                if callable(acquire):
+                    while True:
+                        try:
+                            yield acquire()
+                        except AcquireTimeoutError:
+                            continue
+                        except StopIteration:
+                            return
+                        except RecameraError as exc:
+                            raise TransportError(
+                                f"native frame acquisition failed: {exc}",
+                                operation="frame.acquire",
+                                retryable=bool(getattr(exc, "retryable", False)),
+                                details={
+                                    "native_code": getattr(exc, "code", None),
+                                    "source": "official",
+                                },
+                            ) from exc
+                else:
+                    # Compatibility for pre-1.3 wrappers and host fakes.  The
+                    # iterator stores its typed terminal cause in last_error;
+                    # never silently translate that cause into normal EOF.
+                    yield from self._src
+                    terminal = getattr(self._src, "last_error", None)
+                    if terminal is not None:
+                        raise TransportError(
+                            f"native frame stream ended with an error: {terminal}",
+                            operation="frame.acquire",
+                            retryable=bool(getattr(terminal, "retryable", False)),
+                            details={
+                                "native_code": getattr(terminal, "code", None),
+                                "source": "official-compat",
+                            },
+                        ) from terminal
+
+            for ext_frame in strict_frames():
                 rgb, model_data, model_info = self._convert(ext_frame)  # standalone copies
                 # hw-roi: attach a cropper bound to THIS borrowed dma-buf so the
                 # app can crop ROIs from it during its loop body. Only when the
@@ -394,16 +453,37 @@ class OfficialFrameSource(FrameSource):
                 )
                 # The SDK releases `ext_frame`'s dma-buf when the loop advances;
                 # `rgb` is a copy, so nothing here holds the borrowed buffer.
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            self.close()
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                log.error(
+                    "frame source cleanup failed while preserving stream error",
+                    exc_info=(
+                        type(cleanup_error),
+                        cleanup_error,
+                        cleanup_error.__traceback__,
+                    ),
+                )
 
     def close(self) -> None:
         src, self._src = self._src, None
         if src is not None:
             try:
                 src.close()
-            except Exception:
-                pass
+            except KitError:
+                raise
+            except Exception as exc:
+                raise TransportError(
+                    f"could not close native frame source: {exc}",
+                    operation="frame.close",
+                    details={"source": "official"},
+                ) from exc
 
 
 class _FrameRoiCropper:
@@ -521,16 +601,28 @@ class OfficialResultSink(ResultSink):
 
     def __init__(self, host: Optional[str] = None, port: Optional[int] = None,
                  app_id: str = "app", source_id: Optional[str] = None,
+                 sock: str = OFFICIAL_RESULT_SOCK,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
+        if os.path.normpath(sock) != OFFICIAL_RESULT_SOCK:
+            raise CapabilityError(
+                "the current native result ABI uses a fixed endpoint; "
+                "RECAMERA_RESULT_SOCK overrides are unsupported",
+                operation="result.open",
+                details={
+                    "requested_endpoint": str(sock),
+                    "native_endpoint": OFFICIAL_RESULT_SOCK,
+                },
+            )
         self.host = host
         self.port = port
         self.app_id = app_id
         self.source_id = source_id or app_id
+        self.sock = sock
         self.lib_path = lib_path
         self.verbose = verbose
         self._sink = None            # recamera_ext.ResultSink (opened lazily)
-        self._err_count = 0
+        self._warnings = WarningLimiter(log, limit=3)
         # Local diagnostics (surfaced via stats()): frames handed to emit(),
         # per-channel SDK send attempts, and how many of those raised. The SDK
         # ResultSink keeps the authoritative wire counters (sent / oversize /
@@ -558,9 +650,11 @@ class OfficialResultSink(ResultSink):
             self._fw = float(w)
             self._fh = float(h)
 
-    def _ensure_open(self) -> bool:
+    def _ensure_open(self, *, strict: bool = False) -> bool:
         """Open the SDK ResultSink on first use. Returns False if unavailable
-        (so emit() degrades to a no-op rather than crashing the inference loop)."""
+        (so legacy emit() degrades to a no-op rather than crashing the inference
+        loop). ``emit_checked`` requests strict mode and receives the original
+        exception instead of a false success."""
         if self._sink is not None:
             return True
         try:
@@ -570,6 +664,8 @@ class OfficialResultSink(ResultSink):
             return True
         except Exception as e:
             self._warn_once("open failed: %s" % e)
+            if strict:
+                raise
             return False
 
     # -- coordinate normalization (pixels -> [0,1] fraction of frame size) --- #
@@ -676,7 +772,17 @@ class OfficialResultSink(ResultSink):
 
     # -- ResultSink ABC ----------------------------------------------------- #
     def emit(self, payload: dict, pts: float) -> None:
-        if not self._ensure_open():
+        """Legacy best-effort publish; failures are logged and counted."""
+
+        self._emit(payload, pts, strict=False)
+
+    def emit_checked(self, payload: dict, pts: float) -> None:
+        """Publish while surfacing native open/send failures to typed callers."""
+
+        self._emit(payload, pts, strict=True)
+
+    def _emit(self, payload: dict, pts: float, *, strict: bool) -> None:
+        if not self._ensure_open(strict=strict):
             return
         self._frames += 1
         if not self._fw or not self._fh:
@@ -687,6 +793,12 @@ class OfficialResultSink(ResultSink):
             # without set_frame_size).
             self._warn_once("frame size unknown (call set_frame_size before "
                             "emit); skipping frame to avoid 1px OSD boxes")
+            if strict:
+                raise InputValidationError(
+                    "frame size is required before checked result publication",
+                    operation="result.emit",
+                    details={"source": self.source_id},
+                )
             return
         pts_us = int(round((pts or 0.0) * 1e6))  # s -> us; inverse of the source
         results = payload.get("results") or []
@@ -700,7 +812,7 @@ class OfficialResultSink(ResultSink):
                         if isinstance(e, dict) and e.get("track_id") is not None)
                        if t is not None]
         if track_items:
-            self._safe_send("send_tracking", pts_us, track_items)
+            self._safe_send("send_tracking", pts_us, track_items, strict=strict)
             return
 
         # 2. Partition results by task type (first matching rule wins).
@@ -730,11 +842,11 @@ class OfficialResultSink(ResultSink):
 
         # 3. Emit each non-empty channel.
         if kpts:
-            self._safe_send("send_keypoints", pts_us, kpts)
+            self._safe_send("send_keypoints", pts_us, kpts, strict=strict)
         if cls_items:
-            self._safe_send("send_classification", pts_us, cls_items)
+            self._safe_send("send_classification", pts_us, cls_items, strict=strict)
         if seg_items:
-            self._safe_send("send_segmentation", pts_us, seg_items)
+            self._safe_send("send_segmentation", pts_us, seg_items, strict=strict)
         # Detections: send when we have boxes, OR when the frame produced nothing
         # at all -- an empty detection list clears the OSD for this frame, the
         # same way built-in inference signals "no objects".
@@ -742,9 +854,9 @@ class OfficialResultSink(ResultSink):
         # prior keypoint/track overlay is a device-behaviour question to confirm
         # on firmware; today apps are single-task so this is not exercised.
         if dets or not (kpts or cls_items or seg_items):
-            self._safe_send("send_detections", pts_us, dets)
+            self._safe_send("send_detections", pts_us, dets, strict=strict)
 
-    def _safe_send(self, method: str, pts_us: int, items) -> None:
+    def _safe_send(self, method: str, pts_us: int, items, *, strict: bool = False) -> None:
         """Call one SDK send_* method, swallowing errors so a transient sink
         problem never takes the inference loop down (warns on the first few).
         An oversize rejection is a distinct, actionable failure -- count it
@@ -758,6 +870,15 @@ class OfficialResultSink(ResultSink):
             if type(e).__name__ == "ResultTooLarge":
                 self._oversize += 1
             self._warn_once("%s failed: %s" % (method, e))
+            if strict:
+                if isinstance(e, KitError):
+                    raise
+                raise TransportError(
+                    f"native result send {method} failed: {e}",
+                    operation="result.emit",
+                    retryable=bool(getattr(e, "retryable", False)),
+                    details={"method": method, "source": self.source_id},
+                ) from e
 
     def stats(self) -> dict:
         """Delivery diagnostics: this adapter's local tallies (frames handed in,
@@ -784,17 +905,22 @@ class OfficialResultSink(ResultSink):
 
     def _warn_once(self, msg: str) -> None:
         # Never spam the log or block the loop: warn on the first few failures.
-        self._err_count += 1
-        if self.verbose and self._err_count <= 3:
-            print("[OfficialResultSink] %s" % msg, file=sys.stderr, flush=True)
+        if self.verbose:
+            self._warnings.warning("result-sink", "OfficialResultSink: %s", msg)
 
     def close(self) -> None:
         sink, self._sink = self._sink, None
         if sink is not None:
             try:
                 sink.close()
-            except Exception:
-                pass
+            except KitError:
+                raise
+            except Exception as exc:
+                raise TransportError(
+                    f"could not close native result sink: {exc}",
+                    operation="result.close",
+                    details={"source": self.source_id},
+                ) from exc
 
 
 # Back-compat alias: the registry/tests historically referenced the sink by its

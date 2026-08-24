@@ -404,8 +404,22 @@ def _load_voice_app():
 
 def _start_voice_app(sink, config=None):
     """Start the (loop-owning, frameless) voice app on `sink` without running it."""
+    class _NoopAsr:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
     mod = _load_voice_app()
     app = mod.VoiceTranscribeApp()
+    fake_asr = _NoopAsr()
+    app._build_asr = lambda: fake_asr
+    # These tests exercise output/reload plumbing only.  The real Voice app now
+    # prepares VAD/KWS/audio (including a live PCM probe) inside start(), which
+    # has dedicated lifecycle tests and must not reach host sherpa/ALSA here.
+    app.prepare_runtime = lambda: None
+    app._test_asr = fake_asr
     app_dir = os.path.join(_ROOT, "apps", "voice-transcribe")
     with open(os.path.join(app_dir, "manifest.json")) as f:
         manifest = json.load(f)
@@ -429,8 +443,8 @@ def test_sink_reload_reaches_configurable_sink_through_nested_multisink():
     print("PASS test_sink_reload_reaches_configurable_sink_through_nested_multisink")
 
 
-def test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink():
-    """One SIGHUP: kit re-binds the app's live knob AND re-applies the sink's."""
+def test_voice_reload_keeps_captured_knob_and_routes_filter_to_sink():
+    """Output reload stays live; the already-open Voice graph needs restart."""
     cs = ConfigurableSink(app_id="voice-transcribe", channels=[RecordChannel()],
                           formatter=RawJsonFormatter())
     app = _start_voice_app(cs)
@@ -446,9 +460,9 @@ def test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink():
     finally:
         _cfg.effective_config = orig
         app.finish()
-    assert app.wakeword == "hey cam", "app knob not re-bound by kit"
+    assert app.wakeword == "hello camera", "captured knob changed without restart"
     assert cs._only_on_detection is True, "filter not routed to ConfigurableSink"
-    print("PASS test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink")
+    print("PASS test_voice_reload_keeps_captured_knob_and_routes_filter_to_sink")
 
 
 def test_voice_event_polls_reload_and_emits_through_sink():
@@ -486,7 +500,7 @@ _TESTS = [
     test_ws_only_optin_engages_no_external_channel,
     test_mqtt_channel_optin_builds_configurable_sink,
     test_sink_reload_reaches_configurable_sink_through_nested_multisink,
-    test_voice_reload_rebinds_app_knob_and_routes_filter_to_sink,
+    test_voice_reload_keeps_captured_knob_and_routes_filter_to_sink,
     test_voice_event_polls_reload_and_emits_through_sink,
 ]
 

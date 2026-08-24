@@ -34,10 +34,23 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import ssl
 from typing import Optional
 
 from .official import ControlPlane
+from kit.errors import (
+    AdapterError,
+    CapabilityError,
+    ConfigurationError,
+    DeviceControlError,
+    InputValidationError,
+    TransportError,
+)
+from kit.diagnostics import get_logger, redact_url
+
+
+log = get_logger("control.cgi")
 
 # entry.cgi is mounted under this nginx location; PATH_INFO is appended.
 CGI_BASE = "/cgi-bin/entry.cgi"
@@ -70,13 +83,44 @@ class CgiControl(ControlPlane):
                  use_tls: bool = True, model_id: int = 0, timeout: float = 10.0,
                  frame_url: Optional[str] = None, verbose: bool = True,
                  **_ignored):
-        self.host = host
-        self.port = int(port)
+        self.host = str(host).strip()
+        if not self.host:
+            raise ConfigurationError(
+                "entry.cgi host must not be empty",
+                operation="control.open",
+            )
+        try:
+            self.port = int(port)
+            self.model_id = int(model_id)
+            self.timeout = float(timeout)
+        except (TypeError, ValueError) as exc:
+            raise ConfigurationError(
+                "entry.cgi port, model_id, and timeout must be numeric",
+                operation="control.open",
+                details={"port": repr(port), "model_id": repr(model_id),
+                         "timeout": repr(timeout)},
+            ) from exc
+        if not 1 <= self.port <= 65535:
+            raise ConfigurationError(
+                "entry.cgi port must be between 1 and 65535",
+                operation="control.open",
+                details={"port": self.port},
+            )
+        if self.model_id < 0:
+            raise ConfigurationError(
+                "entry.cgi model_id must be non-negative",
+                operation="control.open",
+                details={"model_id": self.model_id},
+            )
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ConfigurationError(
+                "entry.cgi timeout must be finite and positive",
+                operation="control.open",
+                details={"timeout": self.timeout},
+            )
         # nginx redirects plain HTTP (port 80) to HTTPS with a 307, so entry.cgi
         # is reachable only over TLS (self-signed cert). Default to HTTPS on 443.
         self.use_tls = bool(use_tls)
-        self.model_id = int(model_id)
-        self.timeout = float(timeout)
         # Optional RTSP url override forwarded to the workaround FrameSource;
         # None lets the registry/FrameSource use its own default sub-stream.
         self.frame_url = frame_url
@@ -98,7 +142,9 @@ class CgiControl(ControlPlane):
         try:
             conn.request(method, target, body=body, headers=headers)
             resp = conn.getresponse()
-            return resp.status, resp.read(), resp.getheader("Location")
+            get_header = getattr(resp, "getheader", None)
+            location = get_header("Location") if callable(get_header) else None
+            return resp.status, resp.read(), location
         finally:
             conn.close()
 
@@ -106,8 +152,10 @@ class CgiControl(ControlPlane):
                  body: Optional[bytes] = None) -> dict:
         """Send one HTTP request to entry.cgi and return the parsed JSON dict.
 
-        Raises RuntimeError on transport failure, non-2xx status, or a JSON
-        envelope whose `code` is present and non-zero.
+        Raises a typed :class:`TransportError` or
+        :class:`DeviceControlError` on transport, protocol, HTTP, or device
+        failures.  ``error.operation``, ``error.code``, and ``error.details``
+        are safe to include in application diagnostics.
         """
         headers = {"Host": "localhost", "Connection": "close"}
         if body is not None:
@@ -117,13 +165,32 @@ class CgiControl(ControlPlane):
         try:
             status, raw, location = self._do_http(tls, port, method, target,
                                                   body, headers)
-        except (OSError, ssl.SSLError):
+        except (OSError, ssl.SSLError, http.client.HTTPException) as first_error:
             # TLS side unreachable (cert missing / 443 not listening / handshake
             # failure): fall back to plain :80 once, otherwise re-raise.
             if not tls:
-                raise
-            status, raw, location = self._do_http(False, 80, method, target,
-                                                  body, headers)
+                raise TransportError(
+                    f"entry.cgi {method} {path} transport failed: {first_error}",
+                    operation="control.http",
+                    retryable=True,
+                    details={"method": method, "path": path,
+                             "host": self.host, "port": port},
+                ) from first_error
+            try:
+                status, raw, location = self._do_http(False, 80, method, target,
+                                                      body, headers)
+            except (OSError, ssl.SSLError,
+                    http.client.HTTPException) as fallback_error:
+                log.error("entry.cgi transport failed method=%s path=%s: %s",
+                          method, path, fallback_error)
+                raise TransportError(
+                    f"entry.cgi {method} {path} was unreachable over HTTPS and HTTP",
+                    operation="control.http",
+                    retryable=True,
+                    details={"method": method, "path": path,
+                             "host": self.host, "https_port": port,
+                             "http_port": 80},
+                ) from fallback_error
             tls, port = False, 80
         # Firmware HTTPS toggle (entry.cgi /system/secure sEnable=false): nginx
         # then answers 443 with `307 http://$host$request_uri` and serves
@@ -132,27 +199,65 @@ class CgiControl(ControlPlane):
         # remember where we landed so later calls go straight there.
         if status in (301, 302, 307, 308) and location:
             tls, port, target = _parse_loopback_redirect(location, target)
-            status, raw, _ = self._do_http(tls, port, method, target, body, headers)
+            try:
+                status, raw, _ = self._do_http(
+                    tls, port, method, target, body, headers)
+            except (OSError, ssl.SSLError,
+                    http.client.HTTPException) as redirect_error:
+                log.error(
+                    "entry.cgi redirect failed method=%s path=%s: %s",
+                    method, path, redirect_error,
+                )
+                raise TransportError(
+                    f"entry.cgi {method} {path} redirect was unreachable",
+                    operation="control.http.redirect",
+                    retryable=True,
+                    details={"method": method, "path": path,
+                             "port": port, "tls": tls},
+                ) from redirect_error
         if 200 <= status < 300:
             self.use_tls, self.port = tls, port
 
         if not (200 <= status < 300):
-            raise RuntimeError(
+            excerpt = raw[:200].decode("utf-8", "replace")
+            log.error("entry.cgi rejected method=%s path=%s status=%d response=%s",
+                      method, path, status, excerpt)
+            raise TransportError(
                 "entry.cgi %s %s -> HTTP %d: %s"
-                % (method, path, status, raw[:200].decode("utf-8", "replace")))
+                % (method, path, status, excerpt),
+                operation="control.http",
+                code="http_error",
+                retryable=status >= 500,
+                details={"method": method, "path": path, "status": status},
+            )
 
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception as e:
-            raise RuntimeError(
+            excerpt = raw[:200].decode("utf-8", "replace")
+            log.error("entry.cgi invalid JSON method=%s path=%s response=%s",
+                      method, path, excerpt)
+            raise TransportError(
                 "entry.cgi %s %s -> non-JSON response (%s): %s"
-                % (method, path, e, raw[:200].decode("utf-8", "replace")))
+                % (method, path, e, excerpt),
+                operation="control.decode",
+                code="invalid_response",
+                details={"method": method, "path": path},
+            ) from e
 
         # entry.cgi envelope: {"code":0,"message":"success", ...payload...}.
         if isinstance(data, dict) and data.get("code", 0) != 0:
-            raise RuntimeError(
+            log.error("entry.cgi API error method=%s path=%s code=%s message=%s",
+                      method, path, data.get("code"), data.get("message"))
+            raise DeviceControlError(
                 "entry.cgi %s %s -> code=%s message=%s"
-                % (method, path, data.get("code"), data.get("message")))
+                % (method, path, data.get("code"), data.get("message")),
+                operation="control.request",
+                details={"method": method, "path": path,
+                         "native_code": data.get("code"),
+                         "message": data.get("message")},
+            )
+        log.debug("entry.cgi request succeeded method=%s path=%s", method, path)
         return data if isinstance(data, dict) else {"data": data}
 
     def _inference_query(self) -> str:
@@ -160,20 +265,52 @@ class CgiControl(ControlPlane):
 
     # -- ControlPlane ABC --------------------------------------------------- #
     def set_inference(self, *, enable: bool, model: Optional[str] = None,
-                      fps: Optional[int] = None) -> None:
+                      fps: Optional[int] = None) -> dict:
         """Enable/disable inference and optionally switch model / set NPU fps.
 
         Maps to POST /model/inference?id=<model_id> with a JSON body carrying
         only the fields actually supplied (the handler treats each key as an
         independent optional update).
         """
+        if not isinstance(enable, bool):
+            raise InputValidationError(
+                "enable must be bool",
+                operation="control.set_inference",
+                details={"enable": repr(enable)},
+            )
         payload: dict = {"iEnable": 1 if enable else 0}
         if model is not None:
-            payload["sModel"] = str(model)
+            if not isinstance(model, str) or not model.strip():
+                raise InputValidationError(
+                    "model must be a non-empty path string",
+                    operation="control.set_inference",
+                    details={"model": repr(model)},
+                )
+            payload["sModel"] = model
         if fps is not None:
-            payload["iFPS"] = int(fps)
+            if isinstance(fps, bool):
+                raise InputValidationError(
+                    "fps must be a non-negative integer",
+                    operation="control.set_inference",
+                    details={"fps": repr(fps)},
+                )
+            try:
+                parsed_fps = int(fps)
+            except (TypeError, ValueError) as exc:
+                raise InputValidationError(
+                    "fps must be a non-negative integer",
+                    operation="control.set_inference",
+                    details={"fps": repr(fps)},
+                ) from exc
+            if parsed_fps < 0 or parsed_fps != fps:
+                raise InputValidationError(
+                    "fps must be a non-negative integer",
+                    operation="control.set_inference",
+                    details={"fps": repr(fps)},
+                )
+            payload["iFPS"] = parsed_fps
         body = json.dumps(payload).encode("utf-8")
-        self._request("POST", self._inference_query(), body=body)
+        return self._request("POST", self._inference_query(), body=body)
 
     def get_inference(self) -> dict:
         """Read current inference state (helper for verification / callers).
@@ -193,44 +330,109 @@ class CgiControl(ControlPlane):
         try:
             import cv2
         except Exception as e:  # pragma: no cover - device has cv2
-            raise RuntimeError(
-                "snapshot() needs OpenCV (cv2) to JPEG-encode the frame: %s" % e)
+            raise CapabilityError(
+                f"snapshot requires OpenCV (cv2): {e}",
+                operation="control.snapshot",
+                code="opencv_unavailable",
+            ) from e
         try:
             from .registry import select_frame_source
         except Exception as e:
-            raise RuntimeError("snapshot() could not import FrameSource: %s" % e)
+            raise CapabilityError(
+                f"snapshot frame-source registry is unavailable: {e}",
+                operation="control.snapshot",
+                code="frame_source_unavailable",
+            ) from e
 
         url = self.frame_url or _DEFAULT_URL()
         # prefer_rga=False: a one-shot snapshot has no throughput need, and the
         # RGA hardware NV12->RGB path in OfficialFrameSource can fault on some
         # librga builds; the OpenCV convert is correct and safe. The kwarg is
         # ignored by the ffmpeg/snapshot workaround sources (they take **_ignored).
-        src = select_frame_source(url=url, prefer_rga=False)
+        try:
+            src = select_frame_source(url=url, prefer_rga=False)
+        except (OSError, ConnectionError, TimeoutError) as exc:
+            log.error("snapshot frame source unavailable url=%s: %s",
+                      redact_url(url), exc)
+            raise TransportError(
+                f"snapshot frame source is unavailable: {exc}",
+                operation="control.snapshot.open",
+                retryable=True,
+                details={"url": redact_url(url)},
+            ) from exc
+        except Exception as exc:
+            log.error("snapshot frame source setup failed url=%s: %s",
+                      redact_url(url), exc)
+            raise AdapterError(
+                f"snapshot frame source setup failed: {exc}",
+                operation="control.snapshot.open",
+                details={"url": redact_url(url)},
+            ) from exc
 
+        iterator = None
         frame = None
         try:
-            for f in src.frames():
-                frame = f
-                break
+            iterator = iter(src.frames())
+            try:
+                frame = next(iterator)
+            except StopIteration as exc:
+                raise TransportError(
+                    "snapshot frame source ended before producing a frame",
+                    operation="control.snapshot.acquire",
+                    retryable=True,
+                    details={"url": redact_url(url)},
+                ) from exc
+
+            # Encode while the source and any borrowed frame lease are still
+            # alive.  Closing the source first was harmless for owned ffmpeg
+            # frames but invalid for a future zero-copy/broker-backed frame.
+            arr = frame.data
+            fmt = str(frame.fmt).upper()
+            if fmt == "RGB":
+                bgr = arr[:, :, ::-1]
+            elif fmt == "BGR":
+                bgr = arr
+            elif fmt in ("GRAY", "GREY", "Y8"):
+                bgr = arr
+            else:
+                raise AdapterError(
+                    f"snapshot does not support frame format {frame.fmt!r}",
+                    operation="control.snapshot.encode",
+                    code="unsupported_format",
+                    details={"format": frame.fmt},
+                )
+            try:
+                ok, buf = cv2.imencode(".jpg", bgr)
+            except Exception as exc:
+                raise AdapterError(
+                    f"JPEG encoding failed: {exc}",
+                    operation="control.snapshot.encode",
+                ) from exc
+            if not ok:
+                raise AdapterError(
+                    "JPEG encoder rejected the frame",
+                    operation="control.snapshot.encode",
+                    code="encode_failed",
+                )
+            return bytes(buf.tobytes())
         finally:
-            src.close()
-
-        if frame is None:
-            raise RuntimeError("snapshot() got no frame from the FrameSource")
-
-        # kit Frame.data is contiguous HWC uint8. fmt is "RGB" for every current
-        # backend; cv2.imencode expects BGR, so flip the channel order. (If a
-        # future backend yields NV12, convert here.)
-        arr = frame.data
-        if frame.fmt == "RGB":
-            bgr = arr[:, :, ::-1]
-        else:
-            raise RuntimeError("snapshot() unsupported frame fmt: %s" % frame.fmt)
-
-        ok, buf = cv2.imencode(".jpg", bgr)
-        if not ok:
-            raise RuntimeError("snapshot() cv2.imencode failed")
-        return bytes(buf.tobytes())
+            if frame is not None:
+                release = getattr(frame, "release", None)
+                if callable(release):
+                    try:
+                        release()
+                    except Exception as exc:
+                        log.warning("snapshot frame release failed: %s", exc)
+            close_iterator = getattr(iterator, "close", None)
+            if callable(close_iterator):
+                try:
+                    close_iterator()
+                except Exception as exc:
+                    log.warning("snapshot iterator close failed: %s", exc)
+            try:
+                src.close()
+            except Exception as exc:
+                log.warning("snapshot frame source close failed: %s", exc)
 
 
 def _DEFAULT_URL() -> str:

@@ -26,7 +26,8 @@
 # 对应关系: GST_PLUGIN_PATH 追加 /userdata/lib/gstreamer-1.0,
 #           LD_LIBRARY_PATH 追加 /userdata/lib。
 #
-# 设备侧安装: 浏览器 POST /api/appMgr/upload -> POST /api/appMgr/runtime
+# 设备侧 legacy 迁移: 本机 loopback POST /api/appMgr/upload -> /runtime。
+# 公网 nginx 对 raw upload 返回 410；新应用应使用 manifest v2 bundled artifact。
 # {"name":"hwcodec","path":"<上一步返回的 path>"}。就位判定不是看文件在不在,
 # 而是 `gst-inspect-1.0 mppvideodec` 退出码为 0。
 #
@@ -125,8 +126,8 @@ echo "=== write README.md (校验值随包) ==="
   echo "reCamera Pro 按需硬解码运行时 (RUNTIME_BUNDLE_SPEC)。"
   echo "目标: aarch64 / GStreamer 1.22.6 / 解包到 /userdata/lib"
   echo
-  echo "设备安装:"
-  echo '  POST /api/appMgr/upload   (raw bytes, X-Filename: gst-hwcodec-'"$VERSION"'.tar.gz)'
+  echo "设备本机 legacy 迁移安装（公网 raw upload 返回 410）:"
+  echo '  POST http://127.0.0.1:8130/api/appMgr/upload   (raw bytes, X-Filename: gst-hwcodec-'"$VERSION"'.tar.gz)'
   echo '  POST /api/appMgr/runtime  {"name":"hwcodec","path":"<上一步返回的 path>"}'
   echo
   echo "就位判定不是看文件,而是 \`gst-inspect-1.0 mppvideodec\` 退出码为 0。"

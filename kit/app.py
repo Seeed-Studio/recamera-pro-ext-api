@@ -44,6 +44,8 @@ import numpy as np
 
 from kit.adapters.frame_source import open_frame_source, DEFAULT_SUB_STREAM, Frame
 from kit.adapters.result_sink import ResultSink, open_result_sink
+from kit.diagnostics import get_logger
+from kit.errors import AdapterError
 from kit.runtime.preprocess import letterbox
 from kit.runtime.postprocess.detect import postprocess, COCO80
 # NOTE: RknnModel (kit.runtime.engine) is imported LAZILY inside _load_model(),
@@ -53,6 +55,17 @@ from kit.runtime.postprocess.detect import postprocess, COCO80
 # including CPU-only / audio apps (e.g. voice-transcribe under the sherpa venv
 # /userdata/rknnenv, which has no rknnlite). Model-backed vision apps still get
 # it the moment start() constructs a model; behaviour there is unchanged.
+
+
+log = get_logger("app")
+
+
+class _GracefulStop(BaseException):
+    """Internal TERM/INT control flow that broad user catches cannot swallow."""
+
+    def __init__(self, signum: int) -> None:
+        self.signum = int(signum)
+        super().__init__(f"application stop requested by signal {self.signum}")
 
 
 # --------------------------------------------------------------------------- #
@@ -85,6 +98,7 @@ class _ModelHandle:
         self.path = path
         self._owner = owner
         self._impl = impl
+        self._released = False
 
     def infer(self, x):
         """Run one forward pass. Accepts a raw array or a `PreparedInput`."""
@@ -97,12 +111,14 @@ class _ModelHandle:
             self._owner._t_infer += time.monotonic() - t0
 
     def release(self) -> None:
+        if self._released:
+            return
+        # Mark first so a failing vendor release is never invoked twice by a
+        # repeated finish() during exception unwinding.
+        self._released = True
         rel = getattr(self._impl, "release", None)
         if rel is not None:
-            try:
-                rel()
-            except Exception:
-                pass
+            rel()
 
     def __repr__(self) -> str:      # pragma: no cover - debug aid
         return f"<model {self.id} {self.path}>"
@@ -567,6 +583,8 @@ class App:
         # the real re-read on the next frame -- signal handlers must stay tiny
         # and must not touch the model / pipeline.
         self._reload_flag: bool = False
+        self._stop_flag: bool = False
+        self._previous_signal_handlers: Dict[int, Any] = {}
 
         # -- loop runtime state (populated by start()) --------------------- #
         # `self.models` is populated by start(); an empty registry until then so
@@ -574,6 +592,9 @@ class App:
         # on `self.models` itself.
         self.models = ModelRegistry()
         self._rt: Optional[Dict[str, Any]] = None   # runtime options from start()
+        # run_app and start() use this bit to avoid double-finishing a failed
+        # transaction while still covering subclasses that override start().
+        self._lifecycle_cleaned: bool = True
         self._manifest: Optional[dict] = None
         self._params_bound: bool = False
         self._pre_size: int = 0
@@ -597,6 +618,18 @@ class App:
         self.config = config or {}
         self.conf = float(self.config.get("conf", self.conf))
         self.iou = float(self.config.get("iou", self.iou))
+
+    def prepare_runtime(self) -> None:
+        """Prepare app-owned runtime resources before appmgr receives READY.
+
+        ``setup()`` runs before the kit publishes ``self._rt``.  Applications
+        that need the resolved source URL, sink or other runtime options can
+        override this later hook instead.  It is still part of ``start()``'s
+        rollback transaction: if it raises, :meth:`finish` runs and appmgr never
+        observes a false-ready process.
+        """
+
+        return None
 
     # -- live-reload value-replace helpers (shared by every app override) --- #
     @staticmethod
@@ -645,17 +678,50 @@ class App:
 
     # -- hot-reload plumbing (base; apps do not touch) -------------------- #
     def _install_reload_handler(self) -> None:
-        """Install the SIGHUP handler. Best-effort: signal.signal only works on
-        the main thread, so a non-main-thread run() silently skips hot-reload
-        (the app still works, config changes just need a restart)."""
+        """Install the SIGHUP live-reload handler, best-effort."""
         try:
+            self._previous_signal_handlers.setdefault(
+                signal.SIGHUP, signal.getsignal(signal.SIGHUP))
             signal.signal(signal.SIGHUP, self._on_sighup)
         except (ValueError, OSError):
             pass
 
+    def _install_stop_handlers(self) -> None:
+        """Install TERM/INT cooperative-stop handlers, best-effort.
+
+        The handlers raise an internal ``BaseException`` so arbitrary user
+        loops unwind through ``run_app`` cleanup. This improves normal shutdown
+        only: crash correctness still depends on kernel fd cleanup, appmgr
+        containment, and the planned rkipc connection lease.
+        """
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            try:
+                self._previous_signal_handlers.setdefault(
+                    signum, signal.getsignal(signum))
+                signal.signal(signum, self._on_stop_signal)
+            except (ValueError, OSError):
+                pass
+
     def _on_sighup(self, signum, frame) -> None:
         # Tiny by design: only flip the flag; the loop does the work.
         self._reload_flag = True
+
+    def _on_stop_signal(self, signum, frame) -> None:
+        """Mark the runtime stopping and immediately unwind the current loop."""
+
+        self._stop_flag = True
+        raise _GracefulStop(signum)
+
+    def _restore_signal_handlers(self) -> None:
+        """Restore handlers that were active before :meth:`start`."""
+
+        previous, self._previous_signal_handlers = self._previous_signal_handlers, {}
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler)
+            except (ValueError, OSError):
+                pass
 
     def _maybe_reload(self) -> None:
         """If a SIGHUP arrived, re-read the effective config and hand it to
@@ -713,6 +779,17 @@ class App:
     # ------------------------------------------------------------------ #
     def _load_model(self, path: str):
         """Construct the NPU model for `path`. Overridable seam (tests stub it)."""
+        from kit.runtime.remote import configured_inference_socket
+
+        service_socket = configured_inference_socket()
+        if service_socket:
+            # appmgr only injects this endpoint after manifest/resource
+            # admission.  All models in the application then live in the one
+            # platform daemon, allowing compatible applications to keep
+            # multiple RKNN contexts resident while driver calls are scheduled.
+            from kit.runtime.remote import RemoteRknnModel
+
+            return RemoteRknnModel(path, socket_path=service_socket)
         from kit.runtime.engine import RknnModel  # lazy: only vision apps need rknnlite
         return RknnModel(path)
 
@@ -802,7 +879,61 @@ class App:
         dir), binds `config_schema` params onto `self`, opens the frame source and
         installs the SIGHUP handler. `run_app` calls this; `finish()` tears it down.
         `model_path` (the `--model` CLI flag) overrides the FIRST manifest model.
+
+        Startup is a transaction: a failure at any stage invokes ``finish``
+        before the original exception is re-raised.  This includes BaseException
+        control flow so SIGTERM/KeyboardInterrupt cannot strand an earlier model
+        or source acquired by this same attempt.
         """
+        self._lifecycle_cleaned = False
+        try:
+            return self._start_impl(
+                model_path,
+                source=source,
+                url=url,
+                sink=sink,
+                n=n,
+                every=every,
+                skip_gray_std=skip_gray_std,
+                max_gray_skip=max_gray_skip,
+                verbose=verbose,
+                app_dir=app_dir,
+                manifest=manifest,
+                config=config,
+            )
+        except BaseException:
+            try:
+                self.finish()
+            except BaseException as cleanup_error:
+                # Cleanup is best-effort, but it must never replace the model,
+                # setup, source, or signal exception that aborted startup.
+                log.error(
+                    "startup cleanup failed app=%s error=%s",
+                    self.id, cleanup_error, exc_info=True,
+                )
+                print(f"[app:{self.id}] startup cleanup failed: "
+                      f"{cleanup_error}", file=sys.stderr, flush=True)
+            finally:
+                self._lifecycle_cleaned = True
+            raise
+
+    def _start_impl(
+        self,
+        model_path: Optional[str] = None,
+        *,
+        source: str = "ffmpeg",
+        url: str = DEFAULT_SUB_STREAM,
+        sink: Optional[ResultSink] = None,
+        n: int = 0,
+        every: int = 1,
+        skip_gray_std: float = 8.0,
+        max_gray_skip: int = 120,
+        verbose: bool = True,
+        app_dir: Optional[str] = None,
+        manifest: Optional[dict] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> "App":
+        """Implementation of :meth:`start`; the public method owns rollback."""
         from kit import config as _cfg
         if app_dir is None:
             app_dir = _cfg.app_dir_of(self)
@@ -884,8 +1015,20 @@ class App:
             raise ValueError(
                 "%s: model_frame must be 'cpu', 'hw', 'hw-direct' or 'hw-roi' "
                 "(got %r)" % (self.id, self.model_frame))
+
+        # Publish a provisional runtime before opening native endpoints.  If a
+        # later sink/handler step fails, finish() can see and close everything
+        # that was successfully returned so far.
+        rt = {
+            "src": None, "sink": sink, "own_sink": False, "n": n,
+            "every": every, "skip_gray_std": skip_gray_std,
+            "max_gray_skip": max_gray_skip, "verbose": verbose,
+            "app_dir": app_dir, "source": source, "url": url,
+            "grays_skipped": 0, "loop_start": None,
+        }
+        self._rt = rt
         if self.needs_frames:
-            src = open_frame_source(
+            rt["src"] = open_frame_source(
                 url=url,
                 prefer=source,
                 input_size=self._pre_size if mode != "cpu" else 0,
@@ -896,27 +1039,24 @@ class App:
         else:
             # No camera at all (needs_frames = False). Everything else below --
             # sink, SIGHUP handler, models, bound params -- is unchanged.
-            src = None
+            rt["src"] = None
 
         if sink is None:
             sink = open_result_sink("stdout")
-            own_sink = True
-        else:
-            own_sink = False
-
-        self._rt = {
-            "src": src, "sink": sink, "own_sink": own_sink, "n": n,
-            "every": every, "skip_gray_std": skip_gray_std,
-            "max_gray_skip": max_gray_skip, "verbose": verbose,
-            "app_dir": app_dir, "source": source, "url": url,
-            "grays_skipped": 0, "loop_start": None,
-        }
+            rt["sink"] = sink
+            rt["own_sink"] = True
         # A frameless app has no warm-up frame to discard, so emit() must publish
         # from its very first call (otherwise the first voice event -- the initial
         # idle state -- would be silently dropped).
         self._warmed = not self.needs_frames
+        self._stop_flag = False
         self._processed = 0
         self._install_reload_handler()
+        self._install_stop_handlers()
+        # App-owned resources that depend on the published runtime (for
+        # example Voice's audio source URL) must also be ready before start()
+        # returns and run_app emits APPMGR_READY.
+        self.prepare_runtime()
         if verbose:
             print(f"[app:{self.id}] models={[h.path for h in self.models]} "
                   f"source={source if self.needs_frames else 'none'} "
@@ -948,31 +1088,76 @@ class App:
         return None if rt is None else rt.get("url")
 
     def finish(self) -> None:
-        """Release everything `start()` acquired and print the run summary."""
+        """Release every acquired resource exactly once.
+
+        Models are detached even when ``_rt`` was never established, which is
+        the normal shape of a second-model or setup failure.  Runtime state is
+        detached before invoking user/vendor cleanup so repeated calls remain
+        idempotent even if one cleanup callback raises.
+        """
         rt, self._rt = self._rt, None
-        if rt is None:
-            return
-        if rt["src"] is not None:
+        models, self.models = self.models, ModelRegistry()
+        self._lifecycle_cleaned = True
+        control_error = None
+        failures: list[tuple[str, Exception]] = []
+
+        def clean(label: str, callback) -> None:
+            nonlocal control_error
             try:
-                rt["src"].close()
-            except Exception:
-                pass
-        for h in self.models:
-            h.release()
-        if rt["own_sink"]:
-            try:
-                rt["sink"].close()
-            except Exception:
-                pass
-        loop_start = rt.get("loop_start")
-        if self._processed and loop_start:
-            wall = time.monotonic() - loop_start
-            print(f"\n[app:{self.id}] === {self._processed} frames "
-                  f"(grey-skipped {rt['grays_skipped']}) ===", flush=True)
-            print(f"[app:{self.id}] end-to-end {self._processed/wall:4.1f} fps",
-                  flush=True)
-        elif rt["verbose"] and self.needs_frames:
-            print(f"[app:{self.id}] no frames processed", file=sys.stderr)
+                callback()
+            except Exception as exc:
+                failures.append((label, exc))
+                log.error(
+                    "application cleanup failed app=%s resource=%s error=%s",
+                    self.id, label, exc, exc_info=True,
+                )
+            except BaseException as exc:
+                log.critical(
+                    "application cleanup interrupted app=%s resource=%s "
+                    "error=%s", self.id, label, exc, exc_info=True,
+                )
+                if control_error is None:
+                    control_error = (exc, exc.__traceback__)
+
+        clean("signal_handlers", self._restore_signal_handlers)
+
+        if rt is not None and rt.get("src") is not None:
+            clean("frame_source", rt["src"].close)
+        for h in models:
+            clean(f"model:{h.id}", h.release)
+        if rt is not None and rt.get("own_sink") and rt.get("sink") is not None:
+            clean("result_sink", rt["sink"].close)
+
+        if rt is not None:
+            loop_start = rt.get("loop_start")
+            if self._processed and loop_start:
+                wall = time.monotonic() - loop_start
+                print(f"\n[app:{self.id}] === {self._processed} frames "
+                      f"(grey-skipped {rt['grays_skipped']}) ===", flush=True)
+                print(f"[app:{self.id}] end-to-end "
+                      f"{self._processed/wall:4.1f} fps", flush=True)
+            elif rt.get("verbose") and self.needs_frames:
+                print(f"[app:{self.id}] no frames processed", file=sys.stderr)
+
+        if control_error is not None:
+            error, traceback = control_error
+            raise error.with_traceback(traceback)
+        if failures:
+            details = {
+                "app_id": self.id,
+                "failures": [
+                    {"resource": label, "type": type(exc).__name__,
+                     "message": str(exc)}
+                    for label, exc in failures
+                ],
+            }
+            raise AdapterError(
+                f"{len(failures)} resource cleanup operation(s) failed for "
+                f"app {self.id!r}",
+                operation="app.finish",
+                code="cleanup_failed",
+                details=details,
+            ) from failures[0][1]
 
     def frames(self) -> Iterator[Frame]:
         """Yield frames to the app's `run()` loop, kit-managed.
@@ -1018,6 +1203,8 @@ class App:
         fidx = 0
 
         for frame in rt["src"].frames():
+            if self._stop_flag:
+                break
             self._maybe_reload()
 
             if not got_real:
@@ -1354,6 +1541,14 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--mqtt-discovery-prefix", default=None)
     args = ap.parse_args(argv)
 
+    # Library imports are deliberately silent.  The CLI is the ownership
+    # boundary where a default handler is appropriate, so typed adapter/RGA/
+    # inference diagnostics are visible without requiring every user app to
+    # understand Python logging configuration.  ``--quiet`` suppresses normal
+    # progress while retaining warnings and actionable errors.
+    from kit.diagnostics import configure_logging
+    configure_logging("WARNING" if args.quiet else "INFO")
+
     # Unified config load (kit-design / parameter hot-tuning): manifest
     # config_schema defaults overlaid by <app_dir>/config.json. Explicit CLI
     # --conf/--iou win over that (manual debugging override).
@@ -1372,48 +1567,100 @@ def run_app(app: App, argv: Optional[List[str]] = None) -> None:
     # so it runs after the config_schema auto-bind (see App.start).
     _check_loop_shape(app)
 
-    if args.sink == "stdout":
-        primary: ResultSink = open_result_sink("stdout")
-    else:
-        primary = open_result_sink("ws", host=args.host, port=args.port,
-                                   app_id=app.id)
-
-    # Unified configurable output (internal/OUTPUT_SINK_SPEC.md §3). Apps that
-    # declare `capabilities:["output"]` get channels/formatters/filters assembled
-    # from the manifest `output` block + persisted config; apps that do NOT opt
-    # in bypass this entirely and keep the legacy MQTT fan-out below unchanged.
-    from kit.adapters.result_sink import MultiSink
-    from kit.adapters.output_sink import assemble_output_sink
-    out_sink, opted_in = assemble_output_sink(
-        app, app_dir, manifest, eff, verbose=not args.quiet)
-
-    sinks: List[ResultSink] = [primary]
-    if opted_in:
-        if out_sink is not None:
-            sinks.append(out_sink)
-    else:
-        # Legacy path: optional MQTT / Home Assistant fan-out, enabled when a
-        # broker host is supplied via appmgr's RECAMERA_MQTT_* env or --mqtt-host.
-        # Fully best-effort: any failure here degrades to WS-only, never aborts.
-        mqtt = _maybe_open_mqtt_sink(app, app_dir, args, verbose=not args.quiet)
-        if mqtt is not None:
-            sinks.append(mqtt)
-    sink: ResultSink = MultiSink(sinks) if len(sinks) > 1 else sinks[0]
+    # Keep the first lifecycle failure and perform every cleanup stage before
+    # re-raising that exact object.  Sink construction is part of the same
+    # transaction: a configurable-output failure after the primary WS/stdout
+    # sink opened must close that primary rather than leaking a server/socket.
+    primary_error = None
+    sink: Optional[ResultSink] = None
+    pending_sinks: List[ResultSink] = []
+    start_attempted = False
+    app._lifecycle_cleaned = False
     try:
+        if args.sink == "stdout":
+            primary: ResultSink = open_result_sink("stdout")
+        else:
+            primary = open_result_sink("ws", host=args.host, port=args.port,
+                                       app_id=app.id)
+        pending_sinks.append(primary)
+
+        # Unified configurable output (internal/OUTPUT_SINK_SPEC.md §3). Apps
+        # declaring capabilities:["output"] get the manifest-driven pipeline;
+        # other apps retain the optional legacy MQTT fan-out.
+        from kit.adapters.result_sink import MultiSink
+        from kit.adapters.output_sink import assemble_output_sink
+        out_sink, opted_in = assemble_output_sink(
+            app, app_dir, manifest, eff, verbose=not args.quiet)
+        if opted_in:
+            if out_sink is not None:
+                pending_sinks.append(out_sink)
+        else:
+            mqtt = _maybe_open_mqtt_sink(
+                app, app_dir, args, verbose=not args.quiet)
+            if mqtt is not None:
+                pending_sinks.append(mqtt)
+        sink = (MultiSink(pending_sinks)
+                if len(pending_sinks) > 1 else pending_sinks[0])
+
         # KIT_APP_SHAPE_SPEC §1: the app owns the loop; kit supplies
         # frames/pre/models/emit/tick via start().
+        start_attempted = True
         app.start(args.model, source=args.source, url=args.url, sink=sink,
                   n=args.n, every=args.every, verbose=not args.quiet,
                   app_dir=app_dir, manifest=manifest, config=eff)
-        # start() returned: models loaded, sink bound, frame source open. Signal
-        # READY so appmgr commits the app as running BEFORE the loop begins.
+        # start() returned: models, kit endpoints and app-owned runtime resources
+        # all passed their readiness transaction. Signal READY before entering
+        # the long-running loop.
         _signal_ready()
         try:
             app.run()
-        finally:
-            app.finish()
+        except _GracefulStop as stop:
+            if not args.quiet:
+                print(f"[app:{app.id}] graceful stop requested by signal "
+                      f"{stop.signum}", flush=True)
+    except BaseException as exc:
+        primary_error = (exc, exc.__traceback__)
     finally:
-        sink.close()
+        if start_attempted and not getattr(app, "_lifecycle_cleaned", False):
+            try:
+                app.finish()
+            except BaseException as exc:
+                if primary_error is None:
+                    primary_error = (exc, exc.__traceback__)
+                else:
+                    log.error(
+                        "app finish failed while preserving earlier error "
+                        "app=%s error=%s", app.id, exc, exc_info=True,
+                    )
+                    print(f"[app:{app.id}] finish failed while preserving "
+                          f"earlier error: {exc}", file=sys.stderr, flush=True)
+
+        # Once MultiSink exists it owns all children.  Before that point close
+        # every successfully constructed child individually in reverse order.
+        close_targets = ([sink] if sink is not None
+                         else list(reversed(pending_sinks)))
+        seen = set()
+        for target in close_targets:
+            if target is None or id(target) in seen:
+                continue
+            seen.add(id(target))
+            try:
+                target.close()
+            except BaseException as exc:
+                if primary_error is None:
+                    primary_error = (exc, exc.__traceback__)
+                else:
+                    log.error(
+                        "sink close failed while preserving earlier error "
+                        "app=%s sink=%s error=%s", app.id,
+                        type(target).__name__, exc, exc_info=True,
+                    )
+                    print(f"[app:{app.id}] sink close failed while preserving "
+                          f"earlier error: {exc}", file=sys.stderr, flush=True)
+
+    if primary_error is not None:
+        error, traceback = primary_error
+        raise error.with_traceback(traceback)
 
 
 def _env_flag(name: str) -> bool:

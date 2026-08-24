@@ -60,12 +60,16 @@ class SetConfigApplyTests(unittest.TestCase):
         # stubs leak into every later test module in the same pytest process.
         self._orig_sup = {n: getattr(server.supervisor, n)
                           for n in ("is_running", "reload", "stop", "start")}
+        self._orig_builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in self._orig_sup.items()])
+        self.addCleanup(lambda: setattr(
+            server.builtin, "stop", self._orig_builtin_stop))
         server.supervisor.is_running = fake_is_running
         server.supervisor.reload = fake_reload
         server.supervisor.stop = fake_stop
         server.supervisor.start = fake_start
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
 
     def _make_app(self, app_id="demo"):
         d = paths.app_dir(app_id)

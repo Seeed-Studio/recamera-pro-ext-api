@@ -94,8 +94,9 @@ RUNTIMES = {
         "env": {
             "GST_PLUGIN_PATH": {"append": "/userdata/lib/gstreamer-1.0"},
             # APPEND, never set: `export LD_LIBRARY_PATH=/userdata/lib` wipes the
-            # device default /oem/usr/lib:/oem/lib and librockchip_mpp.so.1 stops
-            # resolving immediately (observed, not theoretical).
+            # system-first /usr/lib:/oem/usr/lib:/oem/lib base and
+            # librockchip_mpp.so.1 stops resolving immediately (observed, not
+            # theoretical).
             "LD_LIBRARY_PATH": {"append": "/userdata/lib"},
             # SET: the default registry path may be unwritable, and a stale cache
             # lies (plugin in place, still reported MISSING).
@@ -110,9 +111,10 @@ RUNTIMES = {
 # unit tests can build a whole fake /userdata in a temp dir.
 USERDATA_ROOT = os.environ.get("APPMGR_USERDATA_ROOT", "/userdata")
 
-# rknnlite/sherpa native libs live here on the device; INSTALL.sh's own self-check
-# sets the same value before importing.
-LD_LIBRARY_PATH = os.environ.get("APPMGR_RUNTIME_LD_PATH", "/oem/usr/lib")
+# Runtime probes need system ABI libraries first while retaining OEM-only RK
+# libraries. INSTALL.sh's own self-check uses the same safe order.
+LD_LIBRARY_PATH = os.environ.get(
+    "APPMGR_RUNTIME_LD_PATH", "/usr/lib:/oem/usr/lib:/oem/lib")
 PROBE_TIMEOUT = int(os.environ.get("APPMGR_RUNTIME_PROBE_TIMEOUT", "60"))
 INSTALL_TIMEOUT = int(os.environ.get("APPMGR_RUNTIME_INSTALL_TIMEOUT", "900"))
 
@@ -421,7 +423,8 @@ def merge_env(env: dict, env_spec: dict) -> dict:
                     writable.
       * "append" -- add to the end of the existing value, keeping what is already
                     there. LD_LIBRARY_PATH can ONLY be done this way: assigning
-                    /userdata/lib drops the device's /oem/usr/lib:/oem/lib and
+                    /userdata/lib drops the device's ordered
+                    /usr/lib:/oem/usr/lib:/oem/lib base and
                     librockchip_mpp.so.1 stops resolving.
     Appends are DEDUPED, so restarting an app repeatedly cannot grow the variable
     without bound (each start inherits the appmgr environment afresh, but a

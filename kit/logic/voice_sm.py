@@ -25,8 +25,12 @@ pulls `PcmFrame`s from any `AudioSource` (live `RtspAudioSource` on device, or
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Callable, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 # -- states -- #
@@ -55,6 +59,43 @@ class VoiceStateMachine:
         self.listen_timeout_sec = float(listen_timeout_sec)
         self.verbose = verbose
         self.state = IDLE
+        self._opened = False
+
+    def open(self) -> "VoiceStateMachine":
+        """Open and probe the audio source exactly once.
+
+        Voice applications call this during their pre-READY transaction.  The
+        main loop calls it again defensively, but the second call is a no-op so
+        an ALSA/RTSP subprocess is never replaced or opened twice.
+        """
+
+        if self._opened:
+            return self
+        # Mark ownership before open(): source implementations may create one
+        # subprocess and then fail while probing the first PCM chunk.  close()
+        # must still get a chance to tear that partial state down.
+        self._opened = True
+        try:
+            self.src.open()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                if hasattr(primary, "add_note"):
+                    primary.add_note(
+                        f"audio source cleanup also failed: {cleanup_error}")
+            raise
+        return self
+
+    def close(self) -> None:
+        """Close the pre-opened source; repeated calls are harmless."""
+
+        if not self._opened:
+            return
+        # Only commit the closed state after the source accepts cleanup.  A
+        # caller can retry if a custom source reports an uncertain teardown.
+        self.src.close()
+        self._opened = False
 
     # -- event plumbing ------------------------------------------------------- #
     def _emit(self, ev: dict) -> None:
@@ -81,11 +122,15 @@ class VoiceStateMachine:
         """
         wakes = 0
         listen_deadline = 0.0
-        self._set_state(IDLE)
-        self.wake.reset()
-
-        src = self.src.open()
+        primary_error = None
         try:
+            # Include initialization in the cleanup transaction.  A caller may
+            # have pre-opened the source before READY; wake.reset() must not
+            # strand that source if it fails before the read loop begins.
+            self._set_state(IDLE)
+            self.wake.reset()
+            self.open()
+            src = self.src
             while True:
                 frame = src.read()
                 if frame is None:
@@ -121,8 +166,25 @@ class VoiceStateMachine:
                 seg = next(iter(self.vad.segments()), None)
                 if seg is not None:
                     wakes += self._transcribe(seg)
-        finally:
-            self.src.close()
+        except BaseException as exc:
+            primary_error = (exc, exc.__traceback__)
+
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if primary_error is None:
+                raise
+            primary, _traceback = primary_error
+            if hasattr(primary, "add_note"):
+                primary.add_note(
+                    f"audio source cleanup also failed: {cleanup_error}")
+            logger.critical(
+                "voice audio cleanup failed while preserving earlier loop "
+                "error", exc_info=True)
+
+        if primary_error is not None:
+            primary, traceback = primary_error
+            raise primary.with_traceback(traceback)
         return wakes
 
     def _transcribe(self, seg) -> int:

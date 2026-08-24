@@ -7,13 +7,18 @@ start(id):
     and launches it through the kit entry point: `<python> -m kit.run <app_dir>/<entry>`,
   * launches under a NEW session/process group via os.setsid (start_new_session),
   * PYTHONPATH + KIT_PARENT point at the ONE shared kit copy,
-  * writes the child pid to <app>/run.pid, redirects stdout/stderr to <app>/logs/app.log.
+  * atomically records leader identity in <app>/run.pid + <app>/run.pgid and
+    binds it to the current kernel boot in <app>/run.boot_id,
+  * redirects stdout/stderr to <app>/logs/app.log.
 
 stop(id):
-  * reads run.pid, verifies the pid still belongs to this app (via /proc/<pid>/cmdline),
-  * signals the whole PROCESS GROUP: TERM -> grace -> KILL (so ffmpeg children die too),
+  * reads the persisted PID/PGID and verifies a live leader still belongs to
+    this app (via /proc); a dead leader's saved PGID addresses descendants only
+    when run.boot_id proves the record belongs to the current kernel boot,
+  * signals the whole PROCESS GROUP: TERM -> grace -> KILL (so ffmpeg children
+    die too),
   * NEVER uses `pkill -f app.py`/`pkill -f python` (would kill the ssh session);
-  * additionally `pkill -x ffmpeg` to sweep any stragglers.
+    it also never uses a system-wide `pkill -x ffmpeg`.
 """
 from __future__ import annotations
 
@@ -22,10 +27,12 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from . import mqtt as mqttcfg, paths, voiceruntime
+from . import mqtt as mqttcfg, paths, pythonenv, voiceruntime
 
 
 class SupervisorError(Exception):
@@ -36,6 +43,12 @@ class SupervisorError(Exception):
 # fixture tree -- macOS (the dev box) has no /proc at all, and even on Linux you
 # cannot conjure a process in an arbitrary state on demand.
 PROC_ROOT = os.environ.get("APPMGR_PROC_ROOT", "/proc")
+# Numeric PIDs/PGIDs are reused after a reboot while /userdata survives.  Tests
+# override this path with a deterministic file; production reads Linux's stable
+# per-boot UUID.  Failure to read it blocks a new launch because that launch
+# could not be cleaned up safely after its leader disappeared.
+BOOT_ID_PATH = os.environ.get(
+    "APPMGR_BOOT_ID_PATH", "/proc/sys/kernel/random/boot_id")
 
 # ---- app-readiness handshake (lifecycle §core1) ----------------------------- #
 # Popen returning does NOT mean the app is up: an interpreter/import failure, a
@@ -59,9 +72,38 @@ _READY_POLL = float(os.environ.get("APPMGR_READY_POLL", "0.05"))
 # would read as success (voiceruntime.py judges "present" off that return code).
 _apps: Dict[int, "subprocess.Popen"] = {}
 
+# The three files in one run record have an explicit commit order
+# (PGID -> boot ID -> PID commit marker), but rename(2) can only make each file
+# atomic individually.  Normal-context readers and cleanup must therefore not
+# inspect the directory between those renames: seeing a same-boot PGID without
+# run.pid would look exactly like a dead leader and sweep_stale() could SIGKILL
+# the process that start() had just launched.  One process-local lock covers the
+# complete record transaction.  It is intentionally NEVER acquired by the
+# SIGCHLD path (reap_children); the handler only uses metadata already attached
+# to the Popen object and must remain async-safe with respect to Python locks.
+_RUN_RECORD_LOCK = threading.RLock()
 
-def _register_child(proc: "subprocess.Popen") -> None:
-    """Record an app child so reap_children() (and only it) can reap its exit."""
+
+def _register_child(proc: "subprocess.Popen", app_id: str = None,
+                    pgid: int = None, boot_id: str = None) -> None:
+    """Record an app child so reap_children() can reap and contain its exit.
+
+    Production launches attach the app id, already-known PGID (equal to the
+    leader PID because Popen uses ``start_new_session``), and verified current
+    boot identity directly to the Popen object.  Keeping the metadata beside the
+    child avoids file I/O in the SIGCHLD path while still letting that path kill
+    descendants after the leader disappears.  Tests/legacy callers that only
+    pass ``proc`` retain the old reap-only behaviour.
+    """
+    if app_id is not None:
+        proc._appmgr_app_id = app_id
+    if pgid is not None:
+        proc._appmgr_pgid = int(pgid)
+    if boot_id is not None:
+        proc._appmgr_boot_id = str(boot_id)
+        # Resolve this once in normal launch context.  reap_children may run as
+        # the SIGCHLD handler and must neither read procfs nor perform file I/O.
+        proc._appmgr_boot_verified = (str(boot_id) == _current_boot_id())
     _apps[proc.pid] = proc
 
 
@@ -81,13 +123,117 @@ def _join_pathlist(parts) -> str:
     return os.pathsep.join(out)
 
 
-def _read_pid(app_id: str) -> Optional[int]:
-    pf = paths.pidfile(app_id)
+def _read_positive_int(path: str) -> Optional[int]:
     try:
-        with open(pf) as f:
-            return int(f.read().strip())
-    except (FileNotFoundError, ValueError):
+        with open(path) as f:
+            value = int(f.read().strip())
+    except (FileNotFoundError, ValueError, OSError):
         return None
+    # Never allow a corrupt run file to address init/system process groups.
+    return value if value > 1 else None
+
+
+def _write_text(path: str, value: str) -> None:
+    """Atomically persist one non-empty run-record field."""
+    value = str(value).strip()
+    if not value or "\x00" in value or "\n" in value or "\r" in value:
+        raise ValueError("refusing invalid run-record value %r" % value)
+    directory = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(prefix=".run-id.", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(value)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _write_positive_int(path: str, value: int) -> None:
+    """Atomically persist one PID/PGID value in its app directory."""
+    if int(value) <= 1:
+        raise ValueError("refusing to persist unsafe pid/pgid %r" % value)
+    _write_text(path, str(int(value)))
+
+
+def _read_text(path: str) -> Optional[str]:
+    try:
+        with open(path) as f:
+            value = f.read(256).strip()
+    except OSError:
+        return None
+    if not value or "\x00" in value or "\n" in value or "\r" in value:
+        return None
+    return value
+
+
+def _current_boot_id() -> Optional[str]:
+    """Kernel boot identity, or None when it cannot be established safely."""
+    return _read_text(BOOT_ID_PATH)
+
+
+def _read_pid(app_id: str) -> Optional[int]:
+    with _RUN_RECORD_LOCK:
+        return _read_positive_int(paths.pidfile(app_id))
+
+
+def _read_pgid(app_id: str) -> Optional[int]:
+    with _RUN_RECORD_LOCK:
+        return _read_positive_int(paths.pgidfile(app_id))
+
+
+def _read_run_boot_id(app_id: str) -> Optional[str]:
+    with _RUN_RECORD_LOCK:
+        return _read_text(paths.bootfile(app_id))
+
+
+def _same_boot_record(app_id: str) -> bool:
+    """Whether this persisted run record is explicitly from this boot.
+
+    Missing identity (all legacy installs), malformed identity, and inability to
+    read the kernel identity are all untrusted.  Callers may clear such stale
+    records but must never address a dead leader's numeric PGID with them.
+    """
+    with _RUN_RECORD_LOCK:
+        saved = _read_run_boot_id(app_id)
+        current = _current_boot_id()
+        return bool(saved and current and saved == current)
+
+
+def _run_pgid(app_id: str, pid: int = None) -> Optional[int]:
+    """Return the saved PGID after validating the leader==group invariant.
+
+    Legacy installs have only run.pid, so its numeric value remains a candidate
+    PGID for a *live, ownership-verified* leader.  It is never sufficient for
+    dead-leader cleanup: that additionally requires _same_boot_record().  If
+    both numeric files exist but disagree, refuse either value because a partial
+    or replaced record must fail closed rather than target an unrelated group.
+    """
+    with _RUN_RECORD_LOCK:
+        pgid = _read_pgid(app_id)
+        if pgid is None:
+            return pid
+        if pid is not None and pgid != pid:
+            print("[appmgr] refusing mismatched run record for %s: pid=%s pgid=%s"
+                  % (app_id, pid, pgid), flush=True)
+            return None
+        return pgid
+
+
+def _write_run_ids(app_id: str, pid: int, pgid: int, boot_id: str) -> None:
+    """Persist PGID+boot first and PID last; run.pid is the commit marker."""
+    if pid != pgid:
+        raise SupervisorError("app leader pid %d != pgid %d" % (pid, pgid))
+    with _RUN_RECORD_LOCK:
+        _write_positive_int(paths.pgidfile(app_id), pgid)
+        _write_text(paths.bootfile(app_id), boot_id)
+        _write_positive_int(paths.pidfile(app_id), pid)
 
 
 def _proc_cmdline(pid: int) -> str:
@@ -178,10 +324,11 @@ def is_running(app_id: str) -> Optional[int]:
     executes, and reporting `running: true` for a corpse would make the UI lie
     and make switch/activate take the "already running" branch.
     """
-    pid = _read_pid(app_id)
-    if pid is None or not _pid_running(pid):
-        return None
-    return pid if _is_ours(pid, app_id) else None
+    with _RUN_RECORD_LOCK:
+        pid = _read_pid(app_id)
+        if pid is None or not _pid_running(pid):
+            return None
+        return pid if _is_ours(pid, app_id) else None
 
 
 # ---- child reaping + last-exit bookkeeping ---------------------------------- #
@@ -191,13 +338,15 @@ def is_running(app_id: str) -> Optional[int]:
 # and the crash itself was completely silent -- only `ps` revealed it.
 #
 # Split of work, deliberately:
-#   * the SIGCHLD handler ONLY calls waitpid(WNOHANG) and appends the raw result
-#     to _reaped  -- no file I/O, no locks. A lock would deadlock (the handler
-#     runs in the main thread and would block on a lock that same thread holds);
-#     file I/O could re-enter a half-written buffered stream.
+#   * the SIGCHLD handler polls only registered Popen objects, directly KILLs a
+#     saved PGID after its leader exits, then queues the result -- no file I/O,
+#     locks or waits. A lock would deadlock (the handler runs in the main thread
+#     and could block on a lock that same thread holds); file I/O could re-enter
+#     a half-written buffered stream.
 #   * drain_exits() does the real work (persist last_exit.json, drop the stale
-#     pidfile, log) from normal context -- called by reap_and_sweep(), which the
-#     read-only endpoints (list/metrics) and stop() invoke.
+#     pidfile, log) from normal context -- read-only endpoints call these two
+#     phases directly; destructive stale-record sweeping is confined to the
+#     reconciler's cross-process busy gate.
 # list.append / list.pop are single C-level ops, so the queue needs no lock.
 #
 # SIGCHLD (not polling) because the daemon otherwise sits in select() with no
@@ -208,7 +357,7 @@ _reaped: List[tuple] = []
 
 
 def reap_children() -> int:
-    """Reap the app children that have exited. Safe to call from a signal handler.
+    """Reap exited app leaders and immediately contain their process groups.
 
     ★Reaps ONLY registered app children★ (via Popen.poll(), the single reaper for
     each app pid), never waitpid(-1). A process-wide reap would steal the wait
@@ -218,7 +367,14 @@ def reap_children() -> int:
     runtime probe would silently read as success (健壮#17). Each reaped pid's
     returncode is queued (as a NEGATIVE signal number when killed) for
     drain_exits(); list.append is a single C op so the queue needs no lock.
-    Returns the number of children reaped.
+    A production Popen carries the PGID and boot identity captured and persisted
+    when this appmgr launched it.  Once its leader exits we can no longer ask the
+    kernel ``getpgid(pid)``, but descendants may still retain camera/socket
+    resources.  Kill that already-verified same-boot PGID before publishing the
+    exit.  This uses no file I/O, printing or waits, so the Python SIGCHLD
+    handler remains a small bounded operation.
+
+    Returns the number of leaders reaped.
     """
     n = 0
     for pid, proc in list(_apps.items()):
@@ -228,7 +384,17 @@ def reap_children() -> int:
             rc = None
         if rc is None:
             continue
-        _reaped.append((pid, rc, time.time()))
+        app_id = getattr(proc, "_appmgr_app_id", None)
+        pgid = getattr(proc, "_appmgr_pgid", None)
+        boot_id = getattr(proc, "_appmgr_boot_id", None)
+        boot_verified = bool(getattr(proc, "_appmgr_boot_verified", False))
+        contained = False
+        if pgid is not None and boot_verified:
+            # The app leader is gone; grace belongs to explicit stop(), not to an
+            # orphaned runtime.  SIGKILL makes cleanup deterministic even when a
+            # helper installed/ignored SIGTERM.
+            contained = _killpg_id(pgid, signal.SIGKILL)
+        _reaped.append((pid, rc, time.time(), app_id, pgid, boot_id, contained))
         _apps.pop(pid, None)
         n += 1
     return n
@@ -313,12 +479,35 @@ def _write_exit(app_id: str, info: dict) -> None:
 
 def _clear_pidfile(app_id: str, pid: int = None) -> None:
     """Remove run.pid, but only if it still names `pid` (never clobber a restart)."""
-    if pid is not None and _read_pid(app_id) != pid:
-        return
-    try:
-        os.remove(paths.pidfile(app_id))
-    except OSError:
-        pass
+    with _RUN_RECORD_LOCK:
+        if pid is not None and _read_pid(app_id) != pid:
+            return
+        try:
+            os.remove(paths.pidfile(app_id))
+        except OSError:
+            pass
+
+
+def _clear_pgidfile(app_id: str, pgid: int = None) -> None:
+    """Remove run.pgid, but only if it still names ``pgid``."""
+    with _RUN_RECORD_LOCK:
+        if pgid is not None and _read_pgid(app_id) != pgid:
+            return
+        try:
+            os.remove(paths.pgidfile(app_id))
+        except OSError:
+            pass
+
+
+def _clear_bootfile(app_id: str, boot_id: str = None) -> None:
+    """Remove run.boot_id, guarded against clobbering a newer launch."""
+    with _RUN_RECORD_LOCK:
+        if boot_id is not None and _read_run_boot_id(app_id) != boot_id:
+            return
+        try:
+            os.remove(paths.bootfile(app_id))
+        except OSError:
+            pass
 
 
 def last_exit(app_id: str) -> Optional[dict]:
@@ -336,17 +525,38 @@ def drain_exits() -> List[dict]:
     out = []
     while _reaped:
         try:
-            pid, rc, ts = _reaped.pop(0)
+            event = _reaped.pop(0)
         except IndexError:             # concurrent drain
             break
-        app_id = _app_for_pid(pid)
+        # Seven fields are emitted by current reap_children; accept the historic
+        # three-field shape because tests and an in-process upgrade may still
+        # have queued one before this code was loaded.
+        pid, rc, ts = event[:3]
+        app_id = event[3] if len(event) >= 4 else None
+        pgid = event[4] if len(event) >= 5 else None
+        boot_id = event[5] if len(event) >= 7 else None
+        contained = bool(event[6]) if len(event) >= 7 else False
+        app_id = app_id or _app_for_pid(pid)
         if app_id is None:
             continue                   # not one of ours (stale queue entry)
         info = describe_returncode(rc, ts)
         info["pid"] = pid
         _write_exit(app_id, info)
-        _clear_pidfile(app_id, pid)
+        # Clear the three-file record only as a unit belonging to this leader.
+        # A delayed exit event must not remove run.boot_id from a newer launch
+        # in the same boot (the boot IDs intentionally match across launches).
+        with _RUN_RECORD_LOCK:
+            owns_run_record = (_read_pid(app_id) == pid)
+            if owns_run_record:
+                _clear_pidfile(app_id, pid)
+                if pgid is not None:
+                    _clear_pgidfile(app_id, pgid)
+                if boot_id is not None:
+                    _clear_bootfile(app_id, boot_id)
         out.append(dict(info, app=app_id))
+        if contained:
+            print("[appmgr] app leader %d exited; killed residual pgid %d"
+                  % (pid, pgid), flush=True)
         # No auto-restart: a crash loop must not be hidden behind silent
         # respawns. The app stays stopped and the crash is now visible via
         # /list -> last_exit and this line in the appmgr log.
@@ -356,7 +566,7 @@ def drain_exits() -> List[dict]:
 
 
 def sweep_stale() -> List[str]:
-    """Drop run.pid files whose process is gone/zombie/not-ours.
+    """Drop stale run records, containing only verified same-boot groups.
 
     Covers the exits appmgr could NOT waitpid: an app started by a previous
     appmgr instance (or by the CLI) is re-parented to init when its starter goes
@@ -364,16 +574,47 @@ def sweep_stale() -> List[str]:
     lingers -- harmless for is_running() (which re-validates the pid) but
     confusing in the logs and on disk.
     """
-    cleared = []
-    for app_id in _app_ids():
-        pid = _read_pid(app_id)
-        if pid is None:
-            continue
-        if _pid_running(pid) and _is_ours(pid, app_id):
-            continue
-        _clear_pidfile(app_id, pid)
-        cleared.append(app_id)
-    return cleared
+    with _RUN_RECORD_LOCK:
+        cleared = []
+        for app_id in _app_ids():
+            pid = _read_pid(app_id)
+            pgid = _run_pgid(app_id, pid)
+            saved_boot = _read_run_boot_id(app_id)
+            if pid is None and pgid is None and saved_boot is None:
+                continue
+            if pid is None:
+                # run.pid is the transaction's commit marker.  PGID and boot
+                # without it can be a writer paused between atomic renames --
+                # including a writer in another CLI/appmgr process, beyond the
+                # reach of _RUN_RECORD_LOCK.  A read/sweep path must neither
+                # signal nor clear that uncommitted record.  Explicit stop (or
+                # the next start's stale-record recovery) is busy-gated and can
+                # safely contain a genuinely abandoned partial generation.
+                continue
+            leader_running = bool(pid and _pid_running(pid))
+            if leader_running and _is_ours(pid, app_id):
+                continue
+            # A dead/zombie leader cannot be queried for its old process group.  The
+            # separately persisted PGID reaches helpers only if run.boot_id proves
+            # the number came from this kernel boot.  /userdata survives reboot and
+            # PGIDs do not, so a legacy/missing/different boot ID is cleanup-only.
+            # If the PID is alive but no longer ours, treat it as PID reuse and do
+            # not signal regardless of the saved boot ID.
+            same_boot = _same_boot_record(app_id)
+            if pgid is not None and not leader_running and same_boot:
+                _killpg_id(pgid, signal.SIGKILL)
+            elif pgid is not None and not leader_running:
+                print("[appmgr] stale run for %s is not from the current boot; "
+                      "clearing records without signalling pgid %d"
+                      % (app_id, pgid), flush=True)
+            _clear_pidfile(app_id, pid)
+            # Unconditional here is intentional: this is the serialized stale-run
+            # cleanup path and malformed/mismatched legacy values must not survive
+            # after their commit record was removed.
+            _clear_pgidfile(app_id)
+            _clear_bootfile(app_id)
+            cleared.append(app_id)
+        return cleared
 
 
 # Minimum spacing between stale-pidfile sweeps on the THROTTLED (read/poll) path.
@@ -414,7 +655,7 @@ def reap_and_sweep(throttle_sweep: bool = False) -> dict:
 
 
 # ---- launch command --------------------------------------------------------- #
-def _resolve_interpreter(manifest: dict) -> str:
+def _resolve_interpreter(manifest: dict, app_id: str = None) -> str:
     """Pick the Python interpreter to launch this app under.
 
     A manifest MAY name a per-app interpreter via `interpreter` (or its alias
@@ -427,6 +668,24 @@ def _resolve_interpreter(manifest: dict) -> str:
     but arrives inside a signature-verified manifest). A bad value is a hard
     error rather than a silent fallback, so misconfiguration surfaces at switch.
     """
+    # In manifest v2, ``python`` is a closed dependency declaration object, not
+    # an executable path.  The installer has already built and atomically
+    # selected the matching immutable environment; launching with any other
+    # interpreter would break the code/environment transaction.
+    if manifest.get("manifest_version") == 2:
+        effective_id = app_id or manifest.get("id")
+        try:
+            interp = pythonenv.current_python(effective_id)
+        except (ValueError, pythonenv.PythonEnvError) as exc:
+            raise SupervisorError(
+                "cannot resolve manifest-v2 Python environment for %r: %s" %
+                (effective_id, exc)) from exc
+        if not interp:
+            raise SupervisorError(
+                "manifest-v2 app %r has no active Python environment" %
+                effective_id)
+        return interp
+
     interp = manifest.get("interpreter") or manifest.get("python")
     if not interp:
         return sys.executable
@@ -463,7 +722,7 @@ def _build_cmd(app_id: str, manifest: dict) -> List[str]:
     if ".." in entry.split("/") or entry.startswith("/"):
         raise SupervisorError(f"unsafe entry path {entry!r}")
     models = manifest.get("models") or []
-    cmd = [_resolve_interpreter(manifest),
+    cmd = [_resolve_interpreter(manifest, app_id),
            os.path.join(paths.KIT_DIR, "run.py"),
            os.path.join(paths.app_dir(app_id), entry)]
     # CPU-only apps (e.g. qrcode-reader) declare no models[]; launch without
@@ -489,7 +748,13 @@ def _load_manifest(app_id: str) -> dict:
         return json.load(f)
 
 
-def _build_env(app_id: str, manifest: dict) -> dict:
+def _build_env(app_id: str, manifest: dict, *, npu_managed: bool = False,
+               npu_broker_required: bool = False,
+               instance_id: Optional[str] = None,
+               instance_generation: Optional[int] = None,
+               result_gateway_sock: Optional[str] = None,
+               npu_mode: Optional[str] = None,
+               inference_service_sock: Optional[str] = None) -> dict:
     """Environment handed to an app process.
 
     Split out of start() so it can be asserted without launching anything:
@@ -497,6 +762,42 @@ def _build_env(app_id: str, manifest: dict) -> dict:
     has to spawn a real process would not have been written.
     """
     env = dict(os.environ)
+    # NPU routing markers are minted only by appmgr's transition paths. Never
+    # inherit them from the appmgr service environment, and never add them for
+    # direct supervisor.start callers.
+    if npu_managed and npu_broker_required:
+        raise SupervisorError("conflicting NPU launch route requested")
+    env.pop("RECAMERA_NPU_MANAGED", None)
+    env.pop("RECAMERA_NPU_BROKER_REQUIRED", None)
+    env.pop("RECAMERA_NPU_LOCK", None)
+    env.pop("RECAMERA_NPU_MODE", None)
+    env.pop("RECAMERA_INFERENCE_SERVICE_SOCK", None)
+    env.pop("RECAMERA_RESULT_GATEWAY_SOCK", None)
+    env.pop("RECAMERA_RESULT_GATEWAY_REQUIRED", None)
+    env.pop("RECAMERA_APP_INSTANCE", None)
+    env.pop("RECAMERA_APP_GENERATION", None)
+    # Always canonicalise the app id for extension clients.  Previously every
+    # Python process without a hand-written override announced itself as
+    # ``python`` to the NPU broker.
+    env["RECAMERA_APP_ID"] = app_id
+    if npu_managed:
+        env["RECAMERA_NPU_MANAGED"] = "appmgr-v1"
+    if npu_broker_required:
+        env["RECAMERA_NPU_BROKER_REQUIRED"] = "1"
+    if instance_id:
+        env["RECAMERA_APP_INSTANCE"] = str(instance_id)
+    if instance_generation is not None:
+        env["RECAMERA_APP_GENERATION"] = str(int(instance_generation))
+    if result_gateway_sock:
+        env["RECAMERA_RESULT_GATEWAY_SOCK"] = str(result_gateway_sock)
+        # A managed app must not silently fall back to binding its own :8124;
+        # a missing/incompatible gateway is a startup failure visible to
+        # appmgr's READY transaction.
+        env["RECAMERA_RESULT_GATEWAY_REQUIRED"] = "1"
+    if npu_mode:
+        env["RECAMERA_NPU_MODE"] = str(npu_mode)
+    if inference_service_sock:
+        env["RECAMERA_INFERENCE_SERVICE_SOCK"] = str(inference_service_sock)
     env["KIT_PARENT"] = paths.KIT_PARENT
     # kit.config resolves the user config under this root; export appmgr's own
     # value so the writer (appmgr) and the reader (the app) can never disagree.
@@ -512,14 +813,13 @@ def _build_env(app_id: str, manifest: dict) -> dict:
         _pypath.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(_pypath)
     env["PYTHONUNBUFFERED"] = "1"
-    # librecamera_ext.so.1 (the official extension API shared lib) ships in
-    # /oem/usr/lib, which is NOT on the default musl loader search path, so an
-    # app pulling in recamera_ext dies with "librecamera_ext.so.1: cannot open
-    # shared object file". Inject the vendor lib dirs here so EVERY app the
-    # supervisor launches -- whether started from the UI, the HTTP API, or
-    # boot-restore -- inherits them, instead of relying on a hand-typed
-    # `export LD_LIBRARY_PATH` in an ssh session. Prepend (don't clobber) any
-    # inherited value.
+    # The extension API and the system OpenCV stack ship in /usr/lib.  RGA,
+    # RKNN and some MPP libraries are OEM-only, so apps also need the OEM dirs.
+    # Search order is critical: /oem/usr/lib contains older compatibility
+    # copies of libfreetype/libpng.  Putting it first makes importing the system
+    # cv2 load system libfontconfig against the old OEM FreeType and fail with
+    # an undefined FT_Set_Var_Design_Coordinates symbol.  Keep /usr/lib first,
+    # then the OEM-only locations, then any inherited paths.
     # Normalized, not just prepended. An inherited value picks up junk across
     # appmgr restarts (each deploy re-execs it from a shell that already had the
     # variable), and on device it was observed as
@@ -531,9 +831,9 @@ def _build_env(app_id: str, manifest: dict) -> dict:
     # is root-owned -- but /userdata itself is 0777, so any app that chdir'd into
     # a writable subdir would turn that empty element into a local library
     # injection point for uid 1000. Dropping empties costs nothing and closes it.
-    _extlibs = ["/oem/usr/lib", "/oem/lib"]
+    _runtime_libs = ["/usr/lib", "/oem/usr/lib", "/oem/lib"]
     env["LD_LIBRARY_PATH"] = _join_pathlist(
-        _extlibs + env.get("LD_LIBRARY_PATH", "").split(os.pathsep))
+        _runtime_libs + env.get("LD_LIBRARY_PATH", "").split(os.pathsep))
     # On-demand runtime environment (RUNTIME_BUNDLE_SPEC §3). A file-shaped
     # runtime (the RK hardware codec plugins) is useless once unpacked unless the
     # loader and GStreamer are told where to look, and that cannot be done for
@@ -543,7 +843,7 @@ def _build_env(app_id: str, manifest: dict) -> dict:
     # present -- an app declaring `hwcodec` on a device without the bundle still
     # starts (and falls back to software decode) instead of being blocked here.
     # merge_env appends rather than assigns for the path variables: assigning
-    # LD_LIBRARY_PATH would erase the /oem/... entries set six lines above and
+    # LD_LIBRARY_PATH would erase the ordered system/OEM base set above and
     # librockchip_mpp.so.1 would stop resolving.
     voiceruntime.apply_runtime_env(env, manifest.get("capabilities"))
     # Inject global MQTT/HA broker settings when enabled (app publishes WS+MQTT).
@@ -599,28 +899,57 @@ def _await_ready(app_id: str, proc: "subprocess.Popen", ready_path: str,
         time.sleep(_READY_POLL)
 
 
-def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0) -> None:
+def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0,
+                    before_force_kill: Optional[Callable[[], None]] = None) -> None:
     """Tear down a process group whose startup failed (TERM -> grace -> KILL).
 
     Kills the whole PGID (the app is a session leader; its ffmpeg children share
     the group), so a half-started app leaves no orphan frame source holding the
-    camera. Then reaps + records the exit and drops run.pid / run.ready."""
+    camera. Then reaps + records the exit and drops the complete run record."""
     pid = proc.pid
+    pgid = (getattr(proc, "_appmgr_pgid", None)
+            or _run_pgid(app_id, pid) or pid)
+    force_fenced = False
+
+    def fence_before_force_kill() -> None:
+        nonlocal force_fenced
+        if force_fenced:
+            return
+        force_fenced = True
+        if before_force_kill is None:
+            return
+        try:
+            before_force_kill()
+        except BaseException as exc:
+            # Startup containment is the final safety boundary.  A failed
+            # authorization cleanup must never leave a TERM-ignoring group
+            # alive, but keep the failure visible in the daemon log.
+            print("[appmgr] startup force-fence failed for %s: %s: %s" %
+                  (app_id, type(exc).__name__, exc), flush=True)
     if _pid_running(pid):
-        _killpg(pid, signal.SIGTERM)
+        _killpg_id(pgid, signal.SIGTERM)
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
             reap_children()
-            if proc.poll() is not None or not _pid_running(pid):
+            if not _pgid_alive(pgid):
                 break
             time.sleep(0.1)
-        if _pid_running(pid):
-            _killpg(pid, signal.SIGKILL)
+        if _pgid_alive(pgid):
+            fence_before_force_kill()
+            _killpg_id(pgid, signal.SIGKILL)
             time.sleep(0.2)
+    else:
+        # The startup leader can exit after spawning a helper but before READY.
+        # getpgid(pid) is already impossible here; use the value captured at
+        # launch and persisted beside run.pid.
+        fence_before_force_kill()
+        _killpg_id(pgid, signal.SIGKILL)
     reap_children()
     drain_exits()
     _clear_ready(app_id)
     _clear_pidfile(app_id, pid)
+    _clear_pgidfile(app_id, pgid)
+    _clear_bootfile(app_id, getattr(proc, "_appmgr_boot_id", None))
 
 
 def _startup_failure(app_id: str, proc: "subprocess.Popen", timeout: float) -> str:
@@ -640,7 +969,16 @@ def _startup_failure(app_id: str, proc: "subprocess.Popen", timeout: float) -> s
 
 # ---- public API ------------------------------------------------------------- #
 def start(app_id: str, *, wait_ready: bool = True,
-          ready_timeout: Optional[float] = None) -> int:
+          ready_timeout: Optional[float] = None,
+          npu_managed: bool = False,
+          npu_broker_required: bool = False,
+          instance_id: Optional[str] = None,
+          instance_generation: Optional[int] = None,
+          result_gateway_sock: Optional[str] = None,
+          npu_mode: Optional[str] = None,
+          inference_service_sock: Optional[str] = None,
+          on_spawn: Optional[Callable[[int], None]] = None,
+          before_force_kill: Optional[Callable[[], None]] = None) -> int:
     """Launch an app and (by default) block until it signals READY.
 
     `wait_ready=True` gates success on the app reaching its main loop, so a
@@ -659,6 +997,21 @@ def start(app_id: str, *, wait_ready: bool = True,
     if existing:
         return existing
 
+    # A previous leader may have died while a helper stayed in its process
+    # group.  start_new_session makes a new leader safe from that old group, but
+    # it would leave both generations consuming resources.  Reclaim a persisted
+    # stale group before allocating anything for the new run.
+    if (_read_pid(app_id) is not None or _read_pgid(app_id) is not None
+            or _read_run_boot_id(app_id) is not None):
+        stop(app_id, grace=0.0)
+
+    boot_id = _current_boot_id()
+    if boot_id is None:
+        raise SupervisorError(
+            "cannot establish current boot identity from %s; refusing to "
+            "launch an app whose orphan PGID could not be validated" %
+            BOOT_ID_PATH)
+
     manifest = _load_manifest(app_id)
     cmd = _build_cmd(app_id, manifest)
 
@@ -666,7 +1019,12 @@ def start(app_id: str, *, wait_ready: bool = True,
     logpath = os.path.join(paths.logdir(app_id), "app.log")
     logf = open(logpath, "ab", buffering=0)
 
-    env = _build_env(app_id, manifest)
+    env = _build_env(
+        app_id, manifest, npu_managed=npu_managed,
+        npu_broker_required=npu_broker_required, instance_id=instance_id,
+        instance_generation=instance_generation,
+        result_gateway_sock=result_gateway_sock, npu_mode=npu_mode,
+        inference_service_sock=inference_service_sock)
     # READY handshake: clear any stale marker, then tell the app where to signal.
     ready_path = paths.readyfile(app_id)
     _clear_ready(app_id)
@@ -682,9 +1040,28 @@ def start(app_id: str, *, wait_ready: bool = True,
         start_new_session=True,     # setsid: child is session+group leader, pgid == pid
     )
     logf.close()
-    _register_child(proc)           # so reap_children() (only it) collects its exit
-    with open(paths.pidfile(app_id), "w") as f:
-        f.write(str(proc.pid))
+    pgid = proc.pid                  # start_new_session => leader PID == PGID
+    _register_child(proc, app_id=app_id, pgid=pgid, boot_id=boot_id)
+    try:
+        # Commit the kernel-backed run identity before publishing the matching
+        # app/instance/generation record.  Read paths call is_running() while a
+        # start operation is in flight; if state named the PID first, a reader
+        # could observe the still-absent run.pid as a crash, revoke the fresh
+        # generation and make every gateway hello fail.  With this order there
+        # is no point at which state names a PID that the supervisor cannot yet
+        # authenticate.  The child may reach its result sink between the two
+        # commits, but GatewayResultSink retries and the gateway remains closed
+        # until on_spawn publishes the exact generation.
+        _write_run_ids(app_id, proc.pid, pgid, boot_id)
+        if on_spawn is not None:
+            on_spawn(proc.pid)
+    except Exception as e:
+        # A run we cannot identify persistently is not supervisable.  Tear the
+        # whole group down before surfacing the storage error.
+        _terminate_proc(app_id, proc, grace=0.0,
+                        before_force_kill=before_force_kill)
+        raise SupervisorError("failed to commit spawned run identity for %r: %s" %
+                              (app_id, e)) from e
 
     if not wait_ready:
         return proc.pid
@@ -695,7 +1072,8 @@ def start(app_id: str, *, wait_ready: bool = True,
     # Startup failed: capture the cause, then guarantee teardown (no orphan) so
     # the caller's transactional rollback starts from a clean slate.
     reason = _startup_failure(app_id, proc, timeout)
-    _terminate_proc(app_id, proc)
+    _terminate_proc(app_id, proc,
+                    before_force_kill=before_force_kill)
     raise SupervisorError(reason)
 
 
@@ -723,42 +1101,148 @@ def reload(app_id: str) -> bool:
         return False
 
 
-def _killpg(pid: int, sig: int) -> None:
+def _killpg_id(pgid: int, sig: int) -> bool:
+    """Signal an already-resolved numeric PGID; never re-query its leader PID."""
+    if pgid is None or int(pgid) <= 1:
+        return False
     try:
-        os.killpg(os.getpgid(pid), sig)
+        os.killpg(int(pgid), sig)
+        return True
     except ProcessLookupError:
-        pass
+        return False
     except OSError:
-        try:
-            os.kill(pid, sig)
-        except OSError:
-            pass
+        return False
 
 
-def stop(app_id: str, grace: float = 5.0) -> dict:
+def _pgid_alive(pgid: int) -> bool:
+    """Whether any process still occupies ``pgid`` (leader need not exist)."""
+    if pgid is None or int(pgid) <= 1:
+        return False
+    try:
+        os.killpg(int(pgid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _owned_live_pgid(pid: int, app_id: str) -> Optional[int]:
+    """Resolve a live app leader's group without trusting persisted numbers."""
+    if not _pid_running(pid) or not _is_ours(pid, app_id):
+        return None
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        return None
+    # Every appmgr launch is a session/group leader.  Refuse a surprising group
+    # rather than risk signalling the appmgr/ssh process group after tampering.
+    if pgid != pid or pgid <= 1:
+        print("[appmgr] refusing unexpected live process group for %s: "
+              "pid=%s actual_pgid=%s" % (app_id, pid, pgid), flush=True)
+        return None
+    return pgid
+
+
+def _killpg(pid: int, sig: int) -> None:
+    """Legacy helper for callers that only have a live leader PID."""
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        pgid = None
+    if pgid is not None and _killpg_id(pgid, sig):
+        return
+    try:
+        os.kill(pid, sig)
+    except OSError:
+        pass
+
+
+def stop(app_id: str, grace: float = 5.0,
+         before_force_kill: Optional[Callable[[], None]] = None) -> dict:
+    """Stop one owned process group, preferring cooperative teardown.
+
+    ``before_force_kill`` is an internal fail-closed hook used by the managed
+    coordinator.  A normal TERM exit never calls it, leaving the process's
+    inference authorization live long enough for ``App.finish()`` to unload its
+    remote models.  Every path that is about to send SIGKILL calls it exactly
+    once first, so a stuck/dead generation is fenced before forced containment.
+    Hook failure is reported but can never prevent the kill.
+    """
     if not paths.valid_app_id(app_id):
         raise SupervisorError(f"invalid app id {app_id!r}")
-    pid = _read_pid(app_id)
-    result = {"app": app_id, "pid": pid, "signalled": False, "killed": False}
+    with _RUN_RECORD_LOCK:
+        pid = _read_pid(app_id)
+        saved_pgid = _run_pgid(app_id, pid)
+        saved_boot = _read_run_boot_id(app_id)
+        current_boot = _current_boot_id()
+        same_boot = bool(saved_boot and current_boot
+                         and saved_boot == current_boot)
+    result = {"app": app_id, "pid": pid, "pgid": saved_pgid,
+              "boot_verified": same_boot,
+              "signalled": False, "killed": False}
+    force_fenced = False
 
-    # Only signal a process group we own (PID-reuse guard via /proc cwd).
-    if pid and _pid_running(pid) and _is_ours(pid, app_id):
-        _killpg(pid, signal.SIGTERM)
-        result["signalled"] = True
+    def fence_before_force_kill() -> None:
+        nonlocal force_fenced
+        if force_fenced:
+            return
+        force_fenced = True
+        if before_force_kill is None:
+            return
+        try:
+            before_force_kill()
+        except BaseException as exc:
+            # Containment is the final safety boundary.  Surface the hook
+            # failure to the coordinator without leaving a TERM-ignoring group
+            # alive merely because authorization cleanup itself failed.
+            result["force_fence_error"] = "%s: %s" % (
+                type(exc).__name__, exc)
+
+    leader_running = bool(pid and _pid_running(pid))
+    leader_ours = bool(leader_running and _is_ours(pid, app_id))
+
+    # A live owned leader is introspectable, so use its actual group instead of
+    # trusting /userdata.  A dead/zombie leader is not introspectable: its saved
+    # numeric group may be addressed only when run.boot_id proves it belongs to
+    # this boot.  A live PID that is not ours is reuse and is never signalled.
+    live_pgid = _owned_live_pgid(pid, app_id) if leader_ours else None
+    # Re-evaluate after /proc ownership/group inspection: the leader can exit
+    # between those reads, and a prior appmgr instance would not be in _apps for
+    # reap_children() to contain on our behalf.
+    dead_now = not bool(pid and _pid_running(pid))
+    if live_pgid is not None:
+        result["pgid"] = live_pgid
+        result["signalled"] = _killpg_id(live_pgid, signal.SIGTERM)
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
-            # _pid_running (not _pid_alive): once the child dies it becomes a
-            # ZOMBIE in OUR process table until reaped, and kill(pid,0) keeps
-            # succeeding -- the old loop therefore always burned the full grace
-            # window and then SIGKILLed a corpse's (recycled) process group.
             reap_children()
-            if not _pid_running(pid):
+            if not _pgid_alive(live_pgid):
                 break
             time.sleep(0.2)
-        if _pid_running(pid):
-            _killpg(pid, signal.SIGKILL)
-            result["killed"] = True
+        if _pgid_alive(live_pgid):
+            fence_before_force_kill()
+            result["killed"] = _killpg_id(live_pgid, signal.SIGKILL)
             time.sleep(0.3)
+    elif (leader_ours and dead_now
+          and saved_pgid is not None and same_boot):
+        # The leader raced out between /proc validation and getpgid().  Its
+        # same-boot persisted group is still safe to contain immediately.
+        fence_before_force_kill()
+        result["killed"] = _killpg_id(saved_pgid, signal.SIGKILL)
+    elif saved_pgid is not None and dead_now and same_boot:
+        fence_before_force_kill()
+        result["killed"] = _killpg_id(saved_pgid, signal.SIGKILL)
+        if result["killed"]:
+            print("[appmgr] %s leader is gone; killed persisted pgid %d"
+                  % (app_id, saved_pgid), flush=True)
+            time.sleep(0.05)
+    elif saved_pgid is not None and dead_now:
+        print("[appmgr] %s dead leader has an untrusted cross-boot/legacy "
+              "pgid %d; clearing records without signalling"
+              % (app_id, saved_pgid), flush=True)
     # Collect the corpse and publish its exit status before we drop run.pid.
     reap_children()
     drain_exits()
@@ -770,8 +1254,15 @@ def stop(app_id: str, grace: float = 5.0) -> dict:
     # a system-wide `pkill -x ffmpeg` added nothing for THIS app while killing
     # every unrelated ffmpeg on the box (another user's transcode, a debug pull).
     _clear_ready(app_id)
-    try:
-        os.remove(paths.pidfile(app_id))
-    except FileNotFoundError:
-        pass
+    with _RUN_RECORD_LOCK:
+        _clear_pidfile(app_id, pid)
+        _clear_pgidfile(app_id, saved_pgid)
+        # Guard with the snapshot value: a delayed stop from this generation
+        # must not remove a newer start's same-directory identity record.
+        if saved_boot is not None:
+            _clear_bootfile(app_id, saved_boot)
+        elif _read_pid(app_id) is None and _read_pgid(app_id) is None:
+            # Malformed/legacy boot records are cleanup-only, but only after
+            # confirming that no replacement numeric record won the race.
+            _clear_bootfile(app_id)
     return result

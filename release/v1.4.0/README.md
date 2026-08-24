@@ -1,5 +1,10 @@
 # reCamera Pro v1.4.0 — 一键部署包 (application layer)
 
+> **历史归档，禁止用于当前固件部署。** 本目录早于
+> `inference-control@1`，所引用的 sideload 固件也与当前源码/manifest 不构成
+> 一致发布集。不要运行 `deploy-firmware.sh`；应用层脚本只对已经安装对应旧
+> endpoint 固件的历史设备有参考意义。
+
 把本轮全部应用层改动一次性部署到设备，让设备达到 v1.4.0 完整状态。
 **固件层（rkipc 遮罩固件）单独、高危、默认不在一键流程内** —— 见文末。
 

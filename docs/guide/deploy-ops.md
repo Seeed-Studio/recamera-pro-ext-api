@@ -3,15 +3,24 @@
 > **读者**：把扩展 API / 应用中心部署到设备、或负责设备维护的人（Seeed 内部 / 集成商）。
 > **对象设备**：reCamera Pro（RV1126B / recamera_v2），kernel 6.1.157、rootfs `/` 与 `/oem` ext4 rw、`/userdata` ext4 rw 无 noexec。
 > **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`../../CHANGELOG.md`、`../api/spec.md`、`app-center-publishing.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。应用中心部署脚本（`S94appmgr` / `ext_appmgr.conf` / `appmgr-restore.sh`）属发布方私有打包流程，不在公开仓。
-> **状态**：本文的路径 / 命令 / md5 均取自上述 release 脚本与实测记录，可直接照做；边界（OTA 冲掉、半成品）在文中明确标注。
+> **状态（2026-08-19）**：本文保留了历史部署记录，但当前 checkout 的
+> `release/pkg` 不是可部署发布物：实文件与 MANIFEST/install.sh 哈希不一致，
+> factory/ext rkipc 哈希集合还发生重叠，并且包不含 `inference-control@1`。
+> `install.sh` 已 fail-closed。下列 sideload 命令只供追溯，**不得照做**；正式
+> 发布必须从 manifest 固定的源码构建完整固件并重新生成 BOM/hash。
 
 ---
 
 ## 1. 部署什么
 
-扩展 API 让方案商**不改固件源码、不重编固件**，跑自己的进程接 `/run/recamera/` 下的 Unix domain socket，就能拿相机帧、把推理结果回注官方 OSD/录像/WS、观测内建流水线。它由以下产物组成：
+设备安装匹配的扩展固件后，方案商无需再为每个应用修改或重编固件；应用进程
+接 `/run/recamera/` 下的 Unix domain socket，即可拿帧、回注结果和观测内建
+流水线。它由以下产物组成：
 
-| 产物 | 安装目标 | md5 | 大小 | 必需性 |
+下表是旧包文档声称的值，**不是当前 checkout 实文件的可信校验表**；保留它只为
+定位历史设备，不能据此发布或安装。
+
+| 产物 | 历史安装目标 | 历史声明 md5 | 大小 | 必需性 |
 |---|---|---|---|---|
 | `rkipc`（含扩展端点：帧代理 / 结果回注 / probe）| `/oem/usr/bin/rkipc` | `9826e9ecf8ed543a6dc78e3731102e0f` | 15.5 MB | **核心必需**——扩展端点全在这个二进制里 |
 | `entry.cgi`（M4 控制面）| `/oem/usr/www/cgi-bin/entry.cgi` | `75a693c87c317a49c37c4dddb6b9ac7a` | 1.05 MB | 可选（M4 控制面接口）|
@@ -19,29 +28,37 @@
 | `recamera_ext/`（Python ctypes 绑定）| `/userdata/sdk/python/` | — | — | 给方案商，可选（`/userdata` 不受 OTA 影响）|
 | `recamera_ext.h`（C 头）| `/userdata/sdk/` | — | — | 给方案商，可选 |
 
-安装后重启，`/run/recamera/` 下出现四个端点：
+安装后重启，`/run/recamera/` 下出现四个 socket 和应用身份目录：
 
 - `frame.sock` — 帧代理（零拷贝 dma-buf 帧交接，SCM_RIGHTS 传 fd + 96 字节定长头）
 - `result-in.sock` — 结果回注（检测 / 分类 / 分割 / 跟踪 / 关键点注入回官方 OSD / 录像 / WS 分发）
 - `probe.sock` — 观测面（preproc / npu.raw / postproc / metrics tap）；SDK client `ProbeSource`（v1.2.0）已发布可用，见 `README.md` §4.8。metrics（inline）+ preproc.out（大张量走 memfd）双路已真机验证。
+- `inference-control.sock` — 内建/外部 RKNN 所有权协调（connection-lifetime lease）
 - `apps.d/` — 每 app 控制目录
 
-**已知缺口**：本轮无阻塞性缺口。早先标注的"关键点 WebSocket 解码缺失"已解决——notify 侧 pb2 / parser 已更新，关键点注入与 WS 解码均通。frame / result / probe 主路径完整。
+**当前阻塞**：仓内 sideload 二进制与 manifest/hash 不一致、缺少 NPU broker，
+不能部署。源码侧 frame/result/probe/inference-control 已恢复并通过 host 与
+AArch64 构建门禁，但还需提交并由 manifest 固定各仓 commit、生成完整固件，
+以及执行 RV1126B 真机 kill/restart/OTA 矩阵。
 
 **应用中心**（App Center，可选，方案 B）另有三块产物，见第 4 节：
 - 前端 SPA（React，静态 shell）→ `/userdata/local/appcenter/www/`（nginx `alias`，`ext_appmgr.conf:31-35`）。
   注：`market/spa/` 这份独立 SPA 已 **LEGACY**（见 `ext_appmgr.conf:25-30` 与 `market/spa/DEPRECATED.md`），
   当前前端是官方 web-native React 的 `/app-center` 页；下述 appmgr 后端与动态路由仍在用。
 - `appmgr` 后端（Python 常驻服务，`python3 -m appmgr serve`，监听 `127.0.0.1:8130`）→ `/userdata/local`
-- nginx 边缘配置 `ext_appmgr.conf`（静态 SPA + `/api/appMgr` 反代）→ `/oem/usr/etc/nginx/`
+- nginx 边缘配置 `ext_appmgr.conf`（静态 SPA + Web-native
+  `/api/app-center/v1/` 与 legacy `/api/appMgr/` 反代）→ `/oem/usr/etc/nginx/`
 
 ---
 
 ## 2. 两种更新方式
 
-### 2.1 增量 release 包（推荐：快、可回滚）
+### 2.1 历史增量 release 包（当前禁用，不可部署）
 
-`release/pkg/` 就是这个增量包。流程：`adb push` 整个包 → 设备上 `sh install.sh`（备份原厂 → md5 校验 → 覆盖 `/oem` → reboot → 自检）。
+`release/pkg/` 仅保留历史流程和文件形状。它当前会在任何写设备操作前主动
+退出；不要通过修改一个 md5 或删除 guard 强行安装，因为现有 rkipc 身份集合
+冲突，可能把扩展二进制误当成 factory rollback 目标。以下命令块仅用于说明
+旧流程，不是当前操作指南。
 
 前提：设备可通过 adb 以 root 访问（`adb connect <ip>:5555`，adbd 以 root 跑）。
 
@@ -74,10 +91,9 @@ adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78
 
 ### 2.3 一键部署（应用层，`deploy-app.sh`，推荐）
 
-> **版本**：当前发布 train 为 **v1.5.0**（包在 `release/v1.5.0/`，仍是
-> `recamera-ext-kit` / `recamera-ext-api` / `appmgr` / `frontend` / `apps` 五包 +
-> `deploy-app.sh`）。下文以 v1.3.0 train 为例说明**一键部署流程**——各 train 的包名
-> 与步骤同构，把版本号替换成当前 train 即可（CDN 路径同理）。
+> **历史记录**：以下是一键部署 v1.3/v1.5 应用层包的旧流程，不是当前源码
+> 对应的新发布 train。它不会更新 rkipc，也不能给旧固件补上
+> `inference-control@1`；只有设备已经运行匹配 endpoint 固件时才有参考价值。
 
 `deploy-app.sh` 把本轮全部**应用层**改动一次性打到设备，让设备达到该 train 的完整状态，全程 **adb over root**，**不碰 rkipc / 固件 / cgi-bin**（部署前后各取一次 `/oem/usr/bin/rkipc` md5，收尾断言未变，变了 FATAL）。
 
@@ -171,15 +187,24 @@ adb shell "dmesg | grep -iE 'vpss|fifo|Oops' | tail"   # 无 VPSS 崩溃
    >
    > 早先标注的"repo conf 缺 `/appcenter/apps/`、`/appcenter/catalog.json`、`/userdata/local/catalog/`"分歧**已消除**：这些 location 已补进 repo `ext_appmgr.conf`（注明"以设备/官方 conf 为准，本块为 repo 侧对齐参考"）。
    > **两套 url**：生产分发走 **CDN（主）**——浏览器代取 CDN 上的 `catalog.json` + 包（见 publishing §6，catalog `url` 指向 `sensecraft-statics.seeed.cc/.../packages/`）；上述 `/appcenter/*` 是**设备本地服务（回退）**，对应仓库里的 `catalog.local.json`（`gen_catalog.py` 默认 base 产出，包 url→`/appcenter/apps/<f>`）。仓库里的 `catalog.json` 是 CDN 版，`catalog.local.json` 是设备本地版，二者并存、勿互相覆盖。
-2. **appmgr 后端**：代码 + 状态在 `/userdata/local`（`python3 -m appmgr` 从此解析），`appmgr serve` 监听 loopback `127.0.0.1:8130`，公网面由 nginx 转发。**新增端点 `POST /api/appMgr/putModel`** 用于装机前把共享模型写到 `/userdata/local/models/<...>`（白名单加固，见 publishing §6）。
+2. **appmgr 后端**：代码 + 状态在 `/userdata/local`（`python3 -m appmgr` 从此解析），`appmgr serve` 监听 loopback `127.0.0.1:8130`，公网面由 nginx 转发。历史 `POST /api/appMgr/putModel` 只保留 loopback 迁移用途；公网返回 410，Web v2 使用 bundled artifacts（见 publishing §6）。
 3. **nginx 边缘**：`ext_appmgr.conf` 放 `/oem/usr/etc/nginx/`，被 `common_relay.conf` 的 `include ext_*.conf`（在 `server{ listen 80; }` 块内）自动加载。它**只新增 location，不改任何官方 conf**：
    - `/appcenter/` → 静态 SPA shell（**匿名**，shell 内无秘密）
    - `/appcenter/apps/` → 应用包（**匿名**，`alias /userdata/local/appcenter/apps/`；整合后布局，浏览器本地回退取包处）
    - `/appcenter/catalog.json` → 安装目录（**匿名**，`location =` → `alias /userdata/local/catalog/catalog.json`；整合后布局把 catalog 单列）
    - `/appcenter/ws/results` → 检测结果 WS 反代到 `127.0.0.1:8124`（JWT 门）
    - `/appcenter/go2rtc/` → 视频反代到 `127.0.0.1:1984`（JWT 门）
-   - `/api/appMgr/` → 管理 API 反代到 `127.0.0.1:8130`（JWT 门，`client_max_body_size 256m` 给 tar.gz 上传留头、`proxy_read_timeout 200s` 给安装/切换留时间）
+   - `/api/app-center/v1/` → Web-native manifest v2、多应用、异步操作与 SSE API
+     反代到 `127.0.0.1:8130`（JWT 门；独立命名空间，不占用 SenseCraft 的 `/api/v1/`）
+   - `/api/appMgr/` → legacy 管理 API 反代到 `127.0.0.1:8130`（JWT 门，剩余
+     JSON body 上限 2 MiB，`proxy_read_timeout 200s` 给安装/切换留时间）
+   - exact `/api/appMgr/upload`、`/api/appMgr/putModel` → 公网固定 410；两者的
+     legacy 后端会全量驻内存，只保留 loopback 迁移兼容。Web 安装走
+     `/api/app-center/v1/uploads` 的流式 + 总配额链路。
    - 鉴权复用官方 `entry.cgi` 的 `auth_request /_jwt_verify`（同源 cookie `token`，浏览器自动带上，WS/`<img>`/`<video>` 同样生效；auth_request 在 WebSocket Upgrade 握手前执行，不破坏 upgrade）。
+   - 动态路由同时校验非空 `Origin` 必须与 `$scheme://$http_host` 相同；appmgr
+     对 POST/PUT/DELETE 再做一次规范化 scheme/host/port 比较。跨站请求返回 403，
+     本机无 Origin 的运维调用请走 `127.0.0.1:8130`。
 
 ### 4.2 持久化 S94appmgr（+ OTA restore 机制）
 
@@ -223,9 +248,14 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 
 **voice 音频运行时 `market/deploy/provision-voice.sh`**（voice-transcribe 专用，视觉 app 不需要）：在 rknn venv 里从**离线 wheelhouse** 补装音频依赖（`voxedge` / `sherpa_onnx` / `kaldi_native_fbank` / `sentencepiece`，`numpy`+`rknnlite` 复用）→ 把 ASR 模型集 copy 进共享目录 `/userdata/local/models/asr/`（`sensevoice_rv1126b_w4a16.rknn` + `am.mvn` + `embedding.npy` + BPE + `silero_vad.onnx`，KWS 唤醒模型可选）→ 往 `/userdata/local/appdata/voice-transcribe/config.json` 写 `asr_backend=rk`、`wake_backend=kws|asr`（`asr_backend` 是内部键、不在 config_schema，故直接落 `config.json`；UI 改配置会丢它，需重跑本脚本；旧位置 `<app_dir>/config.json` 若存在会被脚本一并搬过去并改名 `.migrated`）。同样幂等 + 自检。
 
-- **共享模型落位**：voice-transcribe 的模型**不在包里**，生产装机由浏览器 `putModel` 落到 `/userdata/local/models/asr`（catalog `models[]` = **4 个文件**：rknn + am.mvn + embedding.npy + BPE，核实自 `market/catalog/models.json`，见 publishing §3/§6）。`provision-voice.sh` 是设备侧从本地 payload 落模型的等价路径，且**额外**带 `silero_vad.onnx`（VAD 端点检测，必需）与可选的 KWS 唤醒模型集——即 provision 的必需集是 **5 文件**，比 catalog 的浏览器代取集多一个 `silero_vad.onnx`。设备侧确认：`ls -lh /userdata/local/models/asr/`。
+- **共享模型落位（legacy）**：旧 catalog 的 `putModel` 浏览器代取链路已从公网关闭；
+  voice-transcribe 的 Web v2 包应声明/携带 authenticated bundled artifacts。
+  旧设备迁移仍可在设备本机运行 `provision-voice.sh`，把模型落到
+  `/userdata/local/models/asr`。设备侧确认：`ls -lh /userdata/local/models/asr/`。
 
-> **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类大而通用的依赖走**共享基础环境** `/userdata/rknnenv`（`provision-runtime.sh`，8 视觉 app 复用）；大而共享的**模型**走 catalog `models[]`+`putModel`。app **独有**的增量 Python 依赖（PyAV、特定框架…）不应塞进共享基础环境——见 [per-app-dependencies.md](./per-app-dependencies.md)（**设计文档，尚未实现**：安装时建 per-app venv 从离线 wheel 装入；`installer.uninstall()` 已会一并删 `/userdata/local/venvs/<id>`）。
+> **依赖分层**：`rknnlite`/`numpy`/`cv2` 这类平台依赖来自只读系统运行时；
+> app 独有 wheel 和模型由 manifest v2 精确声明并离线打包，安装到 per-release
+> 隔离环境。旧 catalog `models[]`+`putModel` 仅供 loopback 迁移。
 
 **★按需运行时（现在的默认路径，2026-08-15 起）**：音频依赖已进分发链路，不必再手工 provision。app 在 manifest 声明 `capabilities: ["audio"]`，`gen_catalog` 把它连同 `runtimes.audio` 描述符写进 catalog，应用中心装它之前先问设备 `GET /api/appMgr/runtime?name=audio`，缺则取 `voice-runtime-<ver>.tar.gz`（约 18 MB，5 个 aarch64/cp311 wheel）经 `POST /api/appMgr/runtime` 离线装进 `/userdata/rknnenv`。幂等：已就位直接跳过，不跑 pip。
 
@@ -296,23 +326,16 @@ reboot / 部署后依次核对：
 
 ---
 
-## 6. 回滚（三级）
+## 6. 当前允许的恢复方式
 
-**一级 · 应用级 / 增量包回滚**（推荐，最快）：
-```sh
-adb shell "sh /userdata/ext-pkg/rollback.sh --reboot"
-```
-`rollback.sh`（见 `release/pkg/rollback.sh`）从 `/userdata/rkipc.factory.bak` 恢复原厂 rkipc（缺备份直接 `exit 1`），有 `entry.cgi.factory.bak` 一并恢复，`chmod 755` 后 reboot。扩展 `.so` 留着无害（没人加载它除非方案主动连），要彻底干净可手动删 `librecamera_ext.so*`。
+仓内历史 `rollback.sh` 已禁用：它的 factory/ext 哈希集合重叠，不能证明
+`/userdata/rkipc.factory.bak` 真是原厂文件。禁止手工把这类未验证备份复制到
+`/oem`。
 
-**二级 · 整机文件级回滚**：设备上有分级备份可 `cp` 回：
-- `/userdata/rkipc.factory.bak` — 原厂 rkipc（install.sh 首次保存）
-- 版本备份如 `/userdata/rkipc.2baebbb.bak` 等 — 各版本 rkipc
-- `entry.cgi.factory.bak` — 原厂 entry.cgi
-- 应用中心的官方 www 备份（`www-official-backup`）— 覆盖 `/oem/usr/www` 前先备份的原厂前端
-
-手动回滚：`cp <备份> <目标> && chmod 755 <目标>` → `adb reboot`。
-
-**三级 · 官方 OTA 重刷**：刷任意官方 `update.img` / OTA 即把 `/oem` 全量还原成原厂（附带把扩展 API 也冲掉，见第 2.1 节边界）。这是"回到出厂"的兜底，不用于日常回滚。
+当前只允许使用经项目发布方批准的官方 `update.img` / OTA / recovery 流程，
+或使用在本包之外独立验证、并有设备型号/固件版本/BOM 记录的 factory artifact。
+新的发布流水线必须先建立互斥的 factory/ext 身份库并测试回滚，才能重新开放
+增量回滚脚本。
 
 ---
 

@@ -1,5 +1,14 @@
 # reCamera Pro Extension API — v1.6.0 (sideload package)
 
+> **ARCHIVED / DO NOT INSTALL**
+>
+> This checked-in directory is a historical snapshot, not a valid release:
+> its `rkipc` and SDK library hashes do not match `MANIFEST.txt`/`install.sh`,
+> it predates `inference-control@1`, and the historic factory/extension hash
+> sets overlap. `install.sh` therefore fails closed before touching the device.
+> Rebuild the firmware and SDK from pinned source commits; only a newly staged,
+> internally consistent release may remove that guard.
+
 Persistent sideload that adds the extension API (frame proxy / result injection / probe) to a
 reCamera Pro (RV1126B). It overwrites `/oem/usr/bin/rkipc` (ext4, read-write) so it **survives reboot**.
 It is not a firmware image and does not touch partitions.
@@ -61,9 +70,10 @@ PY
 
 ## Rollback
 
-```sh
-adb shell "sh /userdata/ext-pkg/rollback.sh --reboot"   # restores factory rkipc + entry.cgi, reboots
-```
+The checked-in `rollback.sh` is also disabled: its historical factory and
+extension hash sets overlap. Do not copy an unverified `/userdata` backup over
+`/oem`. Use an approved official recovery/update image or a factory artifact
+verified independently of this package.
 
 ## Boundaries
 - **OTA reverts this.** A firmware OTA / `update.img` flash rewrites `/oem` and restores factory `rkipc`.

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +56,10 @@ def test_exported_profile_is_production_loader_compatible(tmp_path):
     assert profile.consecutive == 2
 
 
+@unittest.skipUnless(
+    os.environ.get("RECAMERA_RELEASE_ARTIFACT_TESTS") == "1",
+    "requires the adjacent sscma-example-sg200x training repository",
+)
 def test_default_shared_training_module_exists():
     training = load("pro_temporal_training_path_test", HERE / "tools" /
                     "train_freeze_temporal_mlp.py")

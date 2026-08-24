@@ -1,70 +1,28 @@
 #!/bin/sh
 # S94appmgr -- SysVinit start/stop for the reCamera Pro App Center manager.
 #
-# APP_CENTER_PORT_DESIGN §4.7: appmgr code + state live under /userdata (survive
-# OTA). This script starts `python3 -m appmgr serve` (loopback 127.0.0.1:8130)
-# as root and, as an OTA-safety fallback, re-injects the nginx edge conf
-# (ext_appmgr.conf) from its /userdata master copy into /oem/usr/etc/nginx/
-# whenever it is missing -- guarded by `nginx -t` so a bad config never reloads.
+# Platform code is staged into the immutable firmware image at
+# /usr/lib/recamera/appmgr.  Only applications, environments and desired/config
+# state live under /userdata.  The appmgr process owns the result UDS and the
+# single loopback WebSocket :8124; applications never bind that port directly.
 #
-# Ordered S94 = after nginx (late init). Install: place in /etc/init.d/, master
-# copy in /userdata/config/system/etc/init.d/ for the OTA re-inject chain.
+# Ordered S94 = after S93inferenced and nginx (late init).  The firmware build
+# installs this script and ext_appmgr.conf directly into their target images;
+# no writable /userdata code mirror or boot-time code re-injection is trusted.
 
 NAME=appmgr
-APPMGR_PARENT=/userdata/local          # `python3 -m appmgr` resolves here
+APPMGR_PARENT=/usr/lib/recamera        # contains the appmgr package
 PIDFILE=/var/run/$NAME.pid
 LOGFILE=/var/log/$NAME.log
 PYTHON=/usr/bin/python3
 
-NGINX_MASTER=/userdata/local/appcenter/ext_appmgr.conf
-NGINX_LIVE=/oem/usr/etc/nginx/ext_appmgr.conf
-# The stock nginx binary is built with conf-path=/etc/nginx/nginx.conf, which
-# does not exist on the device; the master is started with an explicit -c.
-# Every nginx invocation here must carry the same -c or `nginx -t` fails and
-# the re-inject below rolls itself back every boot.
-NGINX_CONF=/oem/usr/etc/nginx/nginx.conf
-
-# OTA-surviving master copy of THIS launcher. /etc (the live copy) is on the
-# rootfs and is wiped by an A/B OTA; /userdata survives. RkLunch's restore chain
-# (restore_etc_file_if_missing) only re-injects passwd/group/shadow -- it does
-# NOT cover /etc/init.d -- so nothing official redeploys this script after OTA.
-# We keep a current master here and ship an idempotent restore helper (see
-# appmgr-restore.sh) that re-drops it into /etc/init.d and starts appmgr. The
-# TRIGGER for that helper post-OTA is not fully automatic within the stock
-# firmware (no OTA-surviving boot hook sources /userdata); see RESTORE README.
-S94_MASTER=/userdata/config/system/etc/init.d/S94appmgr
-S94_LIVE=/etc/init.d/S94appmgr
-
-seed_s94_master() {
-    # Mirror the running launcher to its OTA-surviving master so a later restore
-    # always redeploys the latest version. Idempotent (cmp guards the copy).
-    src="$0"
-    case "$src" in /*) ;; *) src="$(pwd)/$src" ;; esac
-    [ -f "$src" ] || return 0
-    [ "$src" = "$S94_MASTER" ] && return 0
-    mkdir -p "$(dirname "$S94_MASTER")" 2>/dev/null || return 0
-    if ! cmp -s "$src" "$S94_MASTER" 2>/dev/null; then
-        if cp "$src" "$S94_MASTER" 2>/dev/null; then
-            chmod +x "$S94_MASTER" 2>/dev/null
-            echo "[S94appmgr] seeded OTA master copy -> $S94_MASTER"
-        fi
-    fi
-}
-
-reinject_nginx() {
-    # Restore the edge conf if OTA (or anything) wiped /oem, then reload if valid.
-    if [ -f "$NGINX_MASTER" ] && [ ! -f "$NGINX_LIVE" ]; then
-        cp "$NGINX_MASTER" "$NGINX_LIVE" 2>/dev/null || return 0
-        if nginx -c "$NGINX_CONF" -t >/dev/null 2>&1; then
-            nginx -c "$NGINX_CONF" -s reload >/dev/null 2>&1
-            echo "[S94appmgr] re-injected + reloaded nginx ext_appmgr.conf"
-        else
-            # bad config -> never leave a broken edge; roll back.
-            rm -f "$NGINX_LIVE"
-            echo "[S94appmgr] nginx -t failed after re-inject; rolled back"
-        fi
-    fi
-}
+# Keep platform modules and libraries ahead of OEM compatibility copies.  The
+# explicit appmgr variables also make supervisor launches use the immutable Kit
+# and SDK packages even when appmgr is started outside this init script.
+PYTHONPATH_VALUE=/usr/lib/recamera:/usr/lib/python3.11/site-packages
+LD_LIBRARY_PATH_VALUE=/usr/lib:/oem/usr/lib:/oem/lib
+APPMGR_KIT_PARENT_VALUE=/usr/lib/python3.11/site-packages
+APPMGR_SDK_PYTHON_VALUE=/usr/lib/python3.11/site-packages
 
 # The pidfile is advisory, never authoritative. Two ways it goes stale:
 #   1. appmgr gets (re)started by something other than this script -- deploy-app.sh
@@ -120,8 +78,6 @@ is_running() {
 }
 
 start() {
-    seed_s94_master
-    reinject_nginx
     running=$(resolve_pid)
     if [ -n "$running" ]; then
         # Re-point the pidfile at the process we actually found, so a serve that
@@ -132,12 +88,16 @@ start() {
     fi
     echo "Starting $NAME"
     # BusyBox start-stop-daemon -b mishandles the shell wrapper we need to cd
-    # into /userdata/local, so launch directly: cd into the package parent,
+    # into the module parent, so launch directly: cd into the package parent,
     # background python, record its pid. appmgr's own single-instance flock
     # guards against a duplicate. appmgr supervises app children itself (each
     # under setsid), so a plain background here is sufficient.
     cd "$APPMGR_PARENT" || exit 1
-    "$PYTHON" -m appmgr serve >> "$LOGFILE" 2>&1 &
+    PYTHONPATH="$PYTHONPATH_VALUE" \
+    LD_LIBRARY_PATH="$LD_LIBRARY_PATH_VALUE" \
+    APPMGR_KIT_PARENT="$APPMGR_KIT_PARENT_VALUE" \
+    APPMGR_SDK_PYTHON="$APPMGR_SDK_PYTHON_VALUE" \
+        "$PYTHON" -m appmgr serve >> "$LOGFILE" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 1
     started=$(resolve_pid)

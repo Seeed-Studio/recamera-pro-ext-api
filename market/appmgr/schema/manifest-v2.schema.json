@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://recamera.example/schemas/manifest-v2.schema.json",
+  "title": "reCamera Pro application manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": true
+  },
+  "required": [
+    "manifest_version",
+    "id",
+    "name",
+    "version",
+    "type",
+    "entry",
+    "release",
+    "compatibility",
+    "python",
+    "artifacts",
+    "config_schema",
+    "resources",
+    "permissions",
+    "health",
+    "instances",
+    "capabilities"
+  ],
+  "properties": {
+    "manifest_version": {"const": 2},
+    "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "type": {"const": "self-hosted"},
+    "entry": {"$ref": "#/$defs/relativePath"},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["sequence", "channel"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "channel": {"enum": ["stable", "beta", "dev"]}
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["platform_profile", "arch", "python"],
+      "properties": {
+        "platform_profile": {"$ref": "#/$defs/token"},
+        "arch": {"const": "aarch64"},
+        "python": {"const": "==3.11.*"},
+        "firmware_api": {"$ref": "#/$defs/versionConstraint"},
+        "kit_api": {"$ref": "#/$defs/versionConstraint"},
+        "sdk_abi": {"$ref": "#/$defs/versionConstraint"},
+        "rknn_runtime": {"$ref": "#/$defs/versionConstraint"}
+      }
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["runtime_profile", "isolation", "wheels", "imports"],
+      "properties": {
+        "runtime_profile": {"$ref": "#/$defs/token"},
+        "isolation": {"const": "per-release"},
+        "imports": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          }
+        },
+        "wheels": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/wheel"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "config_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["groups"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "groups": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/configGroup"}
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "anyOf": [
+        {"required": ["claims"]},
+        {"required": ["profiles"]}
+      ],
+      "properties": {
+        "claims": {"$ref": "#/$defs/claims"},
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when", "claims"],
+            "properties": {
+              "when": {"type": "object", "minProperties": 1, "maxProperties": 1},
+              "claims": {"$ref": "#/$defs/claims"}
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "memory_mb": {"type": "integer", "minimum": 1},
+            "cpu_percent": {"type": "integer", "minimum": 1, "maximum": 400},
+            "storage_mb": {"type": "integer", "minimum": 1},
+            "shutdown_grace_sec": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["sdk", "filesystem", "network"],
+      "properties": {
+        "sdk": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "audio.read", "codec.decode", "frame.read", "gpio.read",
+              "gpio.write", "npu.infer", "probe.read", "result.publish", "rga.use"
+            ]
+          }
+        },
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["read", "write"],
+          "properties": {
+            "read": {"$ref": "#/$defs/fsScopes"},
+            "write": {"$ref": "#/$defs/fsScopes"}
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["listen", "outbound"],
+          "properties": {
+            "listen": {"$ref": "#/$defs/endpoints"},
+            "outbound": {"$ref": "#/$defs/endpoints"}
+          }
+        },
+        "devices": {"type": "array", "maxItems": 0}
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": [
+        "protocol", "startup_timeout_sec", "stabilization_sec",
+        "liveness_interval_sec", "liveness_failures", "restart"
+      ],
+      "properties": {
+        "protocol": {"const": "kit-health-v1"},
+        "startup_timeout_sec": {"type": "integer", "minimum": 1},
+        "stabilization_sec": {"type": "integer", "minimum": 0},
+        "liveness_interval_sec": {"type": "integer", "minimum": 1},
+        "liveness_failures": {"type": "integer", "minimum": 1},
+        "restart": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "max_attempts", "window_sec", "backoff_sec"],
+          "properties": {
+            "policy": {"enum": ["never", "on-failure"]},
+            "max_attempts": {"type": "integer", "minimum": 0},
+            "window_sec": {"type": "integer", "minimum": 1},
+            "backoff_sec": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "instances": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["max", "config_scope", "data_scope", "endpoint_mode"],
+      "properties": {
+        "max": {"const": 1},
+        "config_scope": {"enum": ["app", "instance"]},
+        "data_scope": {"enum": ["app", "instance"]},
+        "endpoint_mode": {"const": "allocated"}
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string"}
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "patternProperties": {"^x-": true},
+        "properties": {
+          "id": {"type": "string"},
+          "file": {"$ref": "#/$defs/relativePath"},
+          "task": {"type": "string"},
+          "input": {"type": "array", "items": {"type": "integer"}},
+          "quant": {"type": "string"},
+          "classes": {},
+          "dict": {},
+          "heads": {},
+          "keypoints": {},
+          "norm": {},
+          "output": {},
+          "role": {"type": "string"}
+        }
+      }
+    },
+    "needs_model": {"type": "boolean"},
+    "name_zh": {"type": "string"},
+    "description": {"type": "string"},
+    "description_zh": {"type": "string"},
+    "author": {"type": "string"},
+    "image": {"type": "string"},
+    "scene": {"type": "string"},
+    "scene_zh": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "postproc": {"type": "string"},
+    "render": {"type": "object"},
+    "output": {"type": "object", "not": {"required": ["port"]}},
+    "ha_entities": {"type": "array"},
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//).+$"
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$"
+    },
+    "versionConstraint": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9<>=!~^*][A-Za-z0-9._+,:<>=!~^*-]{0,127}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "wheel": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["name", "version", "filename", "sha256", "size", "tags", "source"],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "version": {"$ref": "#/$defs/token"},
+        "filename": {"type": "string", "pattern": "^[^/\\\\]+\\.whl$"},
+        "file": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 536870912},
+        "tags": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/token"}},
+        "source": {"enum": ["bundled", "catalog"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "bundled"}}},
+          "then": {"required": ["file"]},
+          "else": {"not": {"required": ["file"]}}
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "kind", "source", "sha256", "size", "mount", "required", "share_scope"],
+      "properties": {
+        "id": {"$ref": "#/$defs/token"},
+        "kind": {"enum": ["data", "dictionary", "labels", "onnx", "rknn"]},
+        "source": {"enum": ["bundled", "catalog"]},
+        "file": {"$ref": "#/$defs/relativePath"},
+        "filename": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "mount": {"$ref": "#/$defs/relativePath"},
+        "required": {"type": "boolean"},
+        "share_scope": {"enum": ["content", "private"]}
+      }
+    },
+    "configGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["key", "title", "items"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "title": {"type": "string"},
+        "title_zh": {"type": "string"},
+        "description": {"type": "string"},
+        "description_zh": {"type": "string"},
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "patternProperties": {"^x-": true},
+            "required": ["key", "type", "apply"],
+            "properties": {
+              "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+              "type": {"enum": ["boolean", "enum", "field_mapping", "integer", "line", "number", "output_filters", "string", "zone"]},
+              "apply": {"enum": ["live", "restart", "reschedule"]},
+              "default": {},
+              "min": {"type": "number"},
+              "max": {"type": "number"},
+              "step": {"type": "number"},
+              "maxPoints": {"type": "integer"},
+              "directional": {"type": "boolean"},
+              "options": {"type": "array"},
+              "option_labels": {"type": "array"},
+              "option_labels_zh": {"type": "array"},
+              "title": {"type": "string"},
+              "title_zh": {"type": "string"},
+              "help": {"type": "string"},
+              "help_zh": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "patternProperties": {"^x-": true},
+        "required": ["name", "mode", "required"],
+        "properties": {
+          "name": {"enum": ["audio.capture", "camera.frames", "codec.decode", "npu.rknn", "probe.read", "result.publish", "rga"]},
+          "mode": {"enum": ["brokered", "exclusive", "scheduled", "shared"]},
+          "required": {"type": "boolean"},
+          "quantity": {"type": "integer", "minimum": 1, "maximum": 64},
+          "timeout_sec": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "fsScopes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["app", "appdata", "artifacts", "tmp"]}
+    },
+    "endpoints": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"}
+    }
+  }
+}

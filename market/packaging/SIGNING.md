@@ -24,7 +24,8 @@ device. With it, the device refuses any package it cannot trace to the release k
 | Key | Location | In repo? | On device? |
 |-----|----------|----------|------------|
 | **Private** `release_priv.pem` | `~/.recamera_release_key/` (chmod 600) | **NO — never** | **NO — never** |
-| **Public** `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | yes (committed) | yes (deployed with appmgr → `/userdata/local/appmgr/keys/`) |
+| **Vendor public** `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | yes (committed) | yes (immutable firmware → `/usr/lib/recamera/appmgr/keys/`) |
+| **Owner public** `*.pem` | owner provisioning | no | `/userdata/local/appmgr/keys/owners/` |
 
 The private key is the crown jewel. Anyone holding it can publish packages the
 whole fleet trusts. Treat it accordingly:
@@ -78,6 +79,15 @@ A **present-but-bad** signature is *always* refused, regardless of the switch.
 Already-installed apps are never re-verified, so flipping this never bricks a
 running device — it only governs new installs.
 
-Trust anchor path is overridable via `APPMGR_RELEASE_PUBKEY`
-(default `/userdata/local/appmgr/keys/release_pub.pem`). If a signature is
-present but no public key is on the device, install **fails closed** (refused).
+The immutable vendor-anchor path is overridable via `APPMGR_RELEASE_PUBKEY`
+(default `/usr/lib/recamera/appmgr/keys/release_pub.pem`). Device-owner anchors
+are direct `*.pem` children of `APPMGR_OWNER_KEYS_DIR` (default
+`/userdata/local/appmgr/keys/owners/`) and extend rather than replace the vendor
+anchor. Both key files and the owner directory must be regular/no-follow,
+owned by appmgr's effective uid, and non-group/world-writable objects. The
+verifier caps owner key count and key size, parses every `*.pem` before trying
+the signature (one malformed key fails the whole store closed), snapshots each
+safely opened key, and reports `signer_kind` plus the
+SHA-256 fingerprint of canonical public-key DER. Missing/invalid vendor trust,
+unsafe owner-store content, or a signature matching no trusted key fails
+closed. App packages may not contain key/trust-store material.

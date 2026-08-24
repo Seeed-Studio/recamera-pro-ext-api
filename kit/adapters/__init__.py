@@ -35,8 +35,10 @@ _EXPORTS = {
     "DEFAULT_MAIN_STREAM": "frame_source",
     # result_sink (stdlib only)
     "ResultSink": "result_sink",
+    "ResultPublisher": "result_sink",
     "StdoutSink": "result_sink",
     "WsResultSink": "result_sink",
+    "GatewayResultSink": "result_sink",
     "MultiSink": "result_sink",
     "open_result_sink": "result_sink",
     # audio_source (stdlib only; numpy lazy inside methods)
@@ -50,6 +52,8 @@ _EXPORTS = {
     "open_audio_source": "audio_source",
     # registry (stdlib only; concrete backends imported lazily inside factories)
     "Capabilities": "registry",
+    "Capability": "registry",
+    "CapabilityStatus": "registry",
     "capabilities": "registry",
     "probe_capabilities": "registry",
     "select_frame_source": "registry",

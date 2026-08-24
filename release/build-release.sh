@@ -28,6 +28,10 @@
 # zsh 兼容(macOS): 无 bash4 特性(无关联数组/mapfile)。md5 用 md5sum 或 md5 -q。
 set -euo pipefail
 
+echo "FATAL: legacy artifact assembler is disabled; it does not build a source-pinned release." >&2
+echo "Implement the manifest/BOM/source-build gates described in RELEASING.md before producing a new train." >&2
+exit 1
+
 # ---- args --------------------------------------------------------------------
 RKIPC="" ENTRY="" VERSION="" VERIFIED_MD5S=""
 while [ $# -gt 0 ]; do

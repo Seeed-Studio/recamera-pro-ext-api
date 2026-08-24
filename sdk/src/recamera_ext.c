@@ -1,0 +1,382 @@
+// Copyright 2025 reCamera Pro Extension API
+// librecamera_ext C ABI v1 implementation -- result-injection sink.
+#include "recamera_ext.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include "ext_api.pb-c.h"
+#include "ext_client_common.h"
+#include "inference.pb-c.h"
+#include "rc_ext_errno.h"
+
+#define RC_EXT_RESULT_SOCK "/run/recamera/result-in.sock"
+
+struct rc_ext_result {
+	int fd;
+	uint32_t api_version;
+	char source_id[64];
+};
+
+// Allocate the entries[]/eptrs[]/boxobjs[] triple shared by the detection,
+// classification, segmentation and tracking builders. Left-to-right sequencing
+// of the comma operator means all three callocs run; the expression is true
+// only when all succeeded. On failure the caller frees with RC_FREE3.
+#define RC_ALLOC3(entries, eptrs, boxobjs, n)                                  \
+	((entries) = calloc((n), sizeof(*(entries))),                          \
+	 (eptrs) = calloc((n), sizeof(*(eptrs))),                              \
+	 (boxobjs) = calloc((n), sizeof(*(boxobjs))),                          \
+	 ((entries) && (eptrs) && (boxobjs)))
+
+#define RC_FREE3(entries, eptrs, boxobjs)                                      \
+	do {                                                                   \
+		free(entries);                                                 \
+		free(eptrs);                                                   \
+		free(boxobjs);                                                 \
+	} while (0)
+
+// Fill the top-level fields common to every task entry struct (box pointer,
+// score, class_id, class_name). Field names match across the generated entry
+// types. `boxp` may be NULL (e.g. box-less classification). `lbl` NULL -> "".
+#define RC_FILL_ENTRY(e, boxp, sc, cid, lbl)                                   \
+	do {                                                                   \
+		(e).box = (boxp);                                              \
+		(e).score = (sc);                                              \
+		(e).class_id = (cid);                                          \
+		(e).class_name = (char *)((lbl) ? (lbl) : "");                 \
+	} while (0)
+
+// Initialise a protobuf InferenceBox from (x1,y1,x2,y2) corner coordinates.
+// Shared by every task type that carries a bounding box.
+static void fill_box(InferenceBox *b, float x1, float y1, float x2, float y2) {
+	InferenceBox init = INFERENCE_BOX__INIT;
+	*b = init;
+	b->left = x1;
+	b->top = y1;
+	b->right = x2;
+	b->bottom = y2;
+}
+
+// Packs a fully-built InferenceResult and sends it as one datagram. Fills the
+// common top-level fields first. Returns 0 on success or -rc_ext_err_t.
+static int rc_send_result(rc_ext_result_t *h, InferenceResult *res) {
+	res->model_id = 0;
+	res->source_id = h->source_id;
+	size_t psz = inference_result__get_packed_size(res);
+	uint8_t *pbuf = (uint8_t *)malloc(psz ? psz : 1);
+	if (!pbuf)
+		return -RC_EXT_EINTERNAL;
+	inference_result__pack(res, pbuf);
+	ssize_t s = send(h->fd, pbuf, psz, MSG_NOSIGNAL);
+	free(pbuf);
+	return (s < 0) ? -RC_EXT_EINTERNAL : 0;
+}
+
+rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err) {
+	uint32_t api_version = 0;
+	int fd = rc_ext_connect_hello(RC_EXT_RESULT_SOCK,
+	                              source_id ? source_id : "ext", &api_version, err);
+	if (fd < 0)
+		return NULL;
+
+	rc_ext_result_t *h = (rc_ext_result_t *)calloc(1, sizeof(*h));
+	if (!h) {
+		close(fd);
+		rc_ext_set_err(err, RC_EXT_EINTERNAL);
+		return NULL;
+	}
+	h->fd = fd;
+	h->api_version = api_version;
+	snprintf(h->source_id, sizeof(h->source_id), "%s", source_id ? source_id : "ext");
+
+	if (err)
+		*err = RC_EXT_OK;
+	return h;
+}
+
+int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
+                                  const rc_ext_box_t *boxes, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+
+	InferenceResult res = INFERENCE_RESULT__INIT;
+	res.task_type = TASK_TYPE__TASK_TYPE_DETECTION;
+	res.pts_us = pts_us;
+
+	InferenceDetectionResult det = INFERENCE_DETECTION_RESULT__INIT;
+	InferenceDetectionEntry *entries = NULL;
+	InferenceDetectionEntry **eptrs = NULL;
+	InferenceBox *boxobjs = NULL;
+
+	if (n) {
+		if (!RC_ALLOC3(entries, eptrs, boxobjs, n)) {
+			RC_FREE3(entries, eptrs, boxobjs);
+			return -RC_EXT_EINTERNAL;
+		}
+		for (size_t i = 0; i < n; i++) {
+			fill_box(&boxobjs[i], boxes[i].x1, boxes[i].y1, boxes[i].x2, boxes[i].y2);
+
+			InferenceDetectionEntry e = INFERENCE_DETECTION_ENTRY__INIT;
+			entries[i] = e;
+			RC_FILL_ENTRY(entries[i], &boxobjs[i], boxes[i].score,
+				      boxes[i].class_id, boxes[i].label);
+			eptrs[i] = &entries[i];
+		}
+	}
+
+	det.n_entries = n;
+	det.entries = n ? eptrs : NULL;
+	res.data_case = INFERENCE_RESULT__DATA_DETECTION;
+	res.detection = &det;
+
+	int ret = rc_send_result(h, &res);
+
+	RC_FREE3(entries, eptrs, boxobjs);
+	return ret;
+}
+
+int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
+                                      const rc_ext_class_t *items, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+
+	InferenceResult res = INFERENCE_RESULT__INIT;
+	res.task_type = TASK_TYPE__TASK_TYPE_CLASSIFICATION;
+	res.pts_us = pts_us;
+
+	InferenceClassificationResult cls = INFERENCE_CLASSIFICATION_RESULT__INIT;
+	InferenceClassificationEntry *entries = NULL;
+	InferenceClassificationEntry **eptrs = NULL;
+	InferenceBox *boxobjs = NULL;
+
+	if (n) {
+		if (!RC_ALLOC3(entries, eptrs, boxobjs, n)) {
+			RC_FREE3(entries, eptrs, boxobjs);
+			return -RC_EXT_EINTERNAL;
+		}
+		for (size_t i = 0; i < n; i++) {
+			InferenceClassificationEntry e = INFERENCE_CLASSIFICATION_ENTRY__INIT;
+			entries[i] = e;
+			InferenceBox *boxp = NULL;
+			if (items[i].has_box) {
+				fill_box(&boxobjs[i], items[i].x1, items[i].y1,
+					 items[i].x2, items[i].y2);
+				boxp = &boxobjs[i];
+			}
+			RC_FILL_ENTRY(entries[i], boxp, items[i].score,
+				      items[i].class_id, items[i].label);
+			eptrs[i] = &entries[i];
+		}
+	}
+
+	cls.n_entries = n;
+	cls.entries = n ? eptrs : NULL;
+	res.data_case = INFERENCE_RESULT__DATA_CLASSIFICATION;
+	res.classification = &cls;
+
+	int ret = rc_send_result(h, &res);
+
+	RC_FREE3(entries, eptrs, boxobjs);
+	return ret;
+}
+
+int rc_ext_result_send_segmentation(rc_ext_result_t *h, uint64_t pts_us,
+                                    const rc_ext_seg_t *items, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+
+	InferenceResult res = INFERENCE_RESULT__INIT;
+	res.task_type = TASK_TYPE__TASK_TYPE_SEGMENTATION;
+	res.pts_us = pts_us;
+
+	InferenceSegmentationResult seg = INFERENCE_SEGMENTATION_RESULT__INIT;
+	InferenceSegmentationEntry *entries = NULL;
+	InferenceSegmentationEntry **eptrs = NULL;
+	InferenceBox *boxobjs = NULL;
+
+	if (n) {
+		if (!RC_ALLOC3(entries, eptrs, boxobjs, n)) {
+			RC_FREE3(entries, eptrs, boxobjs);
+			return -RC_EXT_EINTERNAL;
+		}
+		for (size_t i = 0; i < n; i++) {
+			fill_box(&boxobjs[i], items[i].x1, items[i].y1, items[i].x2, items[i].y2);
+
+			InferenceSegmentationEntry e = INFERENCE_SEGMENTATION_ENTRY__INIT;
+			entries[i] = e;
+			RC_FILL_ENTRY(entries[i], &boxobjs[i], items[i].score,
+				      items[i].class_id, items[i].label);
+			if (items[i].mask && items[i].mask_w > 0 && items[i].mask_h > 0) {
+				entries[i].mask.data = (uint8_t *)items[i].mask;
+				entries[i].mask.len = (size_t)items[i].mask_w * (size_t)items[i].mask_h;
+			}
+			entries[i].mask_width = items[i].mask_w;
+			entries[i].mask_height = items[i].mask_h;
+			eptrs[i] = &entries[i];
+		}
+	}
+
+	seg.n_entries = n;
+	seg.entries = n ? eptrs : NULL;
+	res.data_case = INFERENCE_RESULT__DATA_SEGMENTATION;
+	res.segmentation = &seg;
+
+	int ret = rc_send_result(h, &res);
+
+	RC_FREE3(entries, eptrs, boxobjs);
+	return ret;
+}
+
+int rc_ext_result_send_tracking(rc_ext_result_t *h, uint64_t pts_us,
+                                const rc_ext_track_t *items, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+
+	InferenceResult res = INFERENCE_RESULT__INIT;
+	res.task_type = TASK_TYPE__TASK_TYPE_TRACKING;
+	res.pts_us = pts_us;
+
+	InferenceTrackingResult trk = INFERENCE_TRACKING_RESULT__INIT;
+	InferenceTrackingEntry *entries = NULL;
+	InferenceTrackingEntry **eptrs = NULL;
+	InferenceBox *boxobjs = NULL;
+
+	if (n) {
+		if (!RC_ALLOC3(entries, eptrs, boxobjs, n)) {
+			RC_FREE3(entries, eptrs, boxobjs);
+			return -RC_EXT_EINTERNAL;
+		}
+		for (size_t i = 0; i < n; i++) {
+			fill_box(&boxobjs[i], items[i].x1, items[i].y1, items[i].x2, items[i].y2);
+
+			InferenceTrackingEntry e = INFERENCE_TRACKING_ENTRY__INIT;
+			entries[i] = e;
+			RC_FILL_ENTRY(entries[i], &boxobjs[i], items[i].score,
+				      items[i].class_id, items[i].label);
+			entries[i].track_id = items[i].track_id;
+			eptrs[i] = &entries[i];
+		}
+	}
+
+	trk.n_entries = n;
+	trk.entries = n ? eptrs : NULL;
+	res.data_case = INFERENCE_RESULT__DATA_TRACKING;
+	res.tracking = &trk;
+
+	int ret = rc_send_result(h, &res);
+
+	RC_FREE3(entries, eptrs, boxobjs);
+	return ret;
+}
+
+int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
+                                 const rc_ext_kpinstance_t *instances, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+
+	InferenceResult res = INFERENCE_RESULT__INIT;
+	res.task_type = TASK_TYPE__TASK_TYPE_KEYPOINTS;
+	res.pts_us = pts_us;
+
+	InferenceKeypointsResult kp = INFERENCE_KEYPOINTS_RESULT__INIT;
+	InferenceKeypointInstance *insts = NULL;
+	InferenceKeypointInstance **iptrs = NULL;
+	InferenceObjectInfo *objs = NULL;
+	InferenceBox *boxobjs = NULL;
+	// One flat pool of point objects + pointer arrays, indexed per instance.
+	InferencePoint *pts = NULL;
+	InferencePoint **pptrs = NULL;
+	size_t total_pts = 0;
+	int ret;
+
+	if (n) {
+		for (size_t i = 0; i < n; i++)
+			total_pts += instances[i].n_points;
+
+		insts = (InferenceKeypointInstance *)calloc(n, sizeof(*insts));
+		iptrs = (InferenceKeypointInstance **)calloc(n, sizeof(*iptrs));
+		objs = (InferenceObjectInfo *)calloc(n, sizeof(*objs));
+		boxobjs = (InferenceBox *)calloc(n, sizeof(*boxobjs));
+		if (total_pts) {
+			pts = (InferencePoint *)calloc(total_pts, sizeof(*pts));
+			pptrs = (InferencePoint **)calloc(total_pts, sizeof(*pptrs));
+		}
+		if (!insts || !iptrs || !objs || !boxobjs ||
+		    (total_pts && (!pts || !pptrs))) {
+			ret = -RC_EXT_EINTERNAL;
+			goto cleanup;
+		}
+
+		size_t pbase = 0;
+		for (size_t i = 0; i < n; i++) {
+			InferenceKeypointInstance inst = INFERENCE_KEYPOINT_INSTANCE__INIT;
+			insts[i] = inst;
+
+			// Points for this instance.
+			size_t np = instances[i].n_points;
+			for (size_t j = 0; j < np; j++) {
+				InferencePoint p = INFERENCE_POINT__INIT;
+				pts[pbase + j] = p;
+				pts[pbase + j].x = instances[i].points[j].x;
+				pts[pbase + j].y = instances[i].points[j].y;
+				pts[pbase + j].score = instances[i].points[j].score;
+				pts[pbase + j].keypoint_id = instances[i].points[j].keypoint_id;
+				pptrs[pbase + j] = &pts[pbase + j];
+			}
+			insts[i].n_points = np;
+			insts[i].points = np ? &pptrs[pbase] : NULL;
+			pbase += np;
+
+			// Optional object_info group.
+			if (instances[i].has_box) {
+				InferenceBox b = INFERENCE_BOX__INIT;
+				boxobjs[i] = b;
+				boxobjs[i].left = instances[i].x1;
+				boxobjs[i].top = instances[i].y1;
+				boxobjs[i].right = instances[i].x2;
+				boxobjs[i].bottom = instances[i].y2;
+
+				InferenceObjectInfo oi = INFERENCE_OBJECT_INFO__INIT;
+				objs[i] = oi;
+				objs[i].class_id = instances[i].class_id;
+				objs[i].class_name =
+				    (char *)(instances[i].label ? instances[i].label : "");
+				objs[i].score = instances[i].score;
+				objs[i].box = &boxobjs[i];
+
+				insts[i].object_info_case =
+				    INFERENCE_KEYPOINT_INSTANCE__OBJECT_INFO_OBJECT;
+				insts[i].object = &objs[i];
+			}
+			iptrs[i] = &insts[i];
+		}
+	}
+
+	kp.n_instances = n;
+	kp.instances = n ? iptrs : NULL;
+	res.data_case = INFERENCE_RESULT__DATA_KEYPOINTS;
+	res.keypoints = &kp;
+
+	ret = rc_send_result(h, &res);
+
+cleanup:
+	free(insts);
+	free(iptrs);
+	free(objs);
+	free(boxobjs);
+	free(pts);
+	free(pptrs);
+	return ret;
+}
+
+void rc_ext_result_close(rc_ext_result_t *h) {
+	if (!h)
+		return;
+	if (h->fd >= 0)
+		close(h->fd);
+	free(h);
+}

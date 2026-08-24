@@ -6,6 +6,7 @@ No device, no network: FfmpegRtspSource is constructed with explicit
 width/height so it never probes the RTSP stream.
 """
 import os
+import socket
 import sys
 import tempfile
 
@@ -19,6 +20,7 @@ from kit.adapters import registry
 from kit.adapters.frame_source import FfmpegRtspSource, SnapshotSource, open_frame_source
 from kit.adapters.result_sink import StdoutSink, WsResultSink, open_result_sink
 from kit.adapters.official import OfficialFrameSource, OsdInjectResultSink
+from kit.errors import CapabilityError
 
 
 def _clear_env():
@@ -58,22 +60,28 @@ def test_no_official_selects_workaround():
 
 
 def test_simulated_official_selects_official():
-    """Fake /run/recamera/frame.sock present -> OfficialFrameSource chosen."""
+    """Unknown socket does not auto-select; explicit verified policy does."""
     _clear_env()
     with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as tf:
-        os.environ["RECAMERA_FRAME_SOCK"] = tf.name  # exists on disk now
+        os.environ["RECAMERA_FRAME_SOCK"] = tf.name  # regular file, not socket
         caps = registry.capabilities(refresh=True)
-        assert caps.frame_broker is True, caps
+        assert caps.frame_broker is False, caps
 
         src = open_frame_source(url="rtsp://x", prefer="ffmpeg")
-        assert isinstance(src, OfficialFrameSource), type(src)
-        assert src.sock == tf.name, src.sock
-        # explicit snapshot fallback is still honoured verbatim
-        snap = open_frame_source(url="rtsp://x", prefer="snapshot")
-        assert isinstance(snap, SnapshotSource), type(snap)
-        snap.close()
-        print("PASS test_simulated_official_selects_official "
-              f"(OfficialFrameSource, sock={tf.name})")
+        assert isinstance(src, FfmpegRtspSource), type(src)
+        src.close()
+
+    os.environ.pop("RECAMERA_FRAME_SOCK", None)
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+    src = open_frame_source(url="rtsp://x", prefer="ffmpeg")
+    assert isinstance(src, OfficialFrameSource), type(src)
+    assert src.sock == "/run/recamera/frame.sock", src.sock
+    # explicit snapshot fallback is still honoured verbatim
+    snap = open_frame_source(url="rtsp://x", prefer="snapshot")
+    assert isinstance(snap, SnapshotSource), type(snap)
+    snap.close()
+    print("PASS test_simulated_official_selects_official "
+          "(unknown endpoint fails closed; explicit policy selects official)")
 
 
 def test_result_sink_defaults_to_ws_even_when_socket_present():
@@ -86,8 +94,11 @@ def test_result_sink_defaults_to_ws_even_when_socket_present():
     """
     _clear_env()
     os.environ["RECAMERA_FRAME_SOCK"] = "/nonexistent/frame.sock.absent"
-    with tempfile.NamedTemporaryFile(prefix="result-in-", suffix=".sock") as tf:
-        os.environ["RECAMERA_RESULT_SOCK"] = tf.name  # socket EXISTS on disk
+    with tempfile.TemporaryDirectory(prefix="result-in-") as directory:
+        endpoint = os.path.join(directory, "result-in.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(endpoint)
+        os.environ["RECAMERA_RESULT_SOCK"] = endpoint
         caps = registry.capabilities(refresh=True)
         assert caps.result_ingress is True, caps      # probe sees it...
 
@@ -98,13 +109,18 @@ def test_result_sink_defaults_to_ws_even_when_socket_present():
 
         # Explicit opt-in via RECAMERA_RESULT_OSD flips it to OSD burn-in.
         os.environ["RECAMERA_RESULT_OSD"] = "1"
-        osd = open_result_sink("ws", host="127.0.0.1", port=0, app_id="t")
-        assert isinstance(osd, OsdInjectResultSink), type(osd)
+        try:
+            open_result_sink("ws", host="127.0.0.1", port=0, app_id="t")
+            raise AssertionError("native custom result endpoint must be rejected")
+        except CapabilityError:
+            pass
         os.environ.pop("RECAMERA_RESULT_OSD", None)
 
-        # kind="osd" forces burn-in without any env.
-        osd2 = open_result_sink("osd", app_id="t")
-        assert isinstance(osd2, OsdInjectResultSink), type(osd2)
+        server.close()
+    os.environ.pop("RECAMERA_RESULT_SOCK", None)
+    # kind="osd" forces the canonical native endpoint without any env.
+    osd2 = open_result_sink("osd", app_id="t")
+    assert isinstance(osd2, OsdInjectResultSink), type(osd2)
     print("PASS test_result_sink_defaults_to_ws_even_when_socket_present "
           "(default WS; RECAMERA_RESULT_OSD / kind='osd' opt in to OSD)")
 

@@ -62,6 +62,7 @@ import os
 from ctypes import (
     Structure,
     c_char,
+    c_char_p,
     c_double,
     c_int,
     c_void_p,
@@ -84,6 +85,8 @@ IM_STATUS_SUCCESS = 1
 # blob keeps the ctypes ABI (by-value arg and sret return) correct regardless of
 # the exact field layout, which has drifted between librga releases.
 _RGA_BUFFER_SIZE = 96
+_RGA_INFORMATION_VERSION = 1
+_VERIFIED_API_VERSION = "1.10.5_[11]"
 
 
 class _rga_buffer_t(Structure):
@@ -109,7 +112,22 @@ class _im_rect(Structure):
 
 
 def _load_librga() -> Optional[ctypes.CDLL]:
-    candidates = ["librga.so.2", "librga.so", "librga.so.1"]
+    # The RV1126B firmware keeps Rockchip media libraries in the immutable OEM
+    # tree.  A normal interactive/system Python process deliberately has no
+    # LD_LIBRARY_PATH, so a bare ``ctypes.CDLL("librga.so")`` cannot discover
+    # the shipped library even though the public RgaContext capability is
+    # installed.  Probe the platform-owned absolute path first; keep the
+    # soname/find_library fallbacks for host tests and alternate deployments.
+    # The querystring ABI gate in RgaNV12ToRGB still runs before any unsafe
+    # by-value rga_buffer_t signature is bound.
+    candidates = [
+        "/oem/usr/lib/librga.so",
+        "/oem/usr/lib/librga.so.2",
+        "/oem/usr/lib/librga.so.1",
+        "librga.so.2",
+        "librga.so",
+        "librga.so.1",
+    ]
     for cand in candidates:
         try:
             return ctypes.CDLL(cand)
@@ -139,6 +157,33 @@ class RgaNV12ToRGB:
         lib = _load_librga()
         if lib is None:
             raise OSError("librga.so not found")
+        # The functions below return/pass rga_buffer_t by value.  Binding them
+        # against a library with a differently-sized struct can corrupt memory
+        # before Python has an exception to catch.  querystring(int) is a
+        # stable scalar/pointer call, so use it as a fail-closed ABI gate before
+        # assigning any by-value signatures.  This SDK ships and verifies the
+        # 1.10.5_[11], 96-byte aarch64 ABI only; a different build needs a
+        # compiled C shim built against that build's own headers.
+        query = getattr(lib, "querystring", None)
+        if query is None:
+            raise RuntimeError(
+                "librga has no querystring ABI probe; refusing unsafe ctypes binding")
+        query.restype = c_char_p
+        query.argtypes = [c_int]
+        raw_version = query(_RGA_INFORMATION_VERSION)
+        try:
+            version_info = (raw_version or b"").decode("utf-8", "replace")
+        except AttributeError as exc:
+            raise RuntimeError("librga returned an invalid version string") from exc
+        expected = f"RGA_api version       : v{_VERIFIED_API_VERSION}"
+        if expected not in version_info:
+            compact_expected = f"v{_VERIFIED_API_VERSION}"
+            if compact_expected not in version_info:
+                raise RuntimeError(
+                    "unsupported librga ctypes ABI; expected "
+                    f"{_VERIFIED_API_VERSION}/rga_buffer_t={_RGA_BUFFER_SIZE}, "
+                    f"probe returned {version_info!r}")
+        self.version_info = version_info
         # NO importbuffer_fd / releasebuffer_handle: on this librga
         # importbuffer_fd takes an im_handle_param_t* (not (int fd, int size)),
         # and mixing an imported handle with a virtual address in one op is
@@ -198,6 +243,17 @@ class RgaNV12ToRGB:
         possible before committing an app to the ``hw-roi`` frame mode; a False
         keeps it on the numpy crop with no error."""
         return self._improcess is not None
+
+    def can_resize(self) -> bool:
+        """Return whether this librga build exports ``imresize_t``.
+
+        ``resize_nv12_to_rgb`` remains present on the Python object for API
+        compatibility even when an older device library lacks the native
+        symbol.  Callers therefore must query this method instead of treating
+        Python method presence as proof of hardware support.
+        """
+
+        return self._resize is not None
 
     def convert(self, fd: int, width: int, height: int,
                 y_stride: int, y_vstride: int) -> np.ndarray:

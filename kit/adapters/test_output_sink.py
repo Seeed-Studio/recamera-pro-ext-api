@@ -302,9 +302,14 @@ def test_ws_channel_preserves_envelope():
 # --------------------------------------------------------------------------- #
 # 8. HTTP local test server
 # --------------------------------------------------------------------------- #
-def test_http_channel_posts_to_local_server():
+def test_http_channel_posts_to_local_server(monkeypatch):
     from http.server import BaseHTTPRequestHandler, HTTPServer
     received = {}
+
+    # The host may define a corporate HTTP proxy without a NO_PROXY entry.
+    # This test exercises a loopback transport and must never leave the host.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):  # silence

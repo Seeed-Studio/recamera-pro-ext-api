@@ -41,12 +41,17 @@ import io
 import logging
 import os
 import re
+import threading
 import time
 import wave
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 
+from kit.errors import InferenceError
+from kit.resources import ExternalNpuLease
+from kit.runtime.engine import ModelSpec, TensorSpec
+from kit.runtime.remote import RemoteRknnSession, configured_inference_socket
 from voxedge.backends.base import (
     ASRBackend,
     ASRCapability,
@@ -58,8 +63,10 @@ logger = logging.getLogger(__name__)
 # Decode constants -- identical to the verified device scripts.
 # Dual-tier windows: a VAD segment whose LFR frame count (incl. 4 prompt frames)
 # fits in T_SHORT is routed to the small T=100 encoder (~350ms); anything longer
-# uses the production T=344 encoder (~1000ms). Both are w4a16, single-input, with
-# the pad-mask baked as a constant, so the exact same decode applies to either.
+# uses the production T=344 encoder (~1000ms). Both are w4a16 and single-input.
+# Their fixed graphs treat all physical T frames as valid: zero padding is seen
+# by encoder attention, while ``valid`` only limits the CTC rows decoded below.
+# A short tier therefore reduces (but does not semantically mask) padding.
 T_SHORT = 100
 T_LONG = 344
 T_FIXED = T_LONG  # back-compat alias (>T_LONG segments are still truncated to T_LONG)
@@ -74,6 +81,49 @@ DEFAULT_RKNN_SHORT_NAME = "sensevoice_rv1126b_w4a16_t100.rknn"  # T=100 (short t
 DEFAULT_CMVN_NAME = "am.mvn"
 DEFAULT_EMB_NAME = "embedding.npy"
 DEFAULT_BPE_NAME = "chn_jpn_yue_eng_ko_spectok.bpe.model"
+
+# Mirrors RknnSession's fail-closed release quarantine.  This is not another
+# ownership mechanism: it only keeps the existing ExternalNpuLease and any
+# uncertain native contexts strongly reachable when destruction fails.  That
+# prevents their finalizers from releasing the one broker generation while a
+# caller catches an initialization error and keeps the process alive.
+_RELEASE_QUARANTINE: dict[object, tuple[tuple[Any, ...], Any, str]] = {}
+
+
+class _RemoteServiceGuard:
+    """Lease-shaped adapter for a model already fenced by inferenced.
+
+    The actual connection-lifetime NPU lease belongs to the platform daemon.
+    Voice keeps its model RPC connections in ``_owned_runtimes``; this guard
+    only lets the existing exact-once lifecycle stay shared between local and
+    remote backends without acquiring a second, conflicting broker lease.
+    """
+
+    def acquire(self, timeout=None):
+        return self
+
+    def ready(self) -> None:
+        return None
+
+    def alive(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        return None
+
+
+def _new_voice_npu_lease():
+    """Build the one process-shared broker lease used by the RK ASR backend.
+
+    ``ExternalNpuLease`` is broker-first and already enforces
+    ``RECAMERA_NPU_BROKER_REQUIRED=1``: a legacy ``RECAMERA_NPU_LOCK`` override
+    is rejected rather than silently selecting flock.  Its process-global
+    reference counting also lets two backend objects share one native broker
+    connection without inventing a Voice-specific lock or lease protocol.
+    """
+
+    return ExternalNpuLease(
+        app_id=os.environ.get("RECAMERA_APP_ID") or "voice-transcribe")
 
 
 # ── frontend (fbank + LFR + CMVN + prompt) ───────────────────────────────────
@@ -112,7 +162,8 @@ def _apply_lfr(feats: np.ndarray, m: int = 7, n: int = 6) -> np.ndarray:
 
 
 def _load_cmvn(path: str) -> tuple[np.ndarray, np.ndarray]:
-    txt = open(path).read()
+    with open(path, encoding="utf-8") as fh:
+        txt = fh.read()
     vals = [np.array(b.split(), dtype=np.float32)
             for b in re.findall(r"\[([^\]]*)\]", txt)]
     big = [v for v in vals if v.size == LFR_DIM]
@@ -141,7 +192,14 @@ class RknnSenseVoiceBackend(ASRBackend):
         language: str = "auto",
         textnorm: str = "withitn",
         debug: bool = False,
+        lease=None,
+        lease_factory: Optional[Callable[[], Any]] = None,
+        lease_timeout: Optional[float] = 30.0,
+        runtime_factory: Optional[Callable[[], Any]] = None,
+        sentencepiece_factory: Optional[Callable[[], Any]] = None,
     ):
+        if lease is not None and lease_factory is not None:
+            raise ValueError("pass lease or lease_factory, not both")
         self._rknn_model = rknn_model              # T=344 (long / production)
         self._rknn_model_short = rknn_model_short  # T=100 (short) -- optional
         self._cmvn_path = cmvn_path
@@ -150,7 +208,40 @@ class RknnSenseVoiceBackend(ASRBackend):
         self._language = (language or "auto")
         self._textnorm = textnorm
         self._debug = bool(debug)
+        self._lease_factory = ((lambda: lease) if lease is not None
+                               else (lease_factory or _new_voice_npu_lease))
+        self._lease_timeout = lease_timeout
+        self._runtime_factory = runtime_factory
+        self._sentencepiece_factory = sentencepiece_factory
+        service = configured_inference_socket()
+        # Explicit test/vendor injections retain the local backend.  A managed
+        # production process has no such injection and is routed entirely
+        # through the appmgr-authorized service endpoint.
+        self._inference_service = (
+            service
+            if service and lease is None and lease_factory is None
+            and runtime_factory is None
+            else None
+        )
+        if self._inference_service:
+            self._lease_factory = _RemoteServiceGuard
+        # RKNNLite contexts are not safe to infer and destroy concurrently.
+        # Serialize inference calls and let unload() drain the active call
+        # before touching either native context or the broker lease.
+        self._lifecycle = threading.Condition(threading.RLock())
+        self._infer_active = False
+        self._infer_owner = None
+        self._closing = False
+        self._closing_owner = None
         # populated in preload()
+        self._lease = None
+        self._lease_ready = False
+        self._release_failed = False
+        self._quarantine_key = object()
+        # A runtime is registered here immediately after construction, before
+        # load_rknn/init_runtime.  That makes a BaseException at either native
+        # step rollback-able even though _load_one never returned the handle.
+        self._owned_runtimes = []
         self._rknn = None        # long (T=344) handle
         self._rknn_short = None   # short (T=100) handle, or None -> single-tier
         self._sp = None
@@ -176,57 +267,314 @@ class RknnSenseVoiceBackend(ASRBackend):
         return 16000
 
     def is_ready(self) -> bool:
-        return self._rknn is not None and self._sp is not None
+        with self._lifecycle:
+            return (not self._release_failed and not self._closing
+                    and self._lease is not None and self._lease_ready
+                    and self._rknn is not None and self._sp is not None)
 
     def preload(self) -> None:
-        """Load CMVN / embeddings / sentencepiece + init the NPU runtime once."""
+        """Load assets and RKNN contexts as one broker-owned transaction.
+
+        CPU-side assets are validated first so a missing BPE/CMVN file never
+        pauses the built-in detector.  The external lease is then acquired
+        *before* constructing any RKNNLite object.  READY is emitted only after
+        every required initialization step succeeds (the optional short tier
+        may explicitly degrade after its partial context has been released).
+        """
+
+        thread_id = threading.get_ident()
+        with self._lifecycle:
+            while self._closing:
+                if (self._closing_owner == thread_id
+                        or self._infer_owner == thread_id):
+                    raise InferenceError(
+                        "RK ASR preload cannot wait from an active inference "
+                        "or its own unload",
+                        operation="asr.preload",
+                        code="reentrant_preload",
+                    )
+                self._lifecycle.wait()
+            self._preload_locked()
+
+    def _preload_locked(self) -> None:
+        """Preload implementation executed while holding ``_lifecycle``."""
+
+        if self.is_ready():
+            return
+        if self._lease is not None or self._owned_runtimes or self._release_failed:
+            raise RuntimeError(
+                "RknnSenseVoiceBackend has an incomplete/quarantined lifecycle; "
+                "call unload() successfully before preload()")
+
+        cmvn_add, cmvn_scale = _load_cmvn(self._cmvn_path)
+        emb = np.load(self._embedding_path)
+        if self._sentencepiece_factory is None:
+            import sentencepiece as spm
+            sp = spm.SentencePieceProcessor()
+        else:
+            sp = self._sentencepiece_factory()
+        if sp.load(self._bpe_path) is False:
+            raise RuntimeError(f"sentencepiece load failed: {self._bpe_path}")
+
+        try:
+            # Store the object before acquire: a custom lease that obtains the
+            # resource and then raises still receives an idempotent release in
+            # _rollback_initialization(), matching RknnSession's contract.
+            self._lease = self._lease_factory()
+            self._lease.acquire(timeout=self._lease_timeout)
+
+            t0 = time.time()
+            self._rknn = self._load_one(
+                self._rknn_model, frames=T_LONG)  # T=344 (required)
+
+            # T=100 is optional.  A normal Exception degrades only after every
+            # partially-created short-tier handle is destroyed.  A
+            # BaseException escapes to the outer transaction and tears down
+            # the long context + lease as well.
+            if self._rknn_model_short and os.path.exists(self._rknn_model_short):
+                mark = len(self._owned_runtimes)
+                try:
+                    self._rknn_short = self._load_one(
+                        self._rknn_model_short, frames=T_SHORT)
+                except Exception:
+                    self._release_owned_from(mark)
+                    logger.exception(
+                        "short-tier T=%d load failed; using long tier only",
+                        T_SHORT)
+                    self._rknn_short = None
+            load_sec = time.time() - t0
+
+            self._cmvn_add, self._cmvn_scale = cmvn_add, cmvn_scale
+            self._emb = emb
+            self._sp = sp
+
+            # ExternalNpuLease itself coalesces READY across process-shared
+            # references; this backend also calls it exactly once per successful
+            # preload transaction.
+            self._lease.ready()
+            self._lease_ready = True
+
+            logger.info("RknnSenseVoiceBackend loaded (%.2fs) long=%s short=%s",
+                        load_sec, os.path.basename(self._rknn_model),
+                        os.path.basename(self._rknn_model_short)
+                        if self._rknn_short else "(none)")
+        except BaseException:
+            self._rollback_initialization()
+            raise
+
+    def _new_runtime(self):
+        if self._runtime_factory is not None:
+            return self._runtime_factory()
         from rknnlite.api import RKNNLite
-        import sentencepiece as spm
+        return RKNNLite(verbose=False)
 
-        self._cmvn_add, self._cmvn_scale = _load_cmvn(self._cmvn_path)
-        self._emb = np.load(self._embedding_path)
+    def _load_one(self, path: str, *, frames: int):
+        """Create/load/init one context while the already-held lease fences it."""
 
-        def _load_one(path: str) -> "RKNNLite":
-            r = RKNNLite(verbose=False)
-            if r.load_rknn(path) != 0:
-                raise RuntimeError(f"load_rknn failed: {path}")
-            # rv1126b is SINGLE-CORE: init_runtime() takes NO core_mask (the
-            # NPU_CORE_0 mask used on rk3576/3588 errors here).
-            if r.init_runtime() != 0:
-                raise RuntimeError(f"init_runtime failed (rv1126b: no core_mask): {path}")
-            return r
+        if self._lease is None:
+            raise RuntimeError("internal error: RKNN construction without NPU lease")
+        if self._inference_service:
+            # SenseVoice's encoder input is already batched [N,T,F].  The
+            # permissive RemoteRknnModel compatibility wrapper treats an
+            # untyped rank-3 value as a legacy HWC image, adds another batch
+            # dimension and casts float features to uint8.  Declare the exact
+            # sequence contract so validation preserves 3-D float32 bytes on
+            # the wire for both fixed-shape encoder tiers.
+            spec = ModelSpec(
+                path=path,
+                name="sensevoice-encoder",
+                inputs=(TensorSpec(
+                    "speech",
+                    (1, int(frames), LFR_DIM),
+                    "float32",
+                    "NTF",
+                ),),
+            )
+            memory_mb = 128 if frames == T_SHORT else 256
+            runtime = RemoteRknnSession(
+                spec,
+                socket_path=self._inference_service,
+                memory_mb=memory_mb,
+                priority=60,
+            )
+            self._owned_runtimes.append(runtime)
+            return runtime
+        r = self._new_runtime()
+        self._owned_runtimes.append(r)
+        if r.load_rknn(path) != 0:
+            raise RuntimeError(f"load_rknn failed: {path}")
+        # rv1126b is SINGLE-CORE: init_runtime() takes NO core_mask (the
+        # NPU_CORE_0 mask used on rk3576/3588 errors here).
+        if r.init_runtime() != 0:
+            raise RuntimeError(
+                f"init_runtime failed (rv1126b: no core_mask): {path}")
+        return r
 
-        t0 = time.time()
-        self._rknn = _load_one(self._rknn_model)           # T=344 (always)
-        # T=100 short tier -- optional; if it fails we degrade to single-tier.
-        if self._rknn_model_short and os.path.exists(self._rknn_model_short):
+    @staticmethod
+    def _release_runtime(runtime) -> None:
+        result = runtime.release()
+        if result not in (None, 0):
+            raise RuntimeError(
+                f"RKNNLite.release returned non-zero status {result!r}")
+
+    def _release_owned_from(self, start: int) -> None:
+        """Release owned contexts in reverse order, retaining failed handles.
+
+        If any native destroy fails the caller must retain the lease.  Successful
+        handles are removed, failed/uncertain ones stay in ``_owned_runtimes`` so
+        a later explicit unload can retry without falsely unlocking the NPU.
+        """
+
+        first_error = None
+        targets = list(self._owned_runtimes[start:])
+        for runtime in reversed(targets):
             try:
-                self._rknn_short = _load_one(self._rknn_model_short)
-            except Exception:
-                logger.exception("short-tier T=%d load failed; using long tier only",
-                                 T_SHORT)
+                self._release_runtime(runtime)
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = (exc, exc.__traceback__)
+                logger.critical(
+                    "RKNN runtime release failed; retaining NPU lease",
+                    exc_info=True)
+                continue
+            try:
+                self._owned_runtimes.remove(runtime)
+            except ValueError:
+                pass
+            if self._rknn is runtime:
+                self._rknn = None
+            if self._rknn_short is runtime:
                 self._rknn_short = None
-        load_sec = time.time() - t0
+        if first_error is not None:
+            self._quarantine_release()
+            exc, tb = first_error
+            raise exc.with_traceback(tb)
 
-        sp = spm.SentencePieceProcessor()
-        sp.load(self._bpe_path)
-        self._sp = sp
-        logger.info("RknnSenseVoiceBackend loaded (%.2fs) long=%s short=%s",
-                    load_sec, os.path.basename(self._rknn_model),
-                    os.path.basename(self._rknn_model_short) if self._rknn_short else "(none)")
+    def _quarantine_release(self) -> None:
+        _RELEASE_QUARANTINE[self._quarantine_key] = (
+            tuple(self._owned_runtimes), self._lease, self._rknn_model)
+
+    def _clear_release_quarantine(self) -> None:
+        _RELEASE_QUARANTINE.pop(self._quarantine_key, None)
+
+    def _clear_cpu_assets(self) -> None:
+        self._sp = None
+        self._cmvn_add = None
+        self._cmvn_scale = None
+        self._emb = None
+
+    def _rollback_initialization(self) -> None:
+        """Best-effort rollback which never masks the initialization error."""
+
+        try:
+            self._release_owned_from(0)
+        except BaseException:
+            self._release_failed = True
+            logger.critical(
+                "RK ASR initialization rollback could not destroy every RKNN "
+                "context; NPU lease remains held fail-closed",
+                exc_info=True)
+            return
+
+        self._clear_cpu_assets()
+        lease = self._lease
+        if lease is not None:
+            try:
+                lease.release()
+            except BaseException:
+                self._release_failed = True
+                self._quarantine_release()
+                logger.critical(
+                    "RK ASR initialization rollback could not release NPU lease",
+                    exc_info=True)
+                return
+        self._lease = None
+        self._lease_ready = False
+        self._release_failed = False
+        self._clear_release_quarantine()
 
     def unload(self) -> None:
-        for attr in ("_rknn", "_rknn_short"):
-            r = getattr(self, attr, None)
-            if r is not None:
+        """Destroy every RKNN context, then release the shared lease once.
+
+        Idempotent after success.  A native release failure is deliberately
+        fail-closed: the live/uncertain context and lease are retained and the
+        exception is surfaced so a later call may retry.
+        """
+
+        thread_id = threading.get_ident()
+        with self._lifecycle:
+            if (self._lease is None and not self._owned_runtimes
+                    and not self._release_failed):
+                return
+            if self._infer_owner == thread_id:
+                raise InferenceError(
+                    "inference cannot unload its own active RK ASR context",
+                    operation="asr.unload",
+                    code="reentrant_release",
+                )
+            while self._closing:
+                if self._closing_owner == thread_id:
+                    raise InferenceError(
+                        "RK ASR unload cannot recursively wait for itself",
+                        operation="asr.unload",
+                        code="reentrant_release",
+                    )
+                self._lifecycle.wait()
+                if (self._lease is None and not self._owned_runtimes
+                        and not self._release_failed):
+                    return
+            self._closing = True
+            self._closing_owner = thread_id
+            self._lifecycle.notify_all()
+            try:
+                while self._infer_active:
+                    self._lifecycle.wait()
+            except BaseException:
+                self._closing = False
+                self._closing_owner = None
+                self._lifecycle.notify_all()
+                raise
+
+        try:
+            self._release_owned_from(0)
+            self._rknn = None
+            self._rknn_short = None
+            self._clear_cpu_assets()
+            lease = self._lease
+            if lease is not None:
                 try:
-                    r.release()
-                except Exception:
-                    logger.exception("RKNNLite.release failed (%s); continuing", attr)
-                setattr(self, attr, None)
-        self._sp = None
+                    lease.release()
+                except BaseException:
+                    self._quarantine_release()
+                    logger.critical(
+                        "RK ASR NPU lease release failed", exc_info=True)
+                    raise
+        except BaseException:
+            with self._lifecycle:
+                self._release_failed = True
+                self._closing = False
+                self._closing_owner = None
+                self._lifecycle.notify_all()
+            raise
+
+        with self._lifecycle:
+            self._lease = None
+            self._lease_ready = False
+            self._release_failed = False
+            self._closing = False
+            self._closing_owner = None
+            self._lifecycle.notify_all()
+        self._clear_release_quarantine()
         import gc
         gc.collect()
+
+    def __del__(self) -> None:
+        try:
+            self.unload()
+        except BaseException:
+            # Explicit unload is the observable error path.  On process death
+            # the broker connection itself still supplies crash-safe HUP cleanup.
+            pass
 
     def transcribe(self, audio_bytes: bytes, language: str = "auto") -> TranscriptionResult:
         """One-shot offline transcription of WAV bytes (satisfies the ABC)."""
@@ -236,8 +584,77 @@ class RknnSenseVoiceBackend(ASRBackend):
         return self.transcribe_array(audio, language)
 
     def transcribe_array(self, samples: np.ndarray, language: str = "auto") -> TranscriptionResult:
-        if self._rknn is None or self._sp is None:
-            raise RuntimeError("RknnSenseVoiceBackend not loaded; call preload() first")
+        thread_id = threading.get_ident()
+        try:
+            with self._lifecycle:
+                if self._infer_owner == thread_id:
+                    raise InferenceError(
+                        "recursive inference on one RK ASR context is unsupported",
+                        operation="asr.infer",
+                        code="reentrant_inference",
+                    )
+                while self._infer_active and not self._closing:
+                    self._lifecycle.wait()
+                if self._release_failed:
+                    raise InferenceError(
+                        "cannot infer with a quarantined RK ASR context",
+                        operation="asr.infer",
+                        code="session_quarantined",
+                    )
+                if self._closing:
+                    raise InferenceError(
+                        "cannot infer while the RK ASR context is closing",
+                        operation="asr.infer",
+                        code="session_closing",
+                    )
+                if self._rknn is None or self._sp is None:
+                    raise RuntimeError(
+                        "RknnSenseVoiceBackend not loaded; call preload() first")
+                self._ensure_lease_alive()
+                self._infer_active = True
+                self._infer_owner = thread_id
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                raise
+            # If a signal/control-flow exception interrupts broker admission,
+            # no inference is active, so teardown can proceed immediately.
+            try:
+                self.unload()
+            except BaseException:
+                logger.critical(
+                    "RK ASR cleanup failed while preserving admission "
+                    "control-flow exception",
+                    exc_info=True)
+            raise
+
+        control_flow = False
+        try:
+            return self._transcribe_array_impl(samples, language)
+        except BaseException as exc:
+            control_flow = not isinstance(exc, Exception)
+            raise
+        finally:
+            with self._lifecycle:
+                self._infer_active = False
+                self._infer_owner = None
+                self._lifecycle.notify_all()
+            if control_flow:
+                # Leave the active region before unload() waits/drains.  This
+                # preserves the original control-flow exception and never
+                # destroys a native context underneath RKNNLite.inference().
+                try:
+                    self.unload()
+                except BaseException:
+                    logger.critical(
+                        "RK ASR cleanup failed while preserving inference "
+                        "control-flow exception",
+                        exc_info=True)
+
+    def _transcribe_array_impl(
+        self, samples: np.ndarray, language: str = "auto"
+    ) -> TranscriptionResult:
+        """Inference body protected by the lifecycle admission barrier."""
+
         lang = self._resolve_lang(language)
         audio = np.ascontiguousarray(samples, dtype=np.float32)
 
@@ -250,13 +667,46 @@ class RknnSenseVoiceBackend(ASRBackend):
             rk, T, tier = self._rknn, T_LONG, "long"
 
         speech, valid = self._pad(sp_in, T)
-        out = rk.inference(inputs=[speech.astype(np.float32)])
+        input_tensor = speech.astype(np.float32)
+        if self._inference_service:
+            out = rk.infer(input_tensor)
+        else:
+            out = rk.inference(inputs=[input_tensor])
         logits = np.asarray(out[0][0])[:valid]
 
         text, detected = self._ctc_decode(logits)
         logger.info("ASR route: tier=%s frames=%d T=%d valid=%d text=%r",
                     tier, n, T, valid, text[:48])
-        return TranscriptionResult(text=text, language=detected or (lang if lang != "auto" else ""))
+        reported_language = detected or (lang if lang != "auto" else "")
+        return TranscriptionResult(text=text, language=reported_language)
+
+    def _ensure_lease_alive(self) -> None:
+        lease = self._lease
+        if lease is None or not self._lease_ready:
+            raise InferenceError(
+                "RK ASR inference has no ready NPU lease",
+                operation="asr.infer.lease",
+                code="npu_lease_not_acquired",
+                details={"model": self._rknn_model},
+            )
+        try:
+            is_alive = lease.alive()
+        except Exception as exc:
+            raise InferenceError(
+                f"could not verify RK ASR NPU lease liveness: {exc}",
+                operation="asr.infer.lease",
+                code="npu_lease_check_failed",
+                retryable=True,
+                details={"model": self._rknn_model},
+            ) from exc
+        if is_alive is not True:
+            raise InferenceError(
+                "rkipc revoked the RK ASR NPU ownership generation",
+                operation="asr.infer.lease",
+                code="npu_lease_revoked",
+                retryable=False,
+                details={"model": self._rknn_model},
+            )
 
     # -- decode internals ---------------------------------------------------- #
     def _resolve_lang(self, requested: str) -> str:
@@ -375,7 +825,8 @@ def _resolve_assets(model: Optional[str]) -> dict:
 
 
 def build_rknn_backend(model: Optional[str] = None, tokens: Optional[str] = None,
-                       *, language: str = "auto", debug: bool = False,
+                       *, language: str = "auto", use_itn: bool = True,
+                       debug: bool = False,
                        **_kw) -> RknnSenseVoiceBackend:
     """Construct + preload the NPU backend. Called by ``kit.asr.Asr(backend='rk')``.
 
@@ -383,6 +834,12 @@ def build_rknn_backend(model: Optional[str] = None, tokens: Optional[str] = None
     the sentencepiece bpe model resolved alongside the rknn model.
     """
     assets = _resolve_assets(model)
-    b = RknnSenseVoiceBackend(language=language, debug=debug, **assets)
+    textnorm = "withitn" if bool(use_itn) else "woitn"
+    b = RknnSenseVoiceBackend(
+        language=language,
+        textnorm=textnorm,
+        debug=debug,
+        **assets,
+    )
     b.preload()
     return b

@@ -16,10 +16,10 @@ look fine on a dev box (RUNTIME_BUNDLE_SPEC §5):
     whose dependency is not on LD_LIBRARY_PATH -- so "the .so is on disk" can
     never be enough to make these tests pass.
   * APPEND IS NOT ASSIGN. `export LD_LIBRARY_PATH=/userdata/lib` wipes the
-    device's /oem/usr/lib:/oem/lib and librockchip_mpp.so.1 stops resolving --
-    observed on device, which is why there is an explicit assertion that
-    /oem/usr/lib survives injection, and another that a second injection does not
-    grow the variable.
+    device's ordered /usr/lib:/oem/usr/lib:/oem/lib base and
+    librockchip_mpp.so.1 stops resolving -- observed on device, which is why
+    there is an explicit assertion that the system/OEM order survives injection,
+    and another that a second injection does not grow the variable.
   * ONLY THE DECLARING APP. GST_PLUGIN_PATH on all nine vision apps would make a
     plugin problem everyone's problem. The supervisor test at the bottom launches
     two real processes -- one manifest declaring `hwcodec`, one not -- and reads
@@ -351,7 +351,7 @@ class EnvMergeTests(HwcodecTestBase):
 
     def test_env_goes_to_the_app_that_declares_the_capability(self):
         self._install()
-        env = {"LD_LIBRARY_PATH": "/oem/usr/lib:/oem/lib"}
+        env = {"LD_LIBRARY_PATH": "/usr/lib:/oem/usr/lib:/oem/lib"}
         applied = voiceruntime.apply_runtime_env(env, ["hwcodec"])
         self.assertEqual(applied, ["hwcodec"])
         self.assertEqual(env["GST_PLUGIN_PATH"],
@@ -362,36 +362,36 @@ class EnvMergeTests(HwcodecTestBase):
     def test_env_is_untouched_for_an_app_that_does_not_declare_it(self):
         self._install()
         for caps in ([], None, ["audio"], ["vision"]):
-            env = {"LD_LIBRARY_PATH": "/oem/usr/lib:/oem/lib"}
+            env = {"LD_LIBRARY_PATH": "/usr/lib:/oem/usr/lib:/oem/lib"}
             before = dict(env)
             self.assertEqual(voiceruntime.apply_runtime_env(env, caps), [])
             self.assertEqual(env, before, f"caps={caps!r} changed the environment")
 
     def test_absent_runtime_injects_nothing_and_does_not_raise(self):
         """No bundle installed: the app must still be launchable."""
-        env = {"LD_LIBRARY_PATH": "/oem/usr/lib:/oem/lib"}
+        env = {"LD_LIBRARY_PATH": "/usr/lib:/oem/usr/lib:/oem/lib"}
         before = dict(env)
         self.assertEqual(voiceruntime.apply_runtime_env(env, ["hwcodec"]), [])
         self.assertEqual(env, before)
 
-    def test_append_keeps_the_oem_lib_dirs(self):
-        """The device bug this exists for: assigning LD_LIBRARY_PATH drops
-        /oem/usr/lib and librockchip_mpp.so.1 stops resolving."""
+    def test_append_keeps_system_first_and_oem_dirs(self):
+        """Appending preserves system-first order and OEM-only MPP lookup."""
         self._install()
-        env = {"LD_LIBRARY_PATH": "/oem/usr/lib:/oem/lib"}
+        env = {"LD_LIBRARY_PATH": "/usr/lib:/oem/usr/lib:/oem/lib"}
         voiceruntime.apply_runtime_env(env, ["hwcodec"])
         parts = env["LD_LIBRARY_PATH"].split(os.pathsep)
+        self.assertIn("/usr/lib", parts)
         self.assertIn("/oem/usr/lib", parts)
         self.assertIn("/oem/lib", parts)
         self.assertIn(self.dest, parts)
         # order matters: the pre-existing entries stay in front
-        self.assertEqual(parts[:2], ["/oem/usr/lib", "/oem/lib"])
+        self.assertEqual(parts[:3], ["/usr/lib", "/oem/usr/lib", "/oem/lib"])
 
     def test_append_is_deduped(self):
         """Re-applying must not grow the variable -- a restart loop would
         otherwise build an ever-longer LD_LIBRARY_PATH."""
         self._install()
-        env = {"LD_LIBRARY_PATH": "/oem/usr/lib:/oem/lib"}
+        env = {"LD_LIBRARY_PATH": "/usr/lib:/oem/usr/lib:/oem/lib"}
         voiceruntime.apply_runtime_env(env, ["hwcodec"])
         once = env["LD_LIBRARY_PATH"]
         voiceruntime.apply_runtime_env(env, ["hwcodec"])
@@ -433,8 +433,8 @@ class SupervisorInjectionTests(HwcodecTestBase):
     """End to end: what the launched PROCESS actually got in its environment.
 
     Asserting on apply_runtime_env() alone would not catch supervisor forgetting
-    to call it, or calling it before it sets LD_LIBRARY_PATH (which would drop
-    /oem/usr/lib again). So these two apps are really launched.
+    to call it, or constructing the base LD_LIBRARY_PATH in the wrong order.
+    So these two apps are really launched.
     """
 
     def setUp(self):
@@ -475,7 +475,11 @@ class SupervisorInjectionTests(HwcodecTestBase):
         # tests assert on the injected ENVIRONMENT, not on lifecycle.
         supervisor.start(app_id, wait_ready=False)
         deadline = time.time() + 10
-        while time.time() < deadline and not os.path.isfile(dump):
+        # The shell creates ``env.dump`` as soon as redirection is opened, then
+        # writes it incrementally.  Waiting for pathname existence alone races
+        # the writer and can observe only the first few variables.  The process
+        # exit is the completion barrier for both the write and close.
+        while time.time() < deadline and supervisor.is_running(app_id):
             time.sleep(0.05)
         supervisor.reap_children()
         self.assertTrue(os.path.isfile(dump), "app never wrote its environment")
@@ -496,9 +500,12 @@ class SupervisorInjectionTests(HwcodecTestBase):
                          os.path.join(self.ud, "gst-registry.bin"))
         parts = env["LD_LIBRARY_PATH"].split(os.pathsep)
         self.assertIn(self.dest, parts)
-        # the vendor dirs supervisor injects for librecamera_ext must survive
+        # System libraries must win; OEM-only and runtime libraries stay visible.
+        self.assertEqual(parts[0], "/usr/lib")
         self.assertIn("/oem/usr/lib", parts)
         self.assertIn("/oem/lib", parts)
+        self.assertLess(parts.index("/usr/lib"), parts.index("/oem/usr/lib"))
+        self.assertLess(parts.index("/oem/usr/lib"), parts.index(self.dest))
         self.assertEqual(parts.count(self.dest), 1)
 
     def test_non_declaring_app_environment_is_unchanged(self):
@@ -507,14 +514,18 @@ class SupervisorInjectionTests(HwcodecTestBase):
         self.assertNotIn("GST_PLUGIN_PATH", env)
         self.assertNotIn("GST_REGISTRY", env)
         self.assertNotIn(self.dest, env["LD_LIBRARY_PATH"].split(os.pathsep))
-        self.assertIn("/oem/usr/lib", env["LD_LIBRARY_PATH"].split(os.pathsep))
+        parts = env["LD_LIBRARY_PATH"].split(os.pathsep)
+        self.assertEqual(parts[0], "/usr/lib")
+        self.assertIn("/oem/usr/lib", parts)
 
     def test_declaring_app_starts_when_the_runtime_is_absent(self):
         """Nothing installed: the app must still launch (it decides whether to
         fall back to software decode), just without the variables."""
         env = self._run_and_read_env("hw-app-noruntime", ["hwcodec"])
         self.assertNotIn("GST_PLUGIN_PATH", env)
-        self.assertIn("/oem/usr/lib", env["LD_LIBRARY_PATH"].split(os.pathsep))
+        parts = env["LD_LIBRARY_PATH"].split(os.pathsep)
+        self.assertEqual(parts[0], "/usr/lib")
+        self.assertIn("/oem/usr/lib", parts)
 
 
 class BundleShapeTests(unittest.TestCase):

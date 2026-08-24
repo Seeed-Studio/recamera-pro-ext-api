@@ -102,6 +102,15 @@ class ReadyHandshakeTests(unittest.TestCase):
         paths.KIT_DIR = kit
         supervisor._apps.clear()
         del supervisor._reaped[:]
+        # do_switch now crosses the real firmware teardown barrier before it can
+        # launch this host-test app.  Stub only that device boundary; startup and
+        # process cleanup below remain real.
+        real_stop = server.builtin.stop
+        real_running = server._builtin_running
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
+        server._builtin_running = lambda: False
+        self.addCleanup(lambda: setattr(server.builtin, "stop", real_stop))
+        self.addCleanup(lambda: setattr(server, "_builtin_running", real_running))
         self._pids = []
         self.addCleanup(self._kill_all)
 
@@ -304,11 +313,14 @@ class SwitchRollbackTests(unittest.TestCase):
         self.fail_ids = set()
         orig = {n: getattr(server.supervisor, n)
                 for n in ("is_running", "start", "stop")}
+        builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in orig.items()])
+        self.addCleanup(lambda: setattr(server.builtin, "stop", builtin_stop))
         server.supervisor.is_running = lambda a: self.running.get(a)
         server.supervisor.start = self._fake_start
         server.supervisor.stop = self._fake_stop
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
 
     def _fake_start(self, app_id, **k):
         self.calls.append(("start", app_id))
@@ -359,11 +371,14 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.fail_ids = set()
         orig = {n: getattr(server.supervisor, n)
                 for n in ("is_running", "start", "stop")}
+        builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in orig.items()])
+        self.addCleanup(lambda: setattr(server.builtin, "stop", builtin_stop))
         server.supervisor.is_running = lambda a: self.running.get(a)
         server.supervisor.start = self._fake_start
         server.supervisor.stop = self._fake_stop
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
         server.cache_clear()
 
     def _fake_start(self, app_id, **k):

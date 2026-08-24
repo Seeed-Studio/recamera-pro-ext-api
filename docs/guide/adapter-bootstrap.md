@@ -72,19 +72,24 @@ subscribe(topic) -> stream of events   // inference / recording / gpio ...
 - **今天**：连 `:8123`(推理结果) + VGDS event-report-socket(录像/规则/GPIO 事件)。
 - **官方**：同源，官方化后换订阅端点。
 
-## 3. 能力注册表 + 协商（自动迁移的引擎）
-appmgr 启动时跑一次 **capability probe**，把结果写进注册表：
+## 3. 能力注册表 + 协商（fail-closed 迁移）
+进程启动时做无副作用 **capability probe**，把“路径发现”和“协议已验证”
+明确区分：
 ```
 caps = {
-  frame_broker:  exists('/run/recamera/frame.sock'),
-  result_ingress: probe_official_ingress(),
-  audio_broker:  exists('/var/run/recamera/audio.sock'),
-  control_api:   probe_versioned_api(),
+  frame_broker:  filesystem_socket ? UNKNOWN : UNAVAILABLE,
+  result_ingress: handshake_result(),
+  audio_broker:  filesystem_socket ? UNKNOWN : UNAVAILABLE,
+  control_api:   handshake_result(),
 }
 ```
-- 每个适配器工厂按 caps 选实现：`FrameSource = caps.frame_broker ? Official : RtspDecode`。
-- **效果**：固件升级新增了官方口 → 下次启动 probe 命中 → **应用自动走官方路径，无需改应用、无需重新打包**（可留 manifest 里 `prefer: official|workaround` 供覆盖）。
-- 这就是"平滑切换"的机械保证：迁移动作收敛到**注册表探测 + SDK 里多一份适配器实现**。
+- 每个适配器工厂只在 capability 为 `AVAILABLE` 时自动选 Official；单纯存在
+  socket inode 只得到 `UNKNOWN`，继续使用 workaround，避免 stale socket、权限
+  错误或协议版本不匹配把应用导向不可用路径。
+- 当前还没有 native capability handshake，已确认使用匹配补丁固件的部署必须
+  显式设置 `RECAMERA_ADAPTER_PREFER=official`；`workaround` 仍可强制回退。
+- 将来版本化握手落地后，固件才能把状态升级为 `AVAILABLE` 并安全自动迁移。
+  平滑切换的机械边界仍收敛在**注册表协商 + SDK adapter 实现**，应用代码不变。
 
 ## 4. 三个示例应用（验证全链路 + 递进暴露绕路）
 

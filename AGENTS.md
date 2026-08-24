@@ -1,6 +1,6 @@
 # AGENTS.md
 
-给基于本 SDK / kit 开发 reCamera Pro（RV1126B / recamera_v2）应用的人及其编码 agent。本仓是**公开仓**：SDK、kit 运行时、示例、发布物。你在这里做的事是**写在设备上跑的方案商进程**——不改固件、不重编固件。
+给基于本 SDK / kit 开发 reCamera Pro（RV1126B / recamera_v2）应用的人及其编码 agent。本仓是**公开仓**：native client、Python SDK、kit、示例和历史发布记录。设备必须先运行含匹配 endpoint 的固件；此后方案商应用作为独立进程开发，无需为每个 app 重编固件。固件服务端实现在相邻 `recamera_ipc` 仓，本仓不能用预编译 sideload 快照代替源码发布。
 
 ## 项目结构
 
@@ -8,22 +8,23 @@
 |---|---|
 | `docs/api/` | 规格与架构：`spec.md`（socket 路径 / protobuf schema / ABI 版本 / 坐标契约）、`architecture.md`（分层与数据流）。**事实来源。** |
 | `docs/guide/` | 开发指南：`README.md`（总入口 + §4 结果注入契约）+ 分篇（control-api / result-push / gpio / audio-pcm / frontend-extension / ffmpeg / gstreamer / app-center-publishing / deploy-ops / kit-design / adapter-bootstrap / voice-app）。 |
-| `sdk/` | 设备侧 SDK：`include/recamera_ext.h`（C ABI）+ `python/recamera_ext`（ctypes 薄封装）+ `lib/librecamera_ext.so*` + `VERSION`。**权威 SDK 源。** |
+| `sdk/` | 设备侧 SDK：`src/`（native client）+ `include/recamera_ext.h`（C ABI）+ `proto/generated` + `python/recamera_ext`（ctypes 薄封装）+ `VERSION`。**权威 SDK 源。** |
 | `kit/` | 可复用 Python 推理套件：`app.py`（App 基类 + 主循环）、`adapters/`（L0 适配层：frame/result/audio/mqtt/cgi + registry 探测）、`runtime/`（前后处理）、`logic/`（追踪/区域等）。 |
 | `apps/` | 示例应用（yolo-detector / face-analysis / fall-detection / facemesh-reader / voice-transcribe 等），继承 kit。 |
 | `examples/` | SDK 最小单文件用法示例（01 取帧 / 02 注入 / 03 帧→算法→OSD / 04 GPIO / 05 C ABI / 06 probe）。 |
-| `release/` | 发布物：固件 sideload 包 + kit 分享包 + `build-release.sh`。更新见根目录 `RELEASING.md`。 |
-| `market/` | 应用中心前端/打包（**gitignored，不在公开仓**）。 |
+| `release/` | 历史发布记录；当前 sideload 已 fail-closed，不能部署。下一发布必须从 manifest 固定源码构建。 |
+| `market/` | 应用中心控制面、推理调度服务、manifest-v2 打包与 catalog 工具。 |
 
-## 扩展 API 模型：三条 socket
+## 扩展 API 模型：四条 socket
 
-方案商进程通过 `/run/recamera/` 下三条 Unix domain socket 与固件交互（契约 = 进程边界）：
+方案商进程通过 `/run/recamera/` 下四条 Unix domain socket 与固件交互（契约 = 进程边界）：
 
 | socket | 客户端 | 作用 |
 |---|---|---|
 | `frame.sock` | `FrameSource` | 零拷贝拿相机原始帧（全分辨率 NV12，不预 letterbox），自己推理 |
 | `result-in.sock` | `ResultSink` | 把结果回注官方 OSD / 录像 / 推送三路分发 |
 | `probe.sock` | `ProbeSource` | 只读观测内建推理流水线各级张量/指标 |
+| `inference-control.sock` | `InferenceLease` / `ExternalNpuLease` | 停妥内建模型后授予 external RKNN 单 owner 的连接生命周期租约 |
 
 握手 Hello/HelloAck 由 SDK 内部完成，不接触 protobuf。契约细节见 `docs/api/spec.md` 与 `docs/guide/README.md` §4。
 
@@ -42,7 +43,7 @@
 
 1. 继承 `kit.app.App`，覆盖 `setup(config)`（读 config_schema 参数）和 `on_results(results, frame)`（业务逻辑：原始检测 → app 级事件）。CPU-only app 设 `needs_model=False` 并覆盖 `process_frame`。
 2. 写 `manifest.json`（`id` / `version` / `entry: app.py` / `models` / `config_schema` 等，参考 `apps/*/manifest.json`）。
-3. 直接用 SDK：`from recamera_ext import FrameSource, ResultSink, ProbeSource`。生产级适配层范本见 `kit/adapters/official.py`（socket 在就用官方 API，不在回退 RTSP/WS，应用一行不改）。
+3. 直接用 SDK：`from recamera_ext import FrameSource, ResultSink, ProbeSource`。需要 RKNN 的生产 app 必须由 appmgr 启动，并让 `RknnSession`/`ExternalNpuLease` 取得 broker 租约；不能用 CGI 成功响应、pidfile 或普通 flock 冒充 NPU 所有权。
 
 ## 构建 / 测试
 
@@ -58,15 +59,14 @@ python3 examples/02-inject-result/inject_result.py --task detection
 
 ## 设备部署 / 验证
 
-- SDK 装在 `/userdata/sdk`（`python/` + `lib/` + `recamera_ext.h`）；共享 kit 装在 `/userdata/local/kit`（使 `/userdata/local` 在 `sys.path`，`import kit` 生效）。
-- 环境变量：`PYTHONPATH=/userdata/local:/userdata/sdk/python`、`LD_LIBRARY_PATH=/userdata/sdk/lib:/oem/usr/lib:/usr/lib:$LD_LIBRARY_PATH`。
-- 前置：固件必须含扩展 API（`ls -l /run/recamera/` 应有 `frame.sock`/`result-in.sock`/`probe.sock`）。
-- **NPU 推理 (rknnlite)**：需要 NPU 的 vision app 用 release 包 provision 的运行时 `/userdata/rknnenv/bin/python3`（含 `rknnlite`），配 `PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib`。该 venv 由固件包 `install.sh` 或 kit 包 `INSTALL.sh` 离线装好（wheels 随包）；`init_runtime()` 无参即可。
+- 当前源码构建把 SDK/kit 装入固件 Python 3.11 site-packages，native library 装入 `/usr/lib`；`/userdata/sdk` 仅是历史手工布局。
+- 前置：固件必须含四个扩展 socket，并完成协议握手；仅 `ls` 看 inode 不足以证明版本兼容。
+- **NPU 推理 (rknnlite)**：`RknnSession` 必须先从 `inference-control@1` 取得 lease，初始化成功后 READY；broker 缺失或失联一律 fail closed。旧固件只允许 appmgr 走明确标记的 CGI stopped-state 兼容屏障。
 - 烟雾 demo：`examples/02-inject-result`，然后 RTSP（`rtsp://<ip>:8554/...`）或 WS（`127.0.0.1:8123 /ws/inference/results`）看注入的框。
 - 端到端自检清单见 `docs/guide/deploy-ops.md` §5。
 
 ## release（发布物）
 
-- `release/recamera-ext-api-v<ver>.tar` = 固件 sideload 包（rkipc + entry.cgi + SDK + rknnlite wheels）；设备端步骤见 `release/pkg/README.md`。安装后 `/userdata/rknnenv` 里有 Python 推理运行时。
-- `release/recamera-ext-kit-v<ver>.tar.gz` = kit 分享包（kit + sdk + examples + rknnlite wheels + INSTALL.sh，不含固件）。
-- 如何更新两个包 → 见根目录 `RELEASING.md`（用 `release/build-release.sh` 可复现重打）。
+- 仓内 v1.x tar/pkg 是历史快照，hash/身份集合不一致且不含当前 broker；安装和固件部署脚本已禁用。
+- 下一发布必须固定 `recamera_ipc`、Vigil、本仓和 Web backend commit，从源码构建 rkipc/entry.cgi/native/Python，生成统一 BOM 后做真机 kill/restart/OTA 门禁。
+- `release/build-release.sh` 只是 legacy artifact assembler，不是源码可复现 builder。
