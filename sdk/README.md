@@ -11,9 +11,10 @@
 - `CMakeLists.txt` — 自包含构建；不读取相邻 `recamera_ipc`
 - `VERSION` — 版本/固件/能力对照
 
-源码恢复出处与尚待权利人确认的许可证边界见
-[`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md)，不要仅根据本仓根许可证推断
-恢复文件已经被重新许可。
+源码恢复出处见 [`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md)。native client
+保留原始 BSD-3-Clause 许可，范围见 [`NOTICE`](NOTICE)，完整条款见
+[`LICENSE`](LICENSE)；本仓根目录的 Apache-2.0 许可证不会覆盖或重新许可这些
+native 文件。
 
 ## 可重复构建门禁
 

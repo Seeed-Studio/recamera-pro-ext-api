@@ -13,6 +13,8 @@ import sys
 EXPECTED_SONAME = "librecamera_ext.so.1"
 REQUIRED_FILES = (
     "CMakeLists.txt",
+    "LICENSE",
+    "NOTICE",
     "SOURCE_PROVENANCE.md",
     "VERSION",
     "abi/librecamera_ext.so.1.symbols",

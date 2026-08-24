@@ -33,15 +33,13 @@ before subsequent additive protocol/client work. This is provenance evidence,
 not a promise that a changed source tree must keep matching an older committed
 binary, and not a replacement for ABI and device integration tests.
 
-## License status -- do not infer a relicense
+## License
 
-The recovered native files carry `Copyright 2025 reCamera Pro Extension API`
-comments but no per-file SPDX identifier. Their source repository has a
-Rockchip BSD three-clause-style root license; this public repository has an
-Apache-2.0 root license. Copying the historical source here does **not** by
-itself establish that the files were relicensed under Apache-2.0.
+The recovered native client material retains its original BSD-3-Clause
+license; it is not relicensed by this repository's Apache-2.0 root license.
+The exact path scope is recorded in `sdk/NOTICE`, and the applicable license
+text is in `sdk/LICENSE`. Later modifications and additive native client work
+inside that path scope use the same BSD-3-Clause terms.
 
-Preserve the recovered copyright notices and this provenance record. Before a
-public source release, the relevant rights holder should confirm the intended
-license and add explicit SPDX/NOTICE text. Until then, do not remove notices or
-claim a new license based solely on repository location or Git authorship.
+Preserve the recovered copyright notices, `sdk/LICENSE`, `sdk/NOTICE` and this
+provenance record when redistributing the native source or binaries.

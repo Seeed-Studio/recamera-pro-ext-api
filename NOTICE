@@ -1,0 +1,8 @@
+reCamera Pro Extension API
+
+Unless a file or subtree states otherwise, this repository is licensed under
+the Apache License 2.0 in LICENSE.
+
+The native client material identified in sdk/NOTICE retains its original
+BSD-3-Clause license.  The complete license text is in sdk/LICENSE.  Inclusion
+in this repository does not relicense that material under Apache-2.0.

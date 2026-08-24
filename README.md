@@ -84,4 +84,6 @@ assembler，不能作为“源码可复现”证明。
 
 ## License
 
-[Apache License 2.0](LICENSE)。
+除 [`sdk/NOTICE`](sdk/NOTICE) 明确列出的 native client 文件外，本仓采用
+[Apache License 2.0](LICENSE)。native client 保留
+[BSD-3-Clause](sdk/LICENSE) 许可；混合许可总说明见 [`NOTICE`](NOTICE)。
