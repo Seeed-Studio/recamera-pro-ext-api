@@ -30,6 +30,7 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
 
     assert (rootfs / "usr/lib/recamera/appmgr/server.py").is_file()
     assert (rootfs / "usr/lib/recamera/appmgr/inference_auth.py").is_file()
+    assert (rootfs / "usr/lib/recamera/appmgr/trust.py").is_file()
     assert (rootfs / "usr/lib/recamera/inferenced/server.py").is_file()
     assert (rootfs / "usr/lib/recamera/inferenced/authorization.py").is_file()
     vendor_key = rootfs / "usr/lib/recamera/appmgr/keys/release_pub.pem"

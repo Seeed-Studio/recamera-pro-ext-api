@@ -345,7 +345,9 @@ zip-slip/tar-bomb 防护，最后才解包。
 Vendor 公钥始终是不可变信任锚；owner trust store 只能扩展、不能替换它。公钥与
 owner 目录均禁止 symlink 和 group/world writable，且受公钥数量/大小上限约束。验签结果返回
 `signer_kind`（`vendor`/`owner`）及规范 SPKI 的 SHA-256 `key_fingerprint`。应用包本身禁止携带
-PEM/私钥容器或 trust-store 目录。
+PEM/私钥容器或 trust-store 目录。设备所有者必须通过独立的
+`POST /api/app-center/v1/trust/owners` 管理操作显式确认并导入 P-256 公钥；上传、preflight、
+manifest 和安装流程都不会自动导入或信任包中提供的密钥。
 
 ### 怎么签一个包
 
@@ -369,9 +371,10 @@ python3 sign.py --verify    # 可选：拿公钥回验
 **机制完整，生态不完整。** 逐条核实：
 
 - 签名/验签的机制是**完整可用**的：`keygen.sh`/`sign.py`/`signing.py` 全链路能跑，
-  仓库里 `dist/` 的 **9 个包**都有有效 `.sig` 且已嵌入 `catalog.json`
-  （含较新的 voice-transcribe，现已签名上架），
-  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 公钥。
+  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 Vendor 公钥。
+- 构建生成的 `market/packaging/dist/` 被 Git 忽略，源码检出不会自带九个发布包；测试目录中的
+  包也可能由某个 Owner 测试密钥签名，不能假定出厂固件会信任。正式分发必须同时发布与包字节
+  匹配的 `.tar.gz.sig`，并由设备已信任的 Vendor 或 Owner 私钥签署。
 - 这不是 CA / 开发者证书体系：Seeed 发布包由 vendor 私钥签名；设备所有者可显式配置自己的
   P-256 公钥，但仓库仍未定义面向第三方方案商的证书签发/吊销流程。
 - 因此，方案商要让包装进"出厂设备的应用中心"，当前有三条路：
@@ -577,6 +580,9 @@ Web-native manifest v2 主流程：
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | GET | `/api/app-center/v1/policy` | 返回运行时 manifest 版本、multipart/解包/暂存限制，以及签名和 developer mode 策略 |
+| GET | `/api/app-center/v1/trust` | 列出 Vendor/Owner 公钥的规范 SPKI 指纹；不返回 PEM 内容 |
+| POST | `/api/app-center/v1/trust/owners` | 显式确认并安装 Owner P-256 PEM 公钥；新建返回 `201`，相同密钥幂等返回 `200` |
+| DELETE | `/api/app-center/v1/trust/owners/<64hex>` | 按 SHA-256 SPKI digest 删除 Owner 公钥；Vendor 指纹不可删除 |
 | POST | `/api/app-center/v1/uploads` | 流式 multipart 上传并 preflight，返回 `upload_id`、manifest、权限、签名和 `release_id` |
 | DELETE | `/api/app-center/v1/uploads/<upload_id>` | 幂等取消未进入安装阶段的暂存上传；安装已排队/进行中返回 `409` |
 | POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限及 developer mode，提交异步安装 |
@@ -591,7 +597,25 @@ Web-native manifest v2 主流程：
 
 `policy` 使用 `{manifest, upload, signature}` 嵌套 envelope；其中
 `upload.max_package_bytes`、`max_signature_bytes` 和 `filename_pattern` 直接来自设备当前
-运行时门禁，前端不应复制编译期常量。上传取消与 finalize 串行，并在上传状态锁内完成
+运行时门禁，前端不应复制编译期常量。`signature.owner_keys` 同样报告 Owner 密钥管理能力、
+PEM/P-256 格式、密钥数量/字节上限，以及必须显式确认的约束。
+
+Owner 导入 body 为
+`{"label":"factory-floor","public_key":"-----BEGIN PUBLIC KEY-----…","confirm_trust":true}`。
+`label` 只允许 1–48 个 ASCII 字母、数字、点、下划线或连字符；`public_key` 只接受 P-256
+公开 PEM，服务端规范化后以 `0600` 原子写入持久化 Owner store。`confirm_trust` 必须严格为
+布尔值 `true`，避免普通上传动作扩大设备信任面。GET 返回 `{"keys":[...]}`；每项包含
+`kind`、`fingerprint`、`algorithm` 和 `removable`，Owner 另含 `label`。DELETE 路径使用
+`sha256:` 后面的 64 位十六进制 digest。不存在返回 `404`，Vendor 修改或命名冲突返回 `409`，
+无效 PEM/字段返回 `400`。POST/DELETE 都经同源 mutation 门禁、全局 busy gate、audit log
+和 `trust` SSE 事件；不得把私钥或 PEM 全文写入 audit/event。
+
+删除 Owner key 只改变**后续** package/runtime bundle 的验签结果：appmgr 不会追溯重验、撤销、
+停止或卸载已经安装的代码。需要撤销已部署应用时，设备所有者必须另行停止并卸载对应应用。
+同样，上传与 preflight 仅用当前 trust store 验证签名，绝不从 package、manifest、边车签名或
+其他上传字段自动提取、安装或信任任何公钥材料。
+
+上传取消与 finalize 串行，并在上传状态锁内完成
 “读状态→删除”：`install_queued`/`installing` 一律保留并返回 `409`；合法但未知或已经删除的
 32 位十六进制 ID 返回 `200 {deleted:false,state:"absent"}`，所以断线重试不会把成功清理误报
 成失败；成功删除返回 `200 {deleted:true,state:"deleted",previous_status}`。格式不合法的 ID

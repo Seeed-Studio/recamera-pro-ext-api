@@ -124,6 +124,7 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
     required = (
         platform / "appmgr/__main__.py",
         platform / "appmgr/inference_auth.py",
+        platform / "appmgr/trust.py",
         platform / "appmgr/schema/manifest-v2.schema.json",
         vendor_key,
         platform / "inferenced/__main__.py",

@@ -374,6 +374,12 @@ def _receive_locked(stream: BinaryIO, content_length: int, content_type: str) ->
 
         if "package" not in fields:
             raise MultipartError("multipart field 'package' is required")
+        if "signature" in fields:
+            expected_signature = fields["package"]["filename"] + ".sig"
+            if fields["signature"]["filename"] != expected_signature:
+                raise MultipartError(
+                    "signature filename must match package filename: %s" %
+                    expected_signature)
         if reader.remaining:
             raise MultipartError("multipart parser did not consume the request")
 

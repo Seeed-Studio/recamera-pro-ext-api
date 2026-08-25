@@ -5,15 +5,17 @@ import os
 import sys
 import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
-from appmgr import operations, paths, resources, server, state, uploads
+from appmgr import operations, paths, resources, server, state, trust, uploads
 
 
-def _multipart(package: bytes, *, boundary="bounded-test", signature=None):
+def _multipart(package: bytes, *, boundary="bounded-test", signature=None,
+               signature_filename="demo.tar.gz.sig"):
     parts = [
         b"--" + boundary.encode() + b"\r\n",
         b'Content-Disposition: form-data; name="package"; filename="demo.tar.gz"\r\n',
@@ -24,7 +26,8 @@ def _multipart(package: bytes, *, boundary="bounded-test", signature=None):
     if signature is not None:
         parts += [
             b"--" + boundary.encode() + b"\r\n",
-            b'Content-Disposition: form-data; name="signature"; filename="demo.sig"\r\n\r\n',
+            ('Content-Disposition: form-data; name="signature"; filename="%s"\r\n\r\n'
+             % signature_filename).encode("ascii"),
             signature,
             b"\r\n",
         ]
@@ -142,6 +145,17 @@ def test_multipart_package_is_streamed_in_bounded_chunks(layout):
         assert package.read() == payload
 
 
+def test_multipart_rejects_signature_for_a_different_package(layout):
+    body, content_type = _multipart(
+        b"package", signature=b"c2lnbmF0dXJl",
+        signature_filename="other.tar.gz.sig")
+
+    with pytest.raises(
+            uploads.MultipartError,
+            match="signature filename must match package filename"):
+        uploads.receive(io.BytesIO(body), len(body), content_type)
+
+
 def test_multipart_type_and_declared_size_fail_before_staging(layout):
     body, content_type = _multipart(b"package")
     with pytest.raises(uploads.MultipartError, match="multipart/form-data"):
@@ -165,6 +179,8 @@ def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch
     monkeypatch.setattr(paths, "UPLOAD_TTL_SEC", 678)
     monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
     monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", False)
+    monkeypatch.setattr(paths, "MAX_OWNER_KEYS", 7)
+    monkeypatch.setattr(paths, "MAX_TRUST_KEY_BYTES", 8192)
 
     policy = server.do_v1_policy()
 
@@ -189,6 +205,14 @@ def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch
         "required": True,
         "developer_mode_allowed": False,
         "invalid_signatures_rejected": True,
+        "owner_keys": {
+            "management_enabled": True,
+            "format": "pem",
+            "curve": "P-256",
+            "max_keys": 7,
+            "max_key_bytes": 8192,
+            "explicit_confirmation_required": True,
+        },
     }
 
     # The historic REQUIRE_SIGNATURE=0 switch remains a developer policy input
@@ -204,6 +228,222 @@ def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch
     explicit_developer = server.do_v1_policy()
     assert explicit_developer["signature"]["required"] is True
     assert explicit_developer["signature"]["developer_mode_allowed"] is True
+
+
+def test_v1_trust_mutations_require_confirmation_gate_audit_and_event(
+        layout, monkeypatch):
+    fingerprint = "sha256:" + "1" * 64
+    key = {
+        "kind": "owner", "name": "lab.pem", "label": "lab",
+        "fingerprint": fingerprint, "algorithm": "ecdsa-sha256",
+        "removable": True,
+    }
+    installs = []
+    removals = []
+    gates = []
+    audits = []
+
+    @contextmanager
+    def observed_gate(*, wait_timeout=0.0, retry_interval=None):
+        gates.append(wait_timeout)
+        yield
+
+    monkeypatch.setattr(server, "busy_gate", observed_gate)
+    monkeypatch.setattr(
+        server.apptrust, "install_owner_key",
+        lambda label, public_key: installs.append((label, public_key)) or {
+            "key": key, "created": True})
+    monkeypatch.setattr(
+        server.apptrust, "remove_owner_key",
+        lambda supplied: removals.append(supplied) or {
+            "fingerprint": supplied, "deleted": 1})
+    monkeypatch.setattr(
+        server, "_audit",
+        lambda action, **fields: audits.append((action, fields)))
+    subscription = server._operation_manager().events.subscribe()
+    try:
+        with pytest.raises(ValueError, match="explicitly confirmed"):
+            server.do_v1_install_owner_key({
+                "label": "lab", "public_key": "PEM", "confirm_trust": False,
+            })
+        assert installs == []
+
+        installed = server.do_v1_install_owner_key({
+            "label": "lab", "public_key": "PEM", "confirm_trust": True,
+        })
+        install_event = subscription.get(timeout=1)
+        removed = server.do_v1_remove_owner_key("2" * 64)
+        remove_event = subscription.get(timeout=1)
+    finally:
+        server._operation_manager().events.unsubscribe(subscription)
+
+    assert installed == {"key": key, "created": True}
+    assert removed == {"fingerprint": "sha256:" + "2" * 64, "deleted": 1}
+    assert installs == [("lab", "PEM")]
+    assert removals == ["sha256:" + "2" * 64]
+    assert gates == [paths.V1_OPERATION_BUSY_TIMEOUT_SEC] * 2
+    assert install_event["type"] == "trust"
+    assert install_event["action"] == "owner-installed"
+    assert install_event["key"] == key
+    assert remove_event["type"] == "trust"
+    assert remove_event["action"] == "owner-deleted"
+    assert [item[0] for item in audits] == [
+        "v1_trust_owner_install", "v1_trust_owner_delete"]
+    assert all("PEM" not in repr(item) for item in audits)
+
+
+def test_http_v1_trust_contract_origin_and_error_mapping(layout, monkeypatch):
+    vendor = {
+        "kind": "vendor", "name": "release_pub.pem",
+        "fingerprint": "sha256:" + "a" * 64,
+        "algorithm": "ecdsa-sha256", "removable": False,
+    }
+    owner_fingerprint = "sha256:" + "1" * 64
+    owner = {
+        "kind": "owner", "name": "lab.pem", "label": "lab",
+        "fingerprint": owner_fingerprint,
+        "algorithm": "ecdsa-sha256", "removable": True,
+    }
+    install_calls = []
+    installed = set()
+    remove_calls = []
+
+    monkeypatch.setattr(server.apptrust, "list_trust", lambda: [vendor])
+    monkeypatch.setattr(paths, "MAX_OWNER_KEYS", 7)
+    monkeypatch.setattr(paths, "MAX_TRUST_KEY_BYTES", 8192)
+
+    def install(label, public_key):
+        install_calls.append((label, public_key))
+        if public_key == "invalid":
+            raise trust.TrustValidationError("invalid owner public key")
+        if label == "vendor-shadow":
+            raise trust.ImmutableTrustAnchorError("immutable vendor anchor")
+        created = public_key not in installed
+        installed.add(public_key)
+        return {"key": owner, "created": created}
+
+    def remove(fingerprint):
+        remove_calls.append(fingerprint)
+        if fingerprint.endswith("0" * 64):
+            raise trust.TrustNotFoundError("owner key not found")
+        if fingerprint.endswith("f" * 64):
+            raise trust.ImmutableTrustAnchorError("immutable vendor anchor")
+        return {"fingerprint": fingerprint, "deleted": 1}
+
+    monkeypatch.setattr(server.apptrust, "install_owner_key", install)
+    monkeypatch.setattr(server.apptrust, "remove_owner_key", remove)
+    monkeypatch.setattr(server, "_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server._operation_manager().events, "publish",
+        lambda kind, **payload: {"type": kind, **payload})
+
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    def request(method, path, body=None, *, origin=None):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", httpd.server_port, timeout=5)
+        headers = {"Host": "camera.local", "X-Forwarded-Proto": "https"}
+        if body is not None:
+            body = json.dumps(body)
+            headers["Content-Type"] = "application/json"
+        if origin is not None:
+            headers["Origin"] = origin
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        status, payload = request("GET", "/api/app-center/v1/trust")
+        assert status == 200
+        assert payload == {
+            "keys": [vendor],
+            "limits": {
+                "max_owner_keys": 7,
+                "max_trust_key_bytes": 8192,
+            },
+        }
+
+        body = {"label": "lab", "public_key": "PEM", "confirm_trust": True}
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners", body,
+            origin="https://evil.local")
+        assert status == 403
+        assert "cross-origin" in payload["error"]
+        assert install_calls == []
+
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners",
+            {**body, "confirm_trust": False}, origin="https://camera.local")
+        assert status == 400
+        assert "explicitly confirmed" in payload["error"]
+
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners", body,
+            origin="https://camera.local")
+        assert status == 201
+        assert payload == {"key": owner, "created": True}
+
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners", body,
+            origin="https://camera.local")
+        assert status == 200
+        assert payload == {"key": owner, "created": False}
+
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners",
+            {**body, "public_key": "invalid"}, origin="https://camera.local")
+        assert status == 400
+        assert payload["error"] == "invalid owner public key"
+
+        status, payload = request(
+            "POST", "/api/app-center/v1/trust/owners",
+            {**body, "label": "vendor-shadow"},
+            origin="https://camera.local")
+        assert status == 409
+        assert "immutable vendor" in payload["error"]
+
+        digest = "1" * 64
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/trust/owners/" + digest.upper(),
+            origin="https://camera.local")
+        assert status == 200
+        assert payload == {"fingerprint": owner_fingerprint, "deleted": 1}
+        assert remove_calls[-1] == owner_fingerprint
+
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/trust/owners/" + "0" * 64,
+            origin="https://camera.local")
+        assert status == 404
+        assert "not found" in payload["error"]
+
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/trust/owners/" + "f" * 64,
+            origin="https://camera.local")
+        assert status == 409
+        assert "immutable vendor" in payload["error"]
+
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/trust/owners/not-a-fingerprint",
+            origin="https://camera.local")
+        assert status == 404
+        assert payload == {"error": "not found"}
+
+        before = list(remove_calls)
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/trust/owners/" + digest,
+            origin="https://evil.local")
+        assert status == 403
+        assert "cross-origin" in payload["error"]
+        assert remove_calls == before
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
 
 
 @pytest.mark.parametrize("status", [
@@ -529,6 +769,119 @@ def test_v1_lifecycle_waits_for_transient_busy_gate(
     terminal = _wait_operation(queued["id"])
     assert terminal["status"] == "succeeded"
     assert calls == [(action, "demo")]
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("start", ["start", "invalidate"]),
+    ("stop", ["stop", "invalidate"]),
+    ("restart", ["stop", "start", "invalidate"]),
+])
+def test_v1_builtin_lifecycle_is_async_and_never_requires_app_directory(
+        layout, monkeypatch, action, expected):
+    effects = []
+
+    monkeypatch.setattr(
+        server.builtin, "start",
+        lambda: effects.append("start") or {"iEnable": 1})
+    monkeypatch.setattr(
+        server.builtin, "stop",
+        lambda: effects.append("stop") or {"stop_confirmed": True})
+    monkeypatch.setattr(
+        server, "_builtin_invalidate",
+        lambda: effects.append("invalidate"))
+
+    queued = server.do_v1_lifecycle("builtin", action)["operation"]
+    terminal = _wait_operation(queued["id"])
+
+    assert terminal["status"] == "succeeded"
+    assert effects == expected
+
+
+def test_v1_builtin_restart_fails_closed_before_start(layout, monkeypatch):
+    effects = []
+
+    def stop_fails():
+        effects.append("stop")
+        raise server.builtin.BuiltinError("teardown failed")
+
+    monkeypatch.setattr(server.builtin, "stop", stop_fails)
+    monkeypatch.setattr(
+        server.builtin, "start", lambda: effects.append("start"))
+    monkeypatch.setattr(
+        server, "_builtin_invalidate",
+        lambda: effects.append("invalidate"))
+
+    queued = server.do_v1_lifecycle("builtin", "restart")["operation"]
+    terminal = _wait_operation(queued["id"])
+
+    assert terminal["status"] == "failed"
+    assert "teardown failed" in terminal["error"]
+    assert effects == ["stop", "invalidate"]
+
+
+@pytest.mark.parametrize("teardown", [{}, {"stop_confirmed": False}])
+def test_v1_builtin_restart_rejects_unconfirmed_teardown(
+        layout, monkeypatch, teardown):
+    effects = []
+    monkeypatch.setattr(
+        server.builtin, "stop", lambda: effects.append("stop") or teardown)
+    monkeypatch.setattr(
+        server.builtin, "start", lambda: effects.append("start"))
+    monkeypatch.setattr(
+        server, "_builtin_invalidate",
+        lambda: effects.append("invalidate"))
+
+    queued = server.do_v1_lifecycle("builtin", "restart")["operation"]
+    terminal = _wait_operation(queued["id"])
+
+    assert terminal["status"] == "failed"
+    assert "confirmed teardown proof" in terminal["error"]
+    assert effects == ["stop", "invalidate"]
+
+
+def test_v1_builtin_restart_waits_for_busy_gate_before_driver_calls(
+        layout, monkeypatch):
+    effects = []
+    monkeypatch.setattr(
+        server.builtin, "stop",
+        lambda: effects.append("stop") or {"stop_confirmed": True})
+    monkeypatch.setattr(
+        server.builtin, "start",
+        lambda: effects.append("start") or {"iEnable": 1})
+    monkeypatch.setattr(
+        server, "_builtin_invalidate",
+        lambda: effects.append("invalidate"))
+    monkeypatch.setattr(paths, "V1_OPERATION_BUSY_TIMEOUT_SEC", 0.5)
+    monkeypatch.setattr(paths, "V1_OPERATION_BUSY_RETRY_SEC", 0.005)
+    contended = _observe_operation_worker_lock_contention(monkeypatch)
+
+    with server.busy_gate():
+        queued = server.do_v1_lifecycle("builtin", "restart")["operation"]
+        assert contended.wait(1.0)
+        assert effects == []
+
+    terminal = _wait_operation(queued["id"])
+    assert terminal["status"] == "succeeded"
+    assert effects == ["stop", "start", "invalidate"]
+
+
+def test_v1_builtin_lifecycle_http_route_returns_operation(
+        layout, monkeypatch):
+    monkeypatch.setattr(server.builtin, "start", lambda: {"iEnable": 1})
+    monkeypatch.setattr(server, "_builtin_invalidate", lambda: None)
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    serve_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    serve_thread.start()
+    try:
+        status, payload = _json_request(
+            httpd, "POST", "/api/app-center/v1/apps/builtin/start", {})
+        assert status == 202
+        terminal = _wait_operation(payload["operation"]["id"])
+        assert terminal["status"] == "succeeded"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        serve_thread.join(timeout=2)
 
 
 def test_v1_install_waits_for_transient_busy_gate(layout, monkeypatch):

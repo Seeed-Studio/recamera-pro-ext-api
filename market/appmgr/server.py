@@ -76,7 +76,8 @@ from . import (assets, builtin, config as appconfig,
                inference_auth, installer, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
                resources as appresources, state, supervisor,
-               signing as appsigning, uploads as appuploads, voiceruntime)
+               signing as appsigning, trust as apptrust,
+               uploads as appuploads, voiceruntime)
 
 
 _coordinator_instance = None
@@ -997,6 +998,20 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     for inferenced and never acquires the direct broker owner.  Old model-backed
     manifests retain the fail-closed direct-NPU compatibility route.
     """
+    if app_id == builtin.BUILTIN_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            try:
+                result = builtin.start()
+            finally:
+                # A lost/failed response can still change the driver state.
+                # Never leave the short-lived list cache claiming the old one.
+                _builtin_invalidate()
+            _audit("start", id=builtin.BUILTIN_ID, result=result)
+            return {
+                "id": builtin.BUILTIN_ID,
+                "started": True,
+                "detail": result,
+            }
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -1017,6 +1032,25 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
 
 
 def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
+    if app_id == builtin.BUILTIN_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            try:
+                stopped = builtin.stop()
+                if (not isinstance(stopped, dict)
+                        or stopped.get("stop_confirmed") is not True):
+                    raise builtin.BuiltinError(
+                        "builtin restart did not receive confirmed teardown proof")
+                started = builtin.start()
+            finally:
+                _builtin_invalidate()
+            _audit("restart", id=builtin.BUILTIN_ID,
+                   stopped=stopped, started=started)
+            return {
+                "id": builtin.BUILTIN_ID,
+                "restarted": True,
+                "stopped": stopped,
+                "started": started,
+            }
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -1151,8 +1185,10 @@ def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
     with busy_gate(wait_timeout=_busy_timeout):
         target = app_id or state.get_active()
         if target == builtin.BUILTIN_ID:
-            res = builtin.stop()
-            _builtin_invalidate()
+            try:
+                res = builtin.stop()
+            finally:
+                _builtin_invalidate()
             _audit("stop", id="builtin", result=res)
             return {"stopped": "builtin", "detail": res}
         if not target:
@@ -1487,8 +1523,72 @@ def do_v1_policy() -> dict:
             "required": bool(paths.REQUIRE_SIGNATURE),
             "developer_mode_allowed": _developer_mode_allowed(),
             "invalid_signatures_rejected": True,
+            "owner_keys": {
+                "management_enabled": True,
+                "format": "pem",
+                "curve": "P-256",
+                "max_keys": int(paths.MAX_OWNER_KEYS),
+                "max_key_bytes": int(paths.MAX_TRUST_KEY_BYTES),
+                "explicit_confirmation_required": True,
+            },
         },
     }
+
+
+def do_v1_trust() -> dict:
+    """Return public metadata for immutable vendor and removable owner keys."""
+    return {
+        "keys": apptrust.list_trust(),
+        "limits": {
+            "max_owner_keys": int(paths.MAX_OWNER_KEYS),
+            "max_trust_key_bytes": int(paths.MAX_TRUST_KEY_BYTES),
+        },
+    }
+
+
+def do_v1_install_owner_key(body: dict) -> dict:
+    """Explicitly extend device-owner trust; never infer trust from a package."""
+    if body.get("confirm_trust") is not True:
+        raise ValueError("owner-key trust must be explicitly confirmed")
+    label = body.get("label")
+    public_key = body.get("public_key")
+    if not isinstance(label, str):
+        raise ValueError("missing/invalid 'label'")
+    if not isinstance(public_key, str):
+        raise ValueError("missing/invalid 'public_key'")
+
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        result = apptrust.install_owner_key(label, public_key)
+        key = result["key"]
+        _audit(
+            "v1_trust_owner_install",
+            label=key.get("label"), fingerprint=key.get("fingerprint"),
+            created=bool(result.get("created")),
+        )
+        _operation_manager().events.publish(
+            "trust",
+            action=("owner-installed" if result.get("created")
+                    else "owner-present"),
+            key=key,
+        )
+        return result
+
+
+def do_v1_remove_owner_key(fingerprint_hex: str) -> dict:
+    """Remove one owner trust identity addressed by its canonical digest."""
+    fingerprint = "sha256:" + fingerprint_hex.lower()
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        result = apptrust.remove_owner_key(fingerprint)
+        _audit(
+            "v1_trust_owner_delete",
+            fingerprint=result.get("fingerprint"),
+            deleted=result.get("deleted"),
+        )
+        _operation_manager().events.publish(
+            "trust", action="owner-deleted",
+            fingerprint=result.get("fingerprint"),
+        )
+        return result
 
 
 def _v1_status(app: dict) -> str:
@@ -1802,7 +1902,11 @@ def _require_installed(app_id: str) -> None:
 
 
 def do_v1_lifecycle(app_id: str, action: str) -> dict:
-    _require_installed(app_id)
+    # ``builtin`` is a synthetic first-class app backed by rkipc/entry.cgi. It
+    # deliberately has no /userdata/local/apps/builtin directory, so only
+    # self-hosted applications participate in the installed-directory gate.
+    if app_id != builtin.BUILTIN_ID:
+        _require_installed(app_id)
     callbacks = {"start": do_start, "stop": do_stop, "restart": do_restart}
     callback = callbacks.get(action)
     if callback is None:
@@ -1964,8 +2068,12 @@ class _Handler(BaseHTTPRequestHandler):
             return False
 
     def _v1_error(self, exc: Exception) -> None:
-        if isinstance(exc, FileNotFoundError):
+        if isinstance(exc, (FileNotFoundError, apptrust.TrustNotFoundError)):
             code = 404
+        elif isinstance(exc, apptrust.TrustConflictError):
+            code = 409
+        elif isinstance(exc, apptrust.TrustValidationError):
+            code = 400
         elif isinstance(exc, appuploads.UploadConflictError):
             code = 409
         elif isinstance(exc, appuploads.StagingQuotaError):
@@ -2025,6 +2133,11 @@ class _Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
         if path == "/api/app-center/v1/policy":
             return self._send(200, do_v1_policy())
+        if path == "/api/app-center/v1/trust":
+            try:
+                return self._send(200, do_v1_trust())
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/api/app-center/v1/apps":
             try:
                 return self._send(200, do_v1_apps())
@@ -2152,6 +2265,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/app-center/v1/apps":
             try:
                 return self._send(202, do_v1_install(self._body_json_v1()))
+            except Exception as exc:
+                return self._v1_error(exc)
+        if path == "/api/app-center/v1/trust/owners":
+            try:
+                result = do_v1_install_owner_key(self._body_json_v1())
+                return self._send(201 if result.get("created") else 200, result)
             except Exception as exc:
                 return self._v1_error(exc)
         match = re.fullmatch(
@@ -2292,6 +2411,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 return self._send(
                     200, do_v1_cancel_upload(upload_match.group(1)))
+            except Exception as exc:
+                return self._v1_error(exc)
+        trust_match = re.fullmatch(
+            r"/api/app-center/v1/trust/owners/([0-9a-fA-F]{64})", path)
+        if trust_match:
+            try:
+                return self._send(
+                    200, do_v1_remove_owner_key(trust_match.group(1)))
             except Exception as exc:
                 return self._v1_error(exc)
         match = re.fullmatch(

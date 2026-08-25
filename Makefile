@@ -156,6 +156,7 @@ verify: sdk-install python-install rknn-runtime-install platform-services-instal
 	@test -f "$(PYTHON_SITE)/ruamel/yaml/__init__.py"
 	@test -f "$(PYTHON_SITE)/_ruamel_yaml.cpython-311-aarch64-linux-gnu.so"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/server.py"
+	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/trust.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/schema/manifest-v2.schema.json"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/inferenced/server.py"
 	@test -x "$(OUT_ROOT)/etc/init.d/S93inferenced"
