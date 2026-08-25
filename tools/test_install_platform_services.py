@@ -29,6 +29,8 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     )
 
     assert (rootfs / "usr/lib/recamera/appmgr/server.py").is_file()
+    assert (rootfs / "usr/lib/recamera/appmgr/result_hub.py").is_file()
+    assert (rootfs / "usr/lib/recamera/appmgr/visualization.py").is_file()
     assert (rootfs / "usr/lib/recamera/appmgr/inference_auth.py").is_file()
     assert (rootfs / "usr/lib/recamera/appmgr/trust.py").is_file()
     assert (rootfs / "usr/lib/recamera/inferenced/server.py").is_file()
@@ -42,9 +44,12 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     locations = re.findall(
         r"^\s*location\s+(?:=\s+)?([^\s{]+)", edge, re.MULTILINE)
     assert "/api/app-center/v1/" in locations
+    assert "/ws/ai/results/v2" in locations
     assert "/api/v1/" not in locations
     assert len(locations) == len(set(locations))
     assert edge.count("$recamera_appcenter_origin_ok = 0") == 4
+    assert edge.count("$recamera_ai_results_origin_ok = 0") == 1
+    assert "proxy_pass http://127.0.0.1:8125;" in edge
     assert "proxy_set_header X-Forwarded-Proto $scheme;" in edge
     for retired in ("upload", "putModel"):
         assert re.search(

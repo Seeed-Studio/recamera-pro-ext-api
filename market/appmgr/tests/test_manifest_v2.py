@@ -202,6 +202,75 @@ def test_resource_claim_requires_permission_and_scheduled_is_npu_only():
         contract.validate_manifest(value)
 
 
+def test_typed_output_and_render_contract_is_strict_but_legacy_remains_compatible():
+    value = minimal_manifest(
+        capabilities=["output"],
+        output={
+            "contract_version": 2,
+            "sink": "ws",
+            "schema": "results[]{box,score,label}",
+            "default_channel": ["ws", "mqtt"],
+            "default_mode": "raw",
+            "fields": [
+                {
+                    "name": "box", "from": "results[].box",
+                    "type": "bbox<float>[4]", "coord": "pixel_xyxy",
+                    "description": "Original-frame box",
+                },
+                {
+                    "name": "label", "from": "results[].label",
+                    "type": "string", "description": "Class label",
+                },
+            ],
+            "default_mapping": [{
+                "source": "results | length", "target": "count",
+                "topic": "recamera/{{ app }}/count", "task": "detection",
+            }],
+        },
+        render={
+            "schema_version": 1,
+            "boxes": {"label": "label", "color_by": "label", "line_width": 2},
+            "stream_osd": {"supported": ["boxes"], "default": False},
+        },
+    )
+    assert contract.validate_manifest(value) == 2
+
+    legacy = copy.deepcopy(value)
+    legacy["output"] = {"sink": "ws", "vendor_extension": {"old": True}}
+    legacy["render"] = {"vendor_shape": {"old": True}}
+    assert contract.validate_manifest(legacy) == 2
+
+    bad = copy.deepcopy(value)
+    bad["output"]["fields"][0]["coord"] = "guessed"
+    with pytest.raises(contract.ManifestValidationError,
+                       match="unsupported coordinate space"):
+        contract.validate_manifest(bad)
+
+    bad = copy.deepcopy(value)
+    del bad["output"]["fields"][0]["coord"]
+    with pytest.raises(contract.ManifestValidationError,
+                       match="is required for bbox"):
+        contract.validate_manifest(bad)
+
+    bad = copy.deepcopy(value)
+    bad["render"]["stream_osd"]["default"] = True
+    with pytest.raises(contract.ManifestValidationError,
+                       match="must default to false"):
+        contract.validate_manifest(bad)
+
+    bad = copy.deepcopy(value)
+    bad["render"]["boxes"]["label"] = "undeclared"
+    with pytest.raises(contract.ManifestValidationError,
+                       match="must reference a declared results"):
+        contract.validate_manifest(bad)
+
+    bad = copy.deepcopy(value)
+    bad["render"]["events"] = {"fall": {"as": "toast"}}
+    with pytest.raises(contract.ManifestValidationError,
+                       match="same event_kind"):
+        contract.validate_manifest(bad)
+
+
 def test_release_lock_and_bom_are_deterministic_and_exact():
     value = minimal_manifest()
     records = records_for(value, {

@@ -52,6 +52,18 @@ C:`rc_ext_class_t` 置 `has_box=1` 并填 `x1/y1/x2/y2`;`has_box=0`(默认)保�
 Python:items 元素用 `(score, class_id, label)` 无框,或 `(score, class_id, label, (x1,y1,x2,y2))` 附框。
 向后兼容(新增可选字段,soname 不变),但 header/.so/python 三者必须成套升级(ABI 结构体大小已变)。
 
+## App Center OSD-only sink（v1.4.0+）
+
+平台的多应用可视化桥使用 `rc_ext_osd_*` / Python `OsdSink` 连接
+`/run/recamera/osd-in.sock`。该入口只接受 DETECTION 快照（最多 64 框；空列表
+表示清屏），只更新 OSD compositor，绝不进入录像、notify/规则或 legacy WS。
+
+它不是通用应用发布接口：服务端要求 SO_PEERCRED PID 精确匹配 root-owned
+`/var/run/appmgr.pid`，并复核 `/proc` 中的 UID、Python executable 和精确
+`-m appmgr serve` argv。Hello/client name、payload `source_id`/`model_id` 均不参与
+授权。普通应用继续使用 `ResultSink`；在 appmgr 进程之外创建 `OsdSink()` 会以
+认证错误失败。
+
 ## 帧代理
 `FrameSource` / `rc_ext_frame_*` 连 `/run/recamera/frame.sock`。
 **帧源给 VI 原始帧(全分辨率,不预 letterbox)**——letterbox/resize/量化等预处理由你的管线负责(后处理坐标映射、级联 ROI、OSD 叠加都需要原图)。

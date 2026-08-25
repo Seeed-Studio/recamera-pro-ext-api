@@ -112,6 +112,8 @@ def test_namespace_projection():
             {"box": [0, 0, 1, 1], "track_id": 7},               # tracking
         ],
         "events": [{"kind": "fall", "track_id": 7}, {"kind": "metrics", "fps": 30}],
+        "summary": {"state": "alarm"}, "metrics": {"fps": 30},
+        "stream_id": "main", "inference_time_ms": 12.5, "pipeline_ms": 20.0,
     }
     ns = build_namespace(env, app_id="x")
     assert ns["detection"].count == 3      # three results carry a box
@@ -123,6 +125,9 @@ def test_namespace_projection():
     assert [e["kind"] for e in ns["events"].fall] == ["fall"]
     assert len(ns["events"].all) == 2
     assert list(ns["events"]) == env["events"]   # top-level events iterates raw
+    assert ns["summary"]["state"] == "alarm" and ns["metrics"]["fps"] == 30
+    assert ns["stream_id"] == "main"
+    assert ns["inference_time_ms"] == 12.5 and ns["pipeline_ms"] == 20.0
 
 
 # --------------------------------------------------------------------------- #
@@ -162,6 +167,58 @@ def test_jinja_bad_template_drops_only_that_message():
 def test_jinja_rejects_wildcard_topics():
     fmt = Jinja2Formatter([{"topic": "a/#", "body": "{{ 1 | tojson }}"}], app_id="a")
     assert fmt.format({"results": [], "events": []}, channel="mqtt") == []
+
+
+def test_jinja_resource_limits_block_repeat_power_and_nested_loops():
+    started = time.monotonic()
+    repeat = Jinja2Formatter(
+        [{"body": "{{ 'x' * 20000000 }}"}], app_id="a")
+    assert repeat.format({"results": [], "events": []}) == []
+    assert time.monotonic() - started < 1.0
+
+    power = Jinja2Formatter(
+        [{"body": "{{ 2 ** 1000000 }}"}], app_id="a")
+    assert power.format({"results": [], "events": []}) == []
+
+    import pytest
+    with pytest.raises(ValueError, match="nested template loops"):
+        Jinja2Formatter([{
+            "body": ("{% for outer in results %}"
+                     "{% for inner in results %}x{% endfor %}"
+                     "{% endfor %}"),
+        }], app_id="a")
+    with pytest.raises(ValueError, match="literal exceeds length"):
+        Jinja2Formatter([{"body": "x" * 4097}], app_id="a")
+
+
+def test_jinja_stream_limit_stops_large_loop_but_raw_is_unchanged():
+    formatter = Jinja2Formatter([{
+        "body": "{% for item in results %}{{ 'x' * 65536 }}{% endfor %}",
+    }], app_id="a")
+    assert formatter.format({"results": list(range(10)), "events": []}) == []
+
+    raw = {"results": [{"text": "x" * 300000}], "events": []}
+    messages = RawJsonFormatter().format(raw)
+    assert json.loads(messages[0].body) == raw
+
+
+def test_jinja_callable_attributes_cannot_bypass_allocation_limits():
+    bodies = (
+        "{{ 'x'.ljust(20000000) }}",
+        "{{ 'x'.rjust(20000000) }}",
+        "{{ 'x'.center(20000000) }}",
+        "{{ '1'.zfill(20000000) }}",
+        "{{ '{:20000000}'.format('x') }}",
+        "{{ '{x:20000000}'.format_map({'x': 'x'}) }}",
+        "{{ 'x'.replace('x', 'y' * 65536) }}",
+    )
+    started = time.monotonic()
+    for body in bodies:
+        formatter = Jinja2Formatter([{"body": body}], app_id="a")
+        assert formatter.format({"results": [], "events": []}) == []
+    # This is a deterministic fast-failure assertion, not an RSS heuristic:
+    # no bound method is invoked, so none can allocate its requested width.
+    assert time.monotonic() - started < 1.0
 
 
 # --------------------------------------------------------------------------- #
@@ -239,6 +296,33 @@ def test_rate_limit_and_edge_bypass():
     assert len(rec.msgs) == 2
 
 
+def test_all_bundled_application_edge_kinds_bypass_rate_limit():
+    rec = RecordChannel()
+    sink = ConfigurableSink(
+        app_id="a", channels=[rec], formatter=RawJsonFormatter(),
+        filters={"rate_limit_hz": 0.0001, "preserve_edge_events": True})
+    sink.emit(_frame_payload(results=[{"box": [0, 0, 1, 1]}]), 0.0)
+    kinds = (
+        "fall", "line_cross", "blink", "yawn", "wake", "transcript",
+        "listen_timeout", "rep_completed", "set_completed",
+        "workout_complete",
+    )
+    for kind in kinds:
+        sink.emit(_frame_payload(events=[{"kind": kind}]), 0.0)
+    # The bundled fitness app emits kind=workout every frame and signals the
+    # discrete transitions through booleans rather than changing kind.
+    sink.emit(_frame_payload(events=[{
+        "kind": "workout", "rep_completed": True,
+        "set_completed": False, "workout_complete": False,
+    }]), 0.0)
+    assert len(rec.msgs) == 2 + len(kinds)
+    # These bundled outputs are continuous observations, not transitions; they
+    # remain rate-limited and Result Hub stores them as latest-wins state.
+    for kind in ("qrcode", "text", "drowsiness"):
+        sink.emit(_frame_payload(events=[{"kind": kind}]), 0.0)
+    assert len(rec.msgs) == 2 + len(kinds)
+
+
 # --------------------------------------------------------------------------- #
 # 6. MultiSink isolation + hot swap
 # --------------------------------------------------------------------------- #
@@ -274,6 +358,44 @@ def test_hot_swap_formatter():
     sink.on_config_reload({"_formatter": new, "output_filters": {}})
     sink.emit(_frame_payload(results=[{"box": [0, 0, 1, 1]}]), 0.0)
     assert rec.msgs[1].body == b"1"                     # jinja output after swap
+
+
+def test_hot_reload_rebuilds_formatter_from_ordinary_effective_config():
+    rec = RecordChannel()
+
+    def rebuild(config):
+        template = (config.get("dTemplate") or {}).get("sDetection")
+        return Jinja2Formatter([{"topic": "t", "body": template}], app_id="a")
+
+    sink = ConfigurableSink(
+        app_id="a", channels=[rec],
+        formatter=Jinja2Formatter(
+            [{"topic": "t", "body": "{{ detection.count | tojson }}"}],
+            app_id="a"),
+        formatter_builder=rebuild)
+    sink.on_config_reload({
+        "dTemplate": {"sDetection": "{{ (detection.count + 10) | tojson }}"},
+        "output_filters": {},
+    })
+    sink.emit(_frame_payload(results=[{"box": [0, 0, 1, 1]}]), 0.0)
+    assert rec.msgs[0].body == b"11"
+
+
+def test_hot_reload_compile_failure_retains_last_good_formatter():
+    rec = RecordChannel()
+    original = Jinja2Formatter(
+        [{"topic": "t", "body": "{{ detection.count | tojson }}"}], app_id="a")
+
+    def rebuild(_config):
+        raise ValueError("bad live template")
+
+    sink = ConfigurableSink(app_id="a", channels=[rec], formatter=original,
+                            formatter_builder=rebuild)
+    sink.on_config_reload({"dTemplate": {"sDetection": "{{"},
+                           "output_filters": {}})
+    sink.emit(_frame_payload(results=[{"box": [0, 0, 1, 1]}]), 0.0)
+    assert sink.formatter is original
+    assert rec.msgs[0].body == b"1"
 
 
 # --------------------------------------------------------------------------- #
@@ -595,6 +717,7 @@ def test_assembly_builds_mqtt_channel_when_opted_in():
     try:
         assert opted is True and sink is not None
         assert [c.name for c in sink.channels] == ["mqtt"]
+        assert sink._formatter_builder is not None
     finally:
         if sink is not None:
             sink.close()

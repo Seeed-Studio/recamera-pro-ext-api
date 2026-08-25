@@ -111,6 +111,19 @@ RESULT_GATEWAY_SOCK = os.environ.get(
 RESULT_GATEWAY_HOST = os.environ.get("APPMGR_RESULT_GATEWAY_HOST", "127.0.0.1")
 RESULT_GATEWAY_PORT = int(os.environ.get("APPMGR_RESULT_GATEWAY_PORT", "8124"))
 
+# Canonical Result Hub.  The legacy :8124 endpoint above remains byte-compatible;
+# this second loopback listener exposes the stable v2 envelope and a raw/formatted
+# subscription view.  Built-in inference arrives pre-template on its own strict,
+# authenticated UDS rather than sharing the application identity boundary.
+RESULT_HUB_HOST = os.environ.get("APPMGR_RESULT_HUB_HOST", "127.0.0.1")
+RESULT_HUB_PORT = int(os.environ.get("APPMGR_RESULT_HUB_PORT", "8125"))
+SYSTEM_RESULT_SOCK = os.environ.get(
+    "APPMGR_SYSTEM_RESULT_SOCK", "/run/recamera/ai-system-results.sock")
+# Result Hub only reads this file to build the optional formatted view.  The
+# authoritative notify API remains its sole writer.
+NOTIFY_CONFIG = os.environ.get(
+    "APPMGR_NOTIFY_CONFIG", "/userdata/config/notify.json")
+
 # Release-signing trust anchor (APP_CENTER_PORT_DESIGN §4.9 / TODO #4).
 # The publisher's PUBLIC key is baked into the appmgr deploy; the matching
 # private key never touches repo or device. Packages carry a detached ECDSA

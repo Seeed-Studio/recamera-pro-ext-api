@@ -55,6 +55,7 @@ def _ws_json(sock):
 def test_two_publishers_share_one_ws_and_gateway_overwrites_identity(tmp_path,
                                                                     monkeypatch):
     identities = {("app-a", "inst-a", 1), ("app-b", "inst-b", 7)}
+    canonical = []
 
     def resolve(peer_pid, app, instance, generation):
         if peer_pid == os.getpid() and (app, instance, generation) in identities:
@@ -62,8 +63,11 @@ def test_two_publishers_share_one_ws_and_gateway_overwrites_identity(tmp_path,
                     "generation": generation, "pid": peer_pid}
         return None
 
-    gateway = ResultGateway(uds_path=str(tmp_path / "results.sock"),
-                            ws_port=0, identity_resolver=resolve)
+    gateway = ResultGateway(
+        uds_path=str(tmp_path / "results.sock"), ws_port=0,
+        identity_resolver=resolve,
+        canonical_publisher=lambda obj, identity: (
+            canonical.append((dict(obj), dict(identity))) or True))
     gateway.start()
     ws = _ws_connect(gateway.ws_port)
     ws.settimeout(3)
@@ -89,12 +93,48 @@ def test_two_publishers_share_one_ws_and_gateway_overwrites_identity(tmp_path,
         assert by_app["app-a"]["generation"] == 1
         assert by_app["app-b"]["instance"] == "inst-b"
         assert gateway.status()["publishers"] == 2
+        assert len(canonical) == 2
+        assert {item[0]["app"] for item in canonical} == {"app-a", "app-b"}
+        assert all(item[0]["app"] == item[1]["app_id"] for item in canonical)
+        assert gateway.status()["canonical_submitted"] == 2
     finally:
         for sink in sinks:
             sink.close()
         ws.close()
         gateway.stop()
     assert not os.path.exists(gateway.uds_path)
+
+
+def test_canonical_hook_failure_never_breaks_legacy_8124(tmp_path, monkeypatch):
+    def resolve(peer_pid, app, instance, generation):
+        if peer_pid == os.getpid():
+            return {"app_id": app, "instance_id": instance,
+                    "generation": generation, "pid": peer_pid}
+        return None
+
+    def broken_hook(_obj, _identity):
+        raise RuntimeError("hub unavailable")
+
+    gateway = ResultGateway(
+        uds_path=str(tmp_path / "results.sock"), ws_port=0,
+        identity_resolver=resolve, canonical_publisher=broken_hook).start()
+    ws = _ws_connect(gateway.ws_port)
+    ws.settimeout(3)
+    sink = None
+    try:
+        monkeypatch.setenv("RECAMERA_APP_ID", "legacy-ok")
+        monkeypatch.setenv("RECAMERA_APP_INSTANCE", "instance")
+        monkeypatch.setenv("RECAMERA_APP_GENERATION", "1")
+        sink = GatewayResultSink(sock=gateway.uds_path)
+        sink.emit({"results": [{"cls": 1}]}, 1.0)
+        assert _ws_json(ws)["app"] == "legacy-ok"
+        assert gateway.status()["canonical_dropped"] == 1
+        assert gateway.status()["received"] == 1
+    finally:
+        if sink is not None:
+            sink.close()
+        ws.close()
+        gateway.stop()
 
 
 def test_registry_uses_gateway_only_when_managed_env_is_present(tmp_path,

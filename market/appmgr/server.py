@@ -75,19 +75,92 @@ from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
+               result_hub as canonical_results,
                resources as appresources, state, supervisor,
                signing as appsigning, trust as apptrust,
-               uploads as appuploads, voiceruntime)
+               uploads as appuploads, visualization as appvisualization,
+               voiceruntime)
 
 
 _coordinator_instance = None
 _coordinator_layout = None
 _result_gateway_instance = None
+_result_hub_instance = None
+_visualization_bridge_instance = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _upload_finalize_lock = threading.Lock()
 _reconcile_stop = None
 _reconcile_thread = None
+
+
+def add_result_observer(callback):
+    """Register an asynchronous observer on authenticated raw v2 envelopes.
+
+    This is the platform seam reserved for a later OSD bridge.  ResultHub owns a
+    bounded worker queue per observer, so a slow/failing bridge cannot block app
+    or built-in inference ingress.  No native SDK is imported here.
+    """
+    hub = _result_hub_instance
+    if hub is None:
+        raise RuntimeError("result hub is not running")
+    return hub.add_observer(callback)
+
+
+def remove_result_observer(callback) -> bool:
+    hub = _result_hub_instance
+    return bool(hub is not None and hub.remove_observer(callback))
+
+
+def _supports_detection_stream_osd(manifest: dict) -> bool:
+    """Whether one installed v2 manifest explicitly opts into box burn-in."""
+    if not isinstance(manifest, dict) or manifest.get("manifest_version") != 2:
+        return False
+    render = manifest.get("render")
+    if not isinstance(render, dict) or render.get("schema_version") != 1:
+        return False
+    stream_osd = render.get("stream_osd")
+    supported = (stream_osd.get("supported")
+                 if isinstance(stream_osd, dict) else None)
+    return isinstance(supported, list) and "boxes" in supported
+
+
+def do_get_visualization() -> dict:
+    return appvisualization.public_view(_visualization_bridge_instance)
+
+
+def do_set_visualization(incoming: dict) -> dict:
+    """Persist the device-global stream burn-in policy.
+
+    Browser overlays remain a per-client choice.  Stream OSD changes every
+    encoded consumer (preview, RTSP, recordings and snapshots), so changes are
+    serialized with the same mutation gate as lifecycle/config operations and
+    only accept installed manifests that explicitly advertise box support.
+    """
+    if not isinstance(incoming, dict):
+        raise appvisualization.VisualizationError(
+            "visualization config must be an object")
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        clean = appvisualization.validate(
+            incoming, current=appvisualization.load())
+        for app_id in clean["osd"]["sources"]:
+            _require_installed(app_id)
+            manifest = _read_manifest(app_id)
+            if not _supports_detection_stream_osd(manifest):
+                raise appvisualization.VisualizationError(
+                    "application does not support detection stream OSD: %s" %
+                    app_id)
+        saved = appvisualization.save(clean)
+        if _visualization_bridge_instance is not None:
+            _visualization_bridge_instance.reload(saved)
+        _audit(
+            "v1_visualization",
+            osd_enabled=saved["osd"]["enabled"],
+            osd_sources=saved["osd"]["sources"],
+        )
+        _operation_manager().events.publish(
+            "visualization", action="updated", osd=saved["osd"])
+        return appvisualization.public_view(_visualization_bridge_instance)
 
 
 class RequestOriginError(ValueError):
@@ -318,6 +391,37 @@ def _read_manifest(app_id: str):
         return None
     _manifest_cache[app_id] = (key, man)
     return man
+
+
+def _refresh_result_manifest(app_id: str, manifest: dict = None,
+                             identity: dict = None) -> bool:
+    """Refresh Result Hub's generation-bound render cache off the data path."""
+    hub = _result_hub_instance
+    if hub is None or not hasattr(hub, "refresh_app_manifest"):
+        return False
+    resolved = dict(identity or state.get_app(app_id) or {})
+    resolved.setdefault("app_id", app_id)
+    if not resolved.get("instance_id") or resolved.get("generation") is None:
+        hub.invalidate_app_manifest(app_id)
+        return False
+    trusted_manifest = manifest if isinstance(manifest, dict) else _read_manifest(app_id)
+    return hub.refresh_app_manifest(resolved, trusted_manifest)
+
+
+def _resolve_result_identity(coord, hub, peer_pid, claimed_app,
+                             instance_id, generation):
+    """Authenticate one gateway publisher, then prime trusted manifest state.
+
+    Manifest I/O occurs once during the publisher hello/control path.  Every
+    subsequent result uses Result Hub's exact instance/generation cache only.
+    """
+    identity = coord.resolve_identity(
+        peer_pid, claimed_app, instance_id, generation)
+    if identity is not None:
+        manifest = _read_manifest(claimed_app)
+        if not hub.refresh_app_manifest(identity, manifest):
+            hub.invalidate_app_manifest(claimed_app)
+    return identity
 
 
 ICON_ENDPOINT = "/api/appMgr/icon"
@@ -558,6 +662,8 @@ def do_list() -> dict:
         result["resources"] = {"allocations": []}
     if _result_gateway_instance is not None:
         result["result_gateway"] = _result_gateway_instance.status()
+    if _result_hub_instance is not None:
+        result["result_hub"] = _result_hub_instance.status()
     return result
 
 
@@ -786,6 +892,9 @@ def do_install(pkg_path: str, signature: str = None, *,
             pkg_path, signature, allow_unsigned=allow_unsigned)
         # Drop caches so the freshly swapped manifest/icon are re-read now.
         cache_clear()
+        if (_result_hub_instance is not None
+                and hasattr(_result_hub_instance, "invalidate_app_manifest")):
+            _result_hub_instance.invalidate_app_manifest(app_id)
         # Prune any stored config keys the NEW schema no longer accepts, so the
         # restarted app never reads a removed/type-changed/out-of-range value
         # (健壮#20). Best-effort -- a revalidation hiccup must not fail the install.
@@ -827,6 +936,7 @@ def do_install(pkg_path: str, signature: str = None, *,
                pkg=os.path.realpath(pkg_path), upgrade=pre_installed,
                restarted=restarted,
                signed=sig.get("signed"), sig_verified=sig.get("verified"))
+        _refresh_result_manifest(app_id, manifest)
         return {"id": app_id, "version": manifest.get("version"),
                 "installed": True, "restarted": restarted, "signature": sig}
 
@@ -870,6 +980,9 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 rec["instance_id"], int(rec.get("generation", 0)))
         installer.uninstall(app_id)
         state.remove_app(app_id)
+        if (_result_hub_instance is not None
+                and hasattr(_result_hub_instance, "invalidate_app_manifest")):
+            _result_hub_instance.invalidate_app_manifest(app_id)
         _audit("uninstall", id=app_id, stopped=stopped, was_active=was_active)
         return {"id": app_id, "uninstalled": True,
                 "stopped": stopped, "was_active": was_active}
@@ -1022,6 +1135,7 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
             app_id, manifest=manifest, operation="start",
             launch=_managed_launch(app_id, "start", manifest),
             reset_restart_history=True)
+        _refresh_result_manifest(app_id, manifest, result)
         _audit("start", id=app_id, pid=result.get("pid"),
                instance=result.get("instance_id"),
                generation=result.get("generation"),
@@ -1060,6 +1174,7 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         result = _coordinator().restart(
             app_id, manifest=manifest,
             launch=_managed_launch(app_id, "restart", manifest))
+        _refresh_result_manifest(app_id, manifest, result)
         _audit("restart", id=app_id, pid=result.get("pid"),
                instance=result.get("instance_id"),
                generation=result.get("generation"),
@@ -1284,6 +1399,10 @@ def do_set_config(app_id: str, incoming: dict, *,
                     restarted = True
         _audit("config", id=app_id, keys=sorted(clean.keys()),
                applied=mode, restarted=restarted, reloaded=reloaded)
+        # Config writes can restart into a new generation; refresh from the
+        # installed manifest/state once here rather than consulting it for each
+        # result.  Live-only output/template changes retain the same identity.
+        _refresh_result_manifest(app_id, man)
         return {"id": app_id, "saved": True, "applied": mode,
                 "restarted": restarted, "reloaded": reloaded, "config": clean}
 
@@ -1443,6 +1562,17 @@ def do_resources() -> dict:
             "running": False, "uds": paths.RESULT_GATEWAY_SOCK,
             "ws_host": paths.RESULT_GATEWAY_HOST,
             "ws_port": paths.RESULT_GATEWAY_PORT,
+        }
+    if _result_hub_instance is not None:
+        snapshot["result_hub"] = _result_hub_instance.status()
+    else:
+        snapshot["result_hub"] = {
+            "running": False,
+            "schema": canonical_results.SCHEMA,
+            "schema_version": canonical_results.SCHEMA_VERSION,
+            "system_uds": paths.SYSTEM_RESULT_SOCK,
+            "ws_host": paths.RESULT_HUB_HOST,
+            "ws_port": paths.RESULT_HUB_PORT,
         }
     return snapshot
 
@@ -2152,6 +2282,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_resources())
             except Exception as exc:
                 return self._v1_error(exc)
+        if path == "/api/app-center/v1/visualization":
+            try:
+                return self._send(200, do_get_visualization())
+            except Exception as exc:
+                return self._v1_error(exc)
+        if path == "/api/app-center/v1/results/status":
+            if _result_hub_instance is None:
+                return self._send(503, {
+                    "running": False,
+                    "schema": canonical_results.SCHEMA,
+                    "schema_version": canonical_results.SCHEMA_VERSION,
+                })
+            return self._send(200, _result_hub_instance.status())
         if path == "/api/app-center/v1/events":
             try:
                 return self._send_events()
@@ -2221,6 +2364,14 @@ class _Handler(BaseHTTPRequestHandler):
             if _result_gateway_instance is None:
                 return self._send(503, {"running": False})
             return self._send(200, _result_gateway_instance.status())
+        if path == "/api/appMgr/resultHub":
+            if _result_hub_instance is None:
+                return self._send(503, {
+                    "running": False,
+                    "schema": canonical_results.SCHEMA,
+                    "schema_version": canonical_results.SCHEMA_VERSION,
+                })
+            return self._send(200, _result_hub_instance.status())
         self._send(404, {"error": "not found"})
 
     def _read_raw_body(self, cap: int = None) -> bytes:
@@ -2380,6 +2531,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        if path == "/api/app-center/v1/visualization":
+            try:
+                return self._send(
+                    200, do_set_visualization(self._body_json_v1()))
+            except Exception as exc:
+                return self._v1_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/config", path)
         if not match:
@@ -2603,7 +2760,9 @@ def _stop_reconciler() -> None:
 
 
 def serve(host: str = None, port: int = None) -> None:
-    global _result_gateway_instance, _operation_manager_instance
+    global _result_gateway_instance, _result_hub_instance
+    global _visualization_bridge_instance
+    global _operation_manager_instance
     host = host or paths.HTTP_HOST
     port = port or paths.HTTP_PORT
     if not _acquire_single_instance():
@@ -2633,25 +2792,54 @@ def serve(host: str = None, port: int = None) -> None:
     except Exception as e:
         print(f"[appmgr] install reconciliation skipped: {e!r}", flush=True)
     coord = _coordinator()
-    _result_gateway_instance = resultgateway.ResultGateway(
-        uds_path=paths.RESULT_GATEWAY_SOCK,
-        ws_host=paths.RESULT_GATEWAY_HOST,
-        ws_port=paths.RESULT_GATEWAY_PORT,
-        identity_resolver=coord.resolve_identity)
+    _result_hub_instance = canonical_results.ResultHub(
+        ws_host=paths.RESULT_HUB_HOST,
+        ws_port=paths.RESULT_HUB_PORT,
+        system_uds_path=paths.SYSTEM_RESULT_SOCK,
+        system_identity_resolver=canonical_results.resolve_builtin_notify_identity)
     try:
-        _result_gateway_instance.start()
-    except OSError as exc:
-        # One-time migration from v1: a verified legacy active child can still
-        # own :8124 while appmgr itself is restarting. Stop only that exact app,
-        # then let desired-state boot restore relaunch it through the gateway.
-        active = state.get_active()
-        if getattr(exc, "errno", None) == errno.EADDRINUSE and active and \
-                supervisor.is_running(active) is not None:
-            supervisor.stop(active)
+        _result_hub_instance.start()
+        _visualization_bridge_instance = (
+            appvisualization.DetectionOsdBridge().start())
+        _result_hub_instance.add_observer(
+            _visualization_bridge_instance.observe)
+        _result_gateway_instance = resultgateway.ResultGateway(
+            uds_path=paths.RESULT_GATEWAY_SOCK,
+            ws_host=paths.RESULT_GATEWAY_HOST,
+            ws_port=paths.RESULT_GATEWAY_PORT,
+            identity_resolver=lambda peer_pid, claimed_app, instance_id, generation: (
+                _resolve_result_identity(
+                    coord, _result_hub_instance, peer_pid, claimed_app,
+                    instance_id, generation)),
+            canonical_publisher=_result_hub_instance.submit_app)
+        try:
             _result_gateway_instance.start()
-        else:
+        except OSError as exc:
+            # One-time migration from v1: a verified legacy active child can still
+            # own :8124 while appmgr itself is restarting. Stop only that exact app,
+            # then let desired-state boot restore relaunch it through the gateway.
+            active = state.get_active()
+            if getattr(exc, "errno", None) == errno.EADDRINUSE and active and \
+                    supervisor.is_running(active) is not None:
+                supervisor.stop(active)
+                _result_gateway_instance.start()
+            else:
+                _result_gateway_instance = None
+                raise
+    except Exception:
+        if _result_gateway_instance is not None:
+            _result_gateway_instance.stop()
             _result_gateway_instance = None
-            raise
+        if _visualization_bridge_instance is not None:
+            if _result_hub_instance is not None:
+                _result_hub_instance.remove_observer(
+                    _visualization_bridge_instance.observe)
+            _visualization_bridge_instance.close()
+            _visualization_bridge_instance = None
+        if _result_hub_instance is not None:
+            _result_hub_instance.stop()
+            _result_hub_instance = None
+        raise
     httpd = None
     try:
         httpd = _AppHTTPServer((host, port), _Handler)
@@ -2659,6 +2847,9 @@ def serve(host: str = None, port: int = None) -> None:
         print("[appmgr] result gateway on unix://%s -> ws://%s:%s" %
               (paths.RESULT_GATEWAY_SOCK, paths.RESULT_GATEWAY_HOST,
                _result_gateway_instance.ws_port), flush=True)
+        print("[appmgr] result hub on unix://%s -> ws://%s:%s" %
+              (paths.SYSTEM_RESULT_SOCK, paths.RESULT_HUB_HOST,
+               _result_hub_instance.ws_port), flush=True)
         # Boot-restore after both public endpoints are bound.  Resume every
         # desired app independently; a failed app does not block HTTP or peers.
         _boot_restore()
@@ -2673,6 +2864,15 @@ def serve(host: str = None, port: int = None) -> None:
         if _result_gateway_instance is not None:
             _result_gateway_instance.stop()
             _result_gateway_instance = None
+        if _visualization_bridge_instance is not None:
+            if _result_hub_instance is not None:
+                _result_hub_instance.remove_observer(
+                    _visualization_bridge_instance.observe)
+            _visualization_bridge_instance.close()
+            _visualization_bridge_instance = None
+        if _result_hub_instance is not None:
+            _result_hub_instance.stop()
+            _result_hub_instance = None
         if _operation_manager_instance is not None:
             _operation_manager_instance.close()
             _operation_manager_instance = None

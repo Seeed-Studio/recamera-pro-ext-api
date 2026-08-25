@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 1, "channel": "stable"},
+  "release": {"sequence": 2, "channel": "stable"},
   "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
   "python": {
     "runtime_profile": "recamera-ai-cp311-v1",
@@ -46,7 +46,7 @@
   "id": "voice-transcribe",
   "name": "Voice Transcribe",
   "name_zh": "语音转录",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "image": "/appcenter/apps/voice-transcribe.png",
   "type": "self-hosted",
   "scene": "Voice & Audio",
@@ -69,6 +69,7 @@
     "npu"
   ],
   "render": {
+    "schema_version": 1,
     "events": {
       "transcript": {
         "as": "subtitle",
@@ -83,6 +84,7 @@
     }
   },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
     "schema": "events[]{kind=state|wake|transcript|listen_timeout, state, text, keyword, backend, audio_sec, rtf, language} + top-level {state, summary{state,text}}",
     "default_channel": [
@@ -97,13 +99,13 @@
       {"name": "event_kind", "from": "events[].kind", "type": "string", "description": "Event kind (state/wake/transcript/listen_timeout)"},
       {"name": "event_type", "from": "events[].type", "type": "string", "description": "Original state-machine event type (mirrored into kind)"},
       {"name": "event_t", "from": "events[].t", "type": "float", "description": "Monotonic event timestamp"},
-      {"name": "event_state", "from": "events[].state", "type": "string", "optional": true, "description": "State for state events"},
+      {"name": "event_state", "from": "events[].state", "type": "string", "event_kind": "state", "optional": true, "description": "State for state events"},
       {"name": "event_utterance_sec", "from": "events[].utterance_sec", "type": "float", "optional": true, "description": "Utterance duration"},
       {"name": "event_keyword", "from": "events[].keyword", "type": "string", "optional": true, "description": "Wake keyword (wake events)"},
       {"name": "event_backend", "from": "events[].backend", "type": "string", "optional": true, "description": "Wake backend (wake events)"},
       {"name": "event_score", "from": "events[].score", "type": "float", "optional": true, "description": "Wake score (wake events)"},
       {"name": "event_transcript", "from": "events[].transcript", "type": "string", "optional": true, "description": "Transcript text (transcript events)"},
-      {"name": "event_text", "from": "events[].text", "type": "string", "optional": true, "description": "Transcript text alias"},
+      {"name": "event_text", "from": "events[].text", "type": "string", "event_kind": "transcript", "optional": true, "description": "Transcript text alias"},
       {"name": "event_audio_sec", "from": "events[].audio_sec", "type": "float", "optional": true, "description": "Transcribed audio duration"},
       {"name": "event_rtf", "from": "events[].rtf", "type": "float", "optional": true, "description": "Real-time factor of transcription"},
       {"name": "event_language", "from": "events[].language", "type": "string", "optional": true, "description": "Detected/selected language"}

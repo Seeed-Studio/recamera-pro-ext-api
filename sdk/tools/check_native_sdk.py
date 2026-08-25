@@ -85,7 +85,7 @@ def _check_source(source_root):
         header = header_path.read_text(encoding="utf-8")
         declared = set(
             re.findall(
-                r"\b(rc_ext_(?:result|frame|probe|inference|mask)_[A-Za-z0-9_]+)\s*\(",
+                r"\b(rc_ext_(?:result|osd|frame|probe|inference|mask)_[A-Za-z0-9_]+)\s*\(",
                 header,
             )
         )
@@ -103,6 +103,7 @@ def _check_source(source_root):
         for capability in (
             "frame@1",
             "result@1",
+            "osd@1",
             "probe@1",
             "inference-control@1",
         ):

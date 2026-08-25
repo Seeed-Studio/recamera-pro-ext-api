@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 1, "channel": "stable"},
+  "release": {"sequence": 2, "channel": "stable"},
   "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
   "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
   "artifacts": [
@@ -20,7 +20,7 @@
   "id": "ppocr-reader",
   "name": "PP-OCR Reader",
   "name_zh": "文字识别",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "image": "/appcenter/apps/ppocr-reader.png",
   "type": "self-hosted",
   "scene": "OCR & Text",
@@ -68,6 +68,8 @@
   "x-default_model": "ppocr_det_fp16",
   "postproc": "db_ocr",
   "render": {
+    "schema_version": 1,
+    "quads": {"points": "quad", "label": "text", "line_width": 2},
     "events": {
       "text": {
         "as": "badge",
@@ -76,6 +78,7 @@
     }
   },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
     "schema": "results[]{box,quad,score,text,rec_conf,kind=text} + events[]{kind=text,box,quad,text,score,rec_conf}",
     "topic": "recamera/ppocr-reader/results",

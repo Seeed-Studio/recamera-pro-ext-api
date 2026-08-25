@@ -250,8 +250,21 @@
     "scene_zh": {"type": "string"},
     "tags": {"type": "array", "items": {"type": "string"}},
     "postproc": {"type": "string"},
-    "render": {"type": "object"},
-    "output": {"type": "object", "not": {"required": ["port"]}},
+    "render": {
+      "type": "object",
+      "oneOf": [
+        {"not": {"required": ["schema_version"]}},
+        {"$ref": "#/$defs/renderV1"}
+      ]
+    },
+    "output": {
+      "type": "object",
+      "not": {"required": ["port"]},
+      "oneOf": [
+        {"not": {"required": ["contract_version"]}},
+        {"$ref": "#/$defs/outputV2"}
+      ]
+    },
     "ha_entities": {"type": "array"},
     "package": {
       "type": "object",
@@ -281,6 +294,144 @@
     "token": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$"
+    },
+    "outputFieldV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["name", "from", "type", "description"],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "from": {"type": "string", "minLength": 1, "maxLength": 512},
+        "type": {"type": "string", "minLength": 1, "maxLength": 128},
+        "coord": {
+          "enum": [
+            "pixel_xyxy", "pixel_quad", "pixel_points",
+            "normalized_xyxy", "normalized_quad", "normalized_points"
+          ]
+        },
+        "description": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "event_kind": {"$ref": "#/$defs/token"},
+        "optional": {"type": "boolean"},
+        "derived": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"pattern": "(bbox|quad|keypoint)"}}},
+          "then": {"required": ["coord"]}
+        }
+      ]
+    },
+    "outputMappingV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["source", "target", "topic"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1, "maxLength": 512},
+        "target": {"$ref": "#/$defs/token"},
+        "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+        "task": {"$ref": "#/$defs/token"}
+      }
+    },
+    "outputV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": [
+        "contract_version", "sink", "schema", "default_channel",
+        "default_mode", "fields", "default_mapping"
+      ],
+      "properties": {
+        "contract_version": {"const": 2},
+        "sink": {"const": "ws"},
+        "schema": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+        "default_channel": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["ws", "mqtt", "http", "uart"]}
+        },
+        "default_mode": {"enum": ["raw", "custom", "ha"]},
+        "persistent_summary": {"type": "boolean"},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/outputFieldV2"}},
+        "default_mapping": {"type": "array", "items": {"$ref": "#/$defs/outputMappingV2"}}
+      }
+    },
+    "renderEventV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "as": {"enum": ["none", "badge", "toast", "panel", "subtitle"]},
+        "position": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "duration_sec": {"type": "number", "minimum": 0},
+        "max_lines": {"type": "number", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/token"}}
+      }
+    },
+    "renderV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "boxes": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "properties": {
+            "color_by": {"$ref": "#/$defs/token"},
+            "label": {"$ref": "#/$defs/token"},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        "quads": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["points"],
+          "properties": {
+            "points": {"$ref": "#/$defs/token"},
+            "label": {"$ref": "#/$defs/token"},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        "keypoints": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["layout"],
+          "properties": {
+            "layout": {"$ref": "#/$defs/token"},
+            "point_radius": {"type": "integer", "minimum": 1, "maximum": 16},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16},
+            "conf_min": {"type": "number", "minimum": 0, "maximum": 1},
+            "skeleton": {"type": "array"}
+          }
+        },
+        "events": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/token"},
+          "additionalProperties": {"$ref": "#/$defs/renderEventV1"}
+        },
+        "stream_osd": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["supported", "default"],
+          "properties": {
+            "supported": {
+              "type": "array", "minItems": 1, "maxItems": 1,
+              "uniqueItems": true, "items": {"const": "boxes"}
+            },
+            "default": {"const": false}
+          }
+        }
+      }
     },
     "versionConstraint": {
       "type": "string",

@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 1, "channel": "stable"},
+  "release": {"sequence": 2, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64", "python": "==3.11.*",
@@ -46,7 +46,7 @@
   "id": "facemesh-reader",
   "name": "Facemesh Reader",
   "name_zh": "面部疲劳检测",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "image": "/appcenter/apps/facemesh-reader.png",
   "type": "self-hosted",
   "scene": "Safety & Care",
@@ -93,6 +93,7 @@
   "x-default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
   "render": {
+    "schema_version": 1,
     "keypoints": {
       "layout": "facemesh468",
       "point_radius": 1,
@@ -100,6 +101,7 @@
     }
   },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
     "schema": "results[]{box,score,presence,landmark_count,ear,mar} + events[]{kind=metrics|blink|yawn|drowsiness,avg_ear,mar,state,drowsiness_level,perclos_pct,...}",
     "default_channel": [
@@ -114,7 +116,7 @@
       {"name": "landmark_count", "from": "results[].landmark_count", "type": "integer", "description": "Number of FaceMesh landmarks (468 when present)"},
       {"name": "ear", "from": "results[].ear", "type": "float", "optional": true, "description": "Eye aspect ratio (primary face)"},
       {"name": "mar", "from": "results[].mar", "type": "float", "optional": true, "description": "Mouth aspect ratio (primary face)"},
-      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[]", "optional": true, "description": "468 FaceMesh pixel keypoints"},
+      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[]", "coord": "pixel_points", "optional": true, "description": "468 FaceMesh pixel keypoints"},
       {"name": "metrics_face_valid", "from": "events[kind=metrics].face_valid", "type": "bool", "event_kind": "metrics", "description": "Whether a valid face drives the metrics"},
       {"name": "metrics_avg_ear", "from": "events[kind=metrics].avg_ear", "type": "float", "event_kind": "metrics", "description": "Average EAR"},
       {"name": "metrics_left_ear", "from": "events[kind=metrics].left_ear", "type": "float", "event_kind": "metrics", "description": "Left-eye EAR"},
@@ -123,7 +125,7 @@
       {"name": "metrics_eyes_closed", "from": "events[kind=metrics].eyes_closed", "type": "bool", "event_kind": "metrics", "description": "Eyes-closed flag"},
       {"name": "metrics_mouth_open", "from": "events[kind=metrics].mouth_open", "type": "bool", "event_kind": "metrics", "description": "Mouth-open flag"},
       {"name": "metrics_state", "from": "events[kind=metrics].state", "type": "string", "event_kind": "metrics", "description": "Composite drowsiness state"},
-      {"name": "metrics_drowsiness_level", "from": "events[kind=metrics].drowsiness_level", "type": "string", "event_kind": "metrics", "description": "Drowsiness level"},
+      {"name": "metrics_drowsiness_level", "from": "events[kind=metrics].drowsiness_level", "type": "float", "event_kind": "metrics", "description": "Drowsiness level"},
       {"name": "metrics_perclos_pct", "from": "events[kind=metrics].perclos_pct", "type": "float", "event_kind": "metrics", "description": "PERCLOS percentage"},
       {"name": "metrics_continuous_closure_sec", "from": "events[kind=metrics].continuous_closure_sec", "type": "float", "event_kind": "metrics", "description": "Continuous eye-closure seconds"},
       {"name": "metrics_is_yawning", "from": "events[kind=metrics].is_yawning", "type": "bool", "event_kind": "metrics", "description": "Currently yawning"},

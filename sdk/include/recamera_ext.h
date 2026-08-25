@@ -144,6 +144,30 @@ int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
 void rc_ext_result_close(rc_ext_result_t *h);
 
 // ===========================================================================
+// Platform OSD-only sink (additive ABI)
+// ===========================================================================
+// This narrowly-scoped sink is reserved for the appmgr visualization bridge.
+// Its server endpoint authenticates the connecting process with SO_PEERCRED,
+// the root-owned appmgr pidfile and /proc identity.  Client-provided names are
+// not authorization.  Accepted messages update only the device OSD compositor;
+// they never enter recording, notification, rule or legacy WebSocket paths.
+
+typedef struct rc_ext_osd rc_ext_osd_t;
+
+// Connects to /run/recamera/osd-in.sock and performs the osd@1 handshake.
+// On failure returns NULL and writes rc_ext_err_t to err when non-NULL.
+rc_ext_osd_t *rc_ext_osd_open(int *err);
+
+// Sends a DETECTION snapshot containing at most 64 normalized boxes.  n == 0
+// is an explicit OSD clear.  Other task types are intentionally absent from
+// this API and rejected by the server.
+int rc_ext_osd_send_detections(rc_ext_osd_t *h, uint64_t pts_us,
+			       const rc_ext_box_t *boxes, size_t n);
+
+// Closes the OSD-only connection and frees the handle. NULL-safe.
+void rc_ext_osd_close(rc_ext_osd_t *h);
+
+// ===========================================================================
 // M2 frame proxy -- zero-copy frame receiver (spec §2.5)
 // ===========================================================================
 //

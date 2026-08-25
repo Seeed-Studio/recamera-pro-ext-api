@@ -4,6 +4,7 @@ Core facilities mirror the C ABI v1 without reimplementing wire protocols
 (spec §0: "Python is a thin wrapper of the C library"):
 
   ResultSink     -- inject inference results        (rc_ext_result_*)
+  OsdSink        -- appmgr-only OSD snapshots       (rc_ext_osd_*)
   FrameSource    -- receive zero-copy camera frames (rc_ext_frame_*)
   ProbeSource    -- observe built-in pipeline data  (rc_ext_probe_*)
   InferenceLease -- arbitrate external RKNN ownership
@@ -127,6 +128,7 @@ _LOG.addHandler(logging.NullHandler())
 
 __all__ = [
     "ResultSink",
+    "OsdSink",
     "ResultTooLarge",
     "ErrorCode",
     "RecameraError",
@@ -573,6 +575,16 @@ def _bind(lib):
     lib.rc_ext_result_send_keypoints.argtypes = [c_void_p, c_uint64, POINTER(KeypointInstance), c_size_t]
     lib.rc_ext_result_close.restype = None
     lib.rc_ext_result_close.argtypes = [c_void_p]
+    # Platform OSD-only sink (optional -- requires matching firmware/SDK).
+    if hasattr(lib, "rc_ext_osd_open"):
+        lib.rc_ext_osd_open.restype = c_void_p
+        lib.rc_ext_osd_open.argtypes = [POINTER(c_int)]
+        lib.rc_ext_osd_send_detections.restype = c_int
+        lib.rc_ext_osd_send_detections.argtypes = [
+            c_void_p, c_uint64, POINTER(Box), c_size_t,
+        ]
+        lib.rc_ext_osd_close.restype = None
+        lib.rc_ext_osd_close.argtypes = [c_void_p]
     # Frame source.
     lib.rc_ext_frame_open.restype = c_void_p
     lib.rc_ext_frame_open.argtypes = [POINTER(_Cfg), POINTER(c_int)]
@@ -1106,6 +1118,7 @@ class ResultSink(_Handle):
     """Injects detection results into rkipc via /run/recamera/result-in.sock."""
 
     _close_cfn = "rc_ext_result_close"
+    _detection_cfn = "rc_ext_result_send_detections"
 
     # Conservative local wire budget for one send_* datagram. 64 KiB is the
     # documented per-message datagram limit; the authoritative value is the
@@ -1403,7 +1416,7 @@ class ResultSink(_Handle):
             self._labels.append(lb)
             arr[i] = Box(x1, y1, x2, y2, score, lb, class_id)
 
-        return self._send("rc_ext_result_send_detections", Box, operation,
+        return self._send(self._detection_cfn, Box, operation,
                           pts_us, boxes, fill)
 
     def send_classification(self, pts_us, items):
@@ -1581,6 +1594,75 @@ class ResultSink(_Handle):
 
         return self._send("rc_ext_result_send_keypoints", KeypointInstance,
                           operation, pts_us, instances, fill)
+
+
+class OsdSink(ResultSink):
+    """Appmgr-only detection overlay sink over ``/run/recamera/osd-in.sock``.
+
+    The device authenticates the process using SO_PEERCRED, the root-owned
+    appmgr pidfile and ``/proc``.  This class has no source-id argument because
+    client-provided identity is deliberately irrelevant.  Accepted snapshots
+    update only OSD; they do not enter recording, notification, rules or legacy
+    WebSocket paths.  An empty snapshot explicitly clears the overlay.
+    """
+
+    _close_cfn = "rc_ext_osd_close"
+    _detection_cfn = "rc_ext_osd_send_detections"
+    MAX_BOXES = 64
+
+    def __init__(self, lib_path=None):
+        self._lib = _load(lib_path)
+        if not hasattr(self._lib, "rc_ext_osd_open"):
+            raise CapabilityUnavailableError(
+                "librecamera_ext lacks the appmgr OSD-only sink",
+                operation="rc_ext_osd_open",
+            )
+        err = c_int(0)
+        self._h = self._lib.rc_ext_osd_open(byref(err))
+        if not self._h:
+            raise error_from_rc(
+                "rc_ext_osd_open",
+                err.value or -int(ErrorCode.EINTERNAL),
+            )
+        self.source_id = "appmgr-osd"
+        self._labels = []
+        self._masks = []
+        self._pt_arrays = []
+        self._sent = 0
+        self._oversize = 0
+        self._send_error = 0
+
+    def send_detections(self, pts_us, boxes):
+        try:
+            boxes = list(boxes)
+        except TypeError:
+            self._format_error("send_detections", "boxes must be iterable")
+        if len(boxes) > self.MAX_BOXES:
+            self._format_error(
+                "send_detections",
+                f"at most {self.MAX_BOXES} boxes are allowed, got {len(boxes)}",
+            )
+        return super().send_detections(pts_us, boxes)
+
+    @staticmethod
+    def _reject_non_detection(name):
+        raise FormatError(
+            f"{name}: OsdSink accepts detection snapshots only",
+            operation=name,
+            detail="use ResultSink for non-OSD inference publication",
+        )
+
+    def send_classification(self, pts_us, items):
+        self._reject_non_detection("send_classification")
+
+    def send_segmentation(self, pts_us, items):
+        self._reject_non_detection("send_segmentation")
+
+    def send_tracking(self, pts_us, items):
+        self._reject_non_detection("send_tracking")
+
+    def send_keypoints(self, pts_us, instances):
+        self._reject_non_detection("send_keypoints")
 
 
 class FrameLease:

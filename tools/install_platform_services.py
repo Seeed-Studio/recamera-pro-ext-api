@@ -123,6 +123,8 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
     _assert_clean(platform)
     required = (
         platform / "appmgr/__main__.py",
+        platform / "appmgr/result_hub.py",
+        platform / "appmgr/visualization.py",
         platform / "appmgr/inference_auth.py",
         platform / "appmgr/trust.py",
         platform / "appmgr/schema/manifest-v2.schema.json",

@@ -15,11 +15,18 @@
 #include "rc_ext_errno.h"
 
 #define RC_EXT_RESULT_SOCK "/run/recamera/result-in.sock"
+#define RC_EXT_OSD_SOCK    "/run/recamera/osd-in.sock"
+#define RC_EXT_OSD_MAX_BOXES 64u
 
 struct rc_ext_result {
 	int fd;
 	uint32_t api_version;
 	char source_id[64];
+};
+
+struct rc_ext_osd {
+	int fd;
+	uint32_t api_version;
 };
 
 // Allocate the entries[]/eptrs[]/boxobjs[] triple shared by the detection,
@@ -63,17 +70,22 @@ static void fill_box(InferenceBox *b, float x1, float y1, float x2, float y2) {
 
 // Packs a fully-built InferenceResult and sends it as one datagram. Fills the
 // common top-level fields first. Returns 0 on success or -rc_ext_err_t.
-static int rc_send_result(rc_ext_result_t *h, InferenceResult *res) {
+static int rc_send_result_fd(int fd, const char *source_id,
+			     InferenceResult *res) {
 	res->model_id = 0;
-	res->source_id = h->source_id;
+	res->source_id = (char *)(source_id ? source_id : "");
 	size_t psz = inference_result__get_packed_size(res);
 	uint8_t *pbuf = (uint8_t *)malloc(psz ? psz : 1);
 	if (!pbuf)
 		return -RC_EXT_EINTERNAL;
 	inference_result__pack(res, pbuf);
-	ssize_t s = send(h->fd, pbuf, psz, MSG_NOSIGNAL);
+	ssize_t s = send(fd, pbuf, psz, MSG_NOSIGNAL);
 	free(pbuf);
 	return (s < 0) ? -RC_EXT_EINTERNAL : 0;
+}
+
+static int rc_send_result(rc_ext_result_t *handle, InferenceResult *result) {
+	return rc_send_result_fd(handle->fd, handle->source_id, result);
 }
 
 rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err) {
@@ -98,9 +110,9 @@ rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err) {
 	return h;
 }
 
-int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
-                                  const rc_ext_box_t *boxes, size_t n) {
-	if (!h)
+static int send_detections_fd(int fd, const char *source_id, uint64_t pts_us,
+			      const rc_ext_box_t *boxes, size_t n) {
+	if (fd < 0 || (n && !boxes))
 		return -RC_EXT_EINTERNAL;
 
 	InferenceResult res = INFERENCE_RESULT__INIT;
@@ -133,10 +145,53 @@ int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
 	res.data_case = INFERENCE_RESULT__DATA_DETECTION;
 	res.detection = &det;
 
-	int ret = rc_send_result(h, &res);
+	int ret = rc_send_result_fd(fd, source_id, &res);
 
 	RC_FREE3(entries, eptrs, boxobjs);
 	return ret;
+}
+
+int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
+				  const rc_ext_box_t *boxes, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+	return send_detections_fd(h->fd, h->source_id, pts_us, boxes, n);
+}
+
+rc_ext_osd_t *rc_ext_osd_open(int *err) {
+	uint32_t api_version = 0;
+	int fd = rc_ext_connect_hello(RC_EXT_OSD_SOCK, "appmgr-osd",
+				      &api_version, err);
+	if (fd < 0)
+		return NULL;
+	rc_ext_osd_t *handle = (rc_ext_osd_t *)calloc(1, sizeof(*handle));
+	if (!handle) {
+		close(fd);
+		rc_ext_set_err(err, RC_EXT_EINTERNAL);
+		return NULL;
+	}
+	handle->fd = fd;
+	handle->api_version = api_version;
+	if (err)
+		*err = RC_EXT_OK;
+	return handle;
+}
+
+int rc_ext_osd_send_detections(rc_ext_osd_t *handle, uint64_t pts_us,
+			       const rc_ext_box_t *boxes, size_t n) {
+	if (!handle)
+		return -RC_EXT_EINTERNAL;
+	if (n > RC_EXT_OSD_MAX_BOXES || (n && !boxes))
+		return -RC_EXT_EFORMAT;
+	return send_detections_fd(handle->fd, "appmgr-osd", pts_us, boxes, n);
+}
+
+void rc_ext_osd_close(rc_ext_osd_t *handle) {
+	if (!handle)
+		return;
+	if (handle->fd >= 0)
+		close(handle->fd);
+	free(handle);
 }
 
 int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,

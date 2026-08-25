@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 1, "channel": "stable"},
+  "release": {"sequence": 2, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64",
@@ -76,7 +76,7 @@
   "id": "face-analysis",
   "name": "Face Analysis",
   "name_zh": "客群分析",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "image": "/appcenter/apps/face-analysis.png",
   "type": "self-hosted",
   "scene": "Retail & Audience",
@@ -151,7 +151,20 @@
   ],
   "x-default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
+  "render": {
+    "schema_version": 1,
+    "boxes": {"color_by": "emotion", "label": "gender", "line_width": 2},
+    "events": {
+      "demographics": {
+        "as": "panel",
+        "position": "top-left",
+        "fields": ["faces", "gender", "age", "race", "emotion"]
+      }
+    },
+    "stream_osd": {"supported": ["boxes"], "default": false}
+  },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
     "schema": "results[]{box,score,blur,gender,gender_conf,age,age_conf,race,race_conf,emotion,emotion_conf} + events[]{kind=face|demographics,...}",
     "topic": "recamera/face-analysis/results",

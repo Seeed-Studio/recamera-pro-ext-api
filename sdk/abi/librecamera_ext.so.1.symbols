@@ -20,6 +20,9 @@ rc_ext_mask_open
 rc_ext_mask_query
 rc_ext_mask_set
 rc_ext_mask_update
+rc_ext_osd_close
+rc_ext_osd_open
+rc_ext_osd_send_detections
 rc_ext_probe_close
 rc_ext_probe_info
 rc_ext_probe_next

@@ -11,7 +11,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
-from appmgr import operations, paths, resources, server, state, trust, uploads
+from appmgr import (operations, paths, resources, server, state, trust, uploads,
+                    visualization)
 
 
 def _multipart(package: bytes, *, boundary="bounded-test", signature=None,
@@ -1361,6 +1362,89 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
         assert "apps" in json.loads(response.read())
     finally:
         connection.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_visualization_http_policy_is_persisted_and_manifest_gated(
+        layout, monkeypatch):
+    compatible = os.path.join(paths.APPS_DIR, "compatible")
+    incompatible = os.path.join(paths.APPS_DIR, "incompatible")
+    os.mkdir(compatible)
+    os.mkdir(incompatible)
+    with open(os.path.join(compatible, "manifest.json"), "w") as stream:
+        json.dump({
+            "manifest_version": 2,
+            "id": "compatible",
+            "render": {
+                "schema_version": 1,
+                "stream_osd": {"supported": ["boxes"], "default": False},
+            },
+        }, stream)
+    with open(os.path.join(incompatible, "manifest.json"), "w") as stream:
+        json.dump({
+            "manifest_version": 2,
+            "id": "incompatible",
+            "render": {"schema_version": 1},
+        }, stream)
+    monkeypatch.setenv(
+        "APPMGR_VISUALIZATION_CONFIG",
+        os.path.join(paths.APPMGR_DIR, "visualization.json"))
+    server.cache_clear()
+
+    class Bridge:
+        def __init__(self):
+            self.reloaded = []
+
+        def reload(self, config):
+            self.reloaded.append(config)
+
+        def status(self):
+            return {
+                "running": True, "enabled": True,
+                "sources": ["compatible"], "active_sources": [],
+                "sent": 0, "send_errors": 0, "dropped": 0,
+                "last_error": "",
+            }
+
+    bridge = Bridge()
+    monkeypatch.setattr(server, "_visualization_bridge_instance", bridge)
+    monkeypatch.setattr(server, "_audit", lambda *args, **kwargs: None)
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, initial = _json_request(
+            httpd, "GET", "/api/app-center/v1/visualization", {})
+        assert status == 200
+        assert initial["osd"]["enabled"] is False
+
+        status, result = _json_request(
+            httpd, "PUT", "/api/app-center/v1/visualization",
+            {"osd": {"enabled": True, "sources": ["compatible"]}})
+        assert status == 200
+        assert result["osd"]["enabled"] is True
+        assert result["osd"]["sources"] == ["compatible"]
+        assert bridge.reloaded == [{
+            "osd": {"enabled": True, "sources": ["compatible"]},
+        }]
+        assert visualization.load() == bridge.reloaded[-1]
+
+        status, error = _json_request(
+            httpd, "PUT", "/api/app-center/v1/visualization",
+            {"osd": {"enabled": True, "sources": ["incompatible"]}})
+        assert status == 400
+        assert "does not support" in error["error"]
+        assert visualization.load() == bridge.reloaded[-1]
+
+        status, error = _json_request(
+            httpd, "PUT", "/api/app-center/v1/visualization",
+            {"osd": {"enabled": True, "sources": ["not-installed"]}})
+        assert status == 404
+        assert "not installed" in error["error"]
+        assert visualization.load() == bridge.reloaded[-1]
+    finally:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=2)

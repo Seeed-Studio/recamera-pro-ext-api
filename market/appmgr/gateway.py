@@ -1,4 +1,9 @@
-"""appmgr-owned result fan-in: authenticated NDJSON UDS -> one WebSocket."""
+"""Legacy app result fan-in: authenticated NDJSON UDS -> WebSocket :8124.
+
+The byte-compatible legacy stream remains authoritative for existing clients.
+An optional non-blocking ``canonical_publisher`` hook mirrors each authenticated
+message into Result Hub v2 without letting hub/template failures affect :8124.
+"""
 from __future__ import annotations
 
 import json
@@ -47,11 +52,13 @@ class ResultGateway:
     def __init__(self, *, uds_path: Optional[str] = None,
                  ws_host: Optional[str] = None, ws_port: Optional[int] = None,
                  identity_resolver: Optional[Callable[..., Optional[dict]]] = None,
+                 canonical_publisher: Optional[Callable[..., bool]] = None,
                  max_publishers: int = 32, max_line: int = 512 * 1024):
         self.uds_path = uds_path or paths.RESULT_GATEWAY_SOCK
         self.ws_host = ws_host or paths.RESULT_GATEWAY_HOST
         self.ws_port = paths.RESULT_GATEWAY_PORT if ws_port is None else int(ws_port)
         self.identity_resolver = identity_resolver
+        self.canonical_publisher = canonical_publisher
         self.max_publishers = max(1, int(max_publishers))
         self.max_line = max(4096, int(max_line))
         self._unix: Optional[socket.socket] = None
@@ -64,6 +71,8 @@ class ResultGateway:
         self._received = 0
         self._rejected = 0
         self._oversize = 0
+        self._canonical_submitted = 0
+        self._canonical_dropped = 0
 
     def _prepare_path(self) -> None:
         parent = os.path.dirname(self.uds_path)
@@ -189,6 +198,17 @@ class ResultGateway:
                 obj["gateway_ts"] = time.time()
                 self._ws.publish_envelope(obj)
                 self._received += 1
+                # The hook receives only the already-authenticated identity and
+                # sanitized legacy object.  ResultHub.submit_app is a bounded
+                # non-blocking offer; any failure is isolated from legacy :8124.
+                if self.canonical_publisher is not None:
+                    try:
+                        if self.canonical_publisher(obj, identity) is False:
+                            self._canonical_dropped += 1
+                        else:
+                            self._canonical_submitted += 1
+                    except Exception:
+                        self._canonical_dropped += 1
         except Exception as exc:
             self._rejected += 1
             try:
@@ -221,6 +241,8 @@ class ResultGateway:
             "received": self._received,
             "rejected": self._rejected,
             "oversize": self._oversize,
+            "canonical_submitted": self._canonical_submitted,
+            "canonical_dropped": self._canonical_dropped,
         }
 
     def stop(self) -> None:

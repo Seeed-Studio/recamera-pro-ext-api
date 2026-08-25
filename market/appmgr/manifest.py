@@ -72,6 +72,12 @@ _RESOURCE_NAMES = frozenset((
     "probe.read", "result.publish", "rga",
 ))
 _RESOURCE_MODES = frozenset(("brokered", "exclusive", "scheduled", "shared"))
+_OUTPUT_CHANNELS = frozenset(("ws", "mqtt", "http", "uart"))
+_OUTPUT_MODES = frozenset(("raw", "custom", "ha"))
+_COORD_SPACES = frozenset((
+    "pixel_xyxy", "pixel_quad", "pixel_points",
+    "normalized_xyxy", "normalized_quad", "normalized_points",
+))
 
 
 class ManifestValidationError(ValueError):
@@ -300,6 +306,229 @@ def _validate_config_schema(value: Any) -> set[str]:
             if "maxPoints" in spec:
                 _positive_int(spec["maxPoints"], ip + ".maxPoints")
     return seen_items
+
+
+def _validate_output_contract(value: Any) -> None:
+    """Validate the optional, typed result/template metadata contract.
+
+    Older manifest-v2 packages shipped an intentionally loose ``output``
+    object.  They remain installable.  A publisher opts into the closed v2
+    contract with ``contract_version: 2``; the browser Result Center and the
+    Result Hub may then rely on these fields without guessing.
+    """
+    output = _expect_object(value, "output")
+    if "port" in output:
+        _fail("output.port",
+              "fixed ports are forbidden; endpoint_mode=allocated owns binding")
+    if "contract_version" not in output:
+        return
+    if output.get("contract_version") != 2:
+        _fail("output.contract_version", "must equal 2")
+    allowed = frozenset((
+        "contract_version", "sink", "schema", "topic", "default_channel",
+        "default_mode", "persistent_summary", "fields", "default_mapping",
+    ))
+    _closed(output, allowed, "output")
+    _required(output, frozenset((
+        "contract_version", "sink", "schema", "default_channel",
+        "default_mode", "fields", "default_mapping",
+    )), "output")
+    if output["sink"] != "ws":
+        _fail("output.sink", "must be 'ws'; appmgr owns the public result port")
+    _string(output["schema"], "output.schema", max_len=4096)
+    if "topic" in output:
+        _string(output["topic"], "output.topic", max_len=512)
+    channels = _expect_list(output["default_channel"], "output.default_channel")
+    if not channels or len(channels) != len(set(channels)):
+        _fail("output.default_channel", "must contain unique channels")
+    for index, channel in enumerate(channels):
+        if channel not in _OUTPUT_CHANNELS:
+            _fail(f"output.default_channel[{index}]",
+                  "must be ws, mqtt, http or uart")
+    if output["default_mode"] not in _OUTPUT_MODES:
+        _fail("output.default_mode", "must be raw, custom or ha")
+    if "persistent_summary" in output and \
+            not isinstance(output["persistent_summary"], bool):
+        _fail("output.persistent_summary", "must be boolean")
+
+    fields = _expect_list(output["fields"], "output.fields")
+    names: set[str] = set()
+    field_allowed = frozenset((
+        "name", "from", "type", "coord", "description", "event_kind",
+        "optional", "derived",
+    ))
+    for index, value in enumerate(fields):
+        path = f"output.fields[{index}]"
+        field = _expect_object(value, path)
+        _closed(field, field_allowed, path)
+        _required(field, frozenset(("name", "from", "type", "description")), path)
+        name = _safe_token(field["name"], path + ".name")
+        if name in names:
+            _fail(path + ".name", "must be unique")
+        names.add(name)
+        _string(field["from"], path + ".from", max_len=512)
+        field_type = _string(field["type"], path + ".type", max_len=128)
+        _string(field["description"], path + ".description", max_len=1024)
+        if "coord" in field and field["coord"] not in _COORD_SPACES:
+            _fail(path + ".coord", "unsupported coordinate space")
+        if any(shape in field_type.lower() for shape in
+               ("bbox", "quad", "keypoint")) and "coord" not in field:
+            _fail(path + ".coord",
+                  "is required for bbox, quad and keypoint fields")
+        if "event_kind" in field:
+            _safe_token(field["event_kind"], path + ".event_kind")
+        for flag in ("optional", "derived"):
+            if flag in field and not isinstance(field[flag], bool):
+                _fail(path + "." + flag, "must be boolean")
+
+    mapping = _expect_list(output["default_mapping"], "output.default_mapping")
+    mapping_allowed = frozenset(("source", "target", "topic", "task"))
+    for index, value in enumerate(mapping):
+        path = f"output.default_mapping[{index}]"
+        row = _expect_object(value, path)
+        _closed(row, mapping_allowed, path)
+        _required(row, frozenset(("source", "target", "topic")), path)
+        _string(row["source"], path + ".source", max_len=512)
+        _safe_token(row["target"], path + ".target")
+        _string(row["topic"], path + ".topic", max_len=512)
+        if "task" in row:
+            _safe_token(row["task"], path + ".task")
+
+
+def _validate_render_contract(value: Any) -> None:
+    render = _expect_object(value, "render")
+    if "schema_version" not in render:
+        return                         # legacy loose render remains compatible
+    if render.get("schema_version") != 1:
+        _fail("render.schema_version", "must equal 1")
+    _closed(render, frozenset((
+        "schema_version", "boxes", "quads", "keypoints", "events",
+        "stream_osd",
+    )), "render")
+    if "boxes" in render:
+        boxes = _expect_object(render["boxes"], "render.boxes")
+        _closed(boxes, frozenset(("color_by", "label", "line_width")),
+                "render.boxes")
+        for key in ("color_by", "label"):
+            if key in boxes:
+                _safe_token(boxes[key], "render.boxes." + key)
+        if "line_width" in boxes:
+            _positive_int(boxes["line_width"], "render.boxes.line_width",
+                          maximum=16)
+    if "quads" in render:
+        quads = _expect_object(render["quads"], "render.quads")
+        _closed(quads, frozenset(("points", "label", "line_width")),
+                "render.quads")
+        _required(quads, frozenset(("points",)), "render.quads")
+        _safe_token(quads["points"], "render.quads.points")
+        if "label" in quads:
+            _safe_token(quads["label"], "render.quads.label")
+        if "line_width" in quads:
+            _positive_int(quads["line_width"], "render.quads.line_width",
+                          maximum=16)
+    if "keypoints" in render:
+        keypoints = _expect_object(render["keypoints"], "render.keypoints")
+        _closed(keypoints, frozenset((
+            "layout", "point_radius", "line_width", "conf_min", "skeleton",
+        )), "render.keypoints")
+        _required(keypoints, frozenset(("layout",)), "render.keypoints")
+        _safe_token(keypoints["layout"], "render.keypoints.layout")
+        for key in ("point_radius", "line_width"):
+            if key in keypoints:
+                _positive_int(keypoints[key], "render.keypoints." + key,
+                              maximum=16)
+        if "conf_min" in keypoints:
+            conf = keypoints["conf_min"]
+            if isinstance(conf, bool) or not isinstance(conf, (int, float)) or \
+                    not 0 <= conf <= 1:
+                _fail("render.keypoints.conf_min", "must be a number in 0..1")
+        if "skeleton" in keypoints:
+            _expect_list(keypoints["skeleton"], "render.keypoints.skeleton")
+    if "events" in render:
+        events = _expect_object(render["events"], "render.events")
+        allowed = frozenset((
+            "as", "position", "duration_sec", "max_lines", "text", "fields",
+        ))
+        for kind, value in events.items():
+            _safe_token(kind, "render.events kind")
+            path = "render.events." + kind
+            spec = _expect_object(value, path)
+            _closed(spec, allowed, path)
+            if "as" in spec and spec["as"] not in (
+                    "none", "badge", "toast", "panel", "subtitle"):
+                _fail(path + ".as", "unsupported renderer")
+            for key in ("position", "text"):
+                if key in spec:
+                    _string(spec[key], path + "." + key, max_len=1024)
+            for key in ("duration_sec", "max_lines"):
+                if key in spec and (isinstance(spec[key], bool) or
+                                     not isinstance(spec[key], (int, float)) or
+                                     spec[key] < 0):
+                    _fail(path + "." + key, "must be a non-negative number")
+            if "fields" in spec:
+                values = _expect_list(spec["fields"], path + ".fields")
+                for index, field in enumerate(values):
+                    _safe_token(field, f"{path}.fields[{index}]")
+    if "stream_osd" in render:
+        osd = _expect_object(render["stream_osd"], "render.stream_osd")
+        _closed(osd, frozenset(("supported", "default")), "render.stream_osd")
+        _required(osd, frozenset(("supported", "default")), "render.stream_osd")
+        supported = _expect_list(osd["supported"], "render.stream_osd.supported")
+        if not supported or len(supported) != len(set(supported)) or \
+                any(value != "boxes" for value in supported):
+            _fail("render.stream_osd.supported",
+                  "first release supports the unique value 'boxes' only")
+        if not isinstance(osd["default"], bool) or osd["default"]:
+            _fail("render.stream_osd.default",
+                  "external stream OSD must default to false")
+
+
+def _validate_render_references(output_value: Any, render_value: Any) -> None:
+    """Bind strict renderer references to declared runtime result fields."""
+    if not isinstance(output_value, dict) or output_value.get("contract_version") != 2:
+        return
+    if not isinstance(render_value, dict) or render_value.get("schema_version") != 1:
+        return
+    fields = output_value.get("fields") or []
+    result_fields = {
+        field.get("name"): field
+        for field in fields
+        if isinstance(field, dict)
+        and isinstance(field.get("from"), str)
+        and field["from"].startswith("results[].")
+    }
+    event_kinds = {
+        field.get("event_kind") for field in fields
+        if isinstance(field, dict) and field.get("event_kind")
+    }
+    boxes = render_value.get("boxes")
+    if isinstance(boxes, dict):
+        if "box" not in result_fields:
+            _fail("render.boxes", "requires a declared results[].box field")
+        for key in ("label", "color_by"):
+            reference = boxes.get(key)
+            if reference is not None and reference not in result_fields:
+                _fail("render.boxes." + key,
+                      "must reference a declared results[] field")
+    quads = render_value.get("quads")
+    if isinstance(quads, dict):
+        for key in ("points", "label"):
+            reference = quads.get(key)
+            if reference is not None and reference not in result_fields:
+                _fail("render.quads." + key,
+                      "must reference a declared results[] field")
+    if "keypoints" in render_value and "keypoints" not in result_fields:
+        _fail("render.keypoints",
+              "requires a declared results[].keypoints field")
+    for kind in (render_value.get("events") or {}):
+        if kind not in event_kinds:
+            _fail("render.events." + kind,
+                  "requires an output field with the same event_kind")
+    if "stream_osd" in render_value:
+        box_field = result_fields.get("box") or {}
+        if box_field.get("coord") not in ("pixel_xyxy", "normalized_xyxy"):
+            _fail("render.stream_osd",
+                  "requires an explicitly coordinated results[].box field")
 
 
 def _validate_release(value: Any) -> None:
@@ -679,9 +908,12 @@ def validate_manifest(manifest: Any, *, allow_v1: bool = True) -> int:
     _validate_instances(obj["instances"])
     if "package" in obj:
         _validate_package(obj["package"])
-    output = obj.get("output")
-    if isinstance(output, dict) and "port" in output:
-        _fail("output.port", "fixed ports are forbidden; endpoint_mode=allocated owns binding")
+    if "output" in obj:
+        _validate_output_contract(obj["output"])
+    if "render" in obj:
+        _validate_render_contract(obj["render"])
+    if "output" in obj and "render" in obj:
+        _validate_render_references(obj["output"], obj["render"])
     return MANIFEST_VERSION
 
 

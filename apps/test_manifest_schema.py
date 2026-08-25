@@ -23,6 +23,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from kit import config as kitconfig                                # noqa: E402
+from market.appmgr import manifest as manifest_contract            # noqa: E402
 
 _MANIFESTS = sorted(glob.glob(os.path.join(_ROOT, "apps", "*", "manifest.json")))
 
@@ -36,6 +37,11 @@ class ManifestSchemaShapeTests(unittest.TestCase):
 
     def test_manifests_found(self):
         self.assertGreaterEqual(len(_MANIFESTS), 9, _MANIFESTS)
+
+    def test_every_shipped_manifest_passes_the_production_v2_validator(self):
+        for path in _MANIFESTS:
+            with self.subTest(app=os.path.basename(os.path.dirname(path))):
+                self.assertEqual(manifest_contract.validate_manifest(_load(path)), 2)
 
     def test_config_schema_is_grouped(self):
         for path in _MANIFESTS:
@@ -201,9 +207,9 @@ class RenderDeclarationTests(unittest.TestCase):
         self.assertEqual(kp["point_radius"], 1)
         self.assertEqual(kp["skeleton"], [], "468 landmarks: dots only")
 
-    def test_yolo_colours_boxes_by_label(self):
+    def test_yolo_colours_boxes_by_emitted_class_name(self):
         self.assertEqual(self._render("yolo-detector")["boxes"]["color_by"],
-                         "label")
+                         "cls_name")
 
     def test_every_declaration_uses_known_vocabulary(self):
         for path in _MANIFESTS:

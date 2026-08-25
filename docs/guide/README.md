@@ -46,6 +46,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **GPIO 结果触发** | 现成可用（组合现有零件） | notify WS + gmgr API，无需固件新功能 | [gpio-result-trigger.md](./gpio-result-trigger.md) |
 | **前端扩展挂载** | 现成可用 | `ext_<name>.conf` + `/extension/<name>/`（复用 JWT 会话） | [frontend-extension.md](./frontend-extension.md) |
 | **结果推送（notify）** | 现成可用 | 向 `/var/tmp/notify` 写 `InferenceResult`（仅分发，不上 OSD） | [result-push.md](./result-push.md) |
+| **统一 AI Result Hub v2** | 后端协议/订阅/重放已实现 | `/ws/ai/results/v2`（app + builtin，raw/formatted）；legacy 8123/8124 保留 | [result-hub-v2.md](./result-hub-v2.md) |
 | **硬件隐私遮罩**（COVER 增量控制） | 固件 + SDK 就绪；线 B 冷启动真机验证通过 | `MaskControl` / C ABI `rc_ext_mask_*`（rkipc RPC，M4） | [hw-mask-api.md](./hw-mask-api.md) |
 | **输出组件**（声明式结果输出） | 现成可用；真机 + 本地 broker 验证（P3b） | manifest `capabilities:["output"]` + `output` 块，`ConfigurableSink`（零 app 代码） | [output-sink.md](./output-sink.md) |
 | **硬件预处理加速**（RGA letterbox） | `hw-direct` 真机 A/B **+55%**；`hw` 实测无收益（+0.8%），默认不开 | `App.model_frame = "hw-direct"`（一行类属性，零 RGA 代码） | [hw-preprocess.md](./hw-preprocess.md) |
@@ -639,7 +640,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **前端扩展挂载** — [frontend-extension.md](./frontend-extension.md)：放一个 `ext_<name>.conf` 到 nginx 配置目录，把你的页面/后端挂到 `/extension/<name>/`，复用官方 dashboard 的 JWT 登录会话。
 - **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加/录像请改用本文 §4 的结果注入。
 - **rkipc RPC 现状** — [rkipc-rpc-status.md](./rkipc-rpc-status.md)：`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，不承诺稳定、勿直连；配置类需求走 entry.cgi HTTP API，等 M4 版本化控制面。
-- **AI 结果软件叠加** — [ai-result-overlay.md](./ai-result-overlay.md)：自建 app 结果广播到 WS `:8124`（默认，带 `frame:{width,height}` 坐标参考系），官方 React `/preview` 页 canvas 叠加画框；不进码流，OSD 烧流 opt-in。
+- **统一 AI 结果与软件叠加** — [result-hub-v2.md](./result-hub-v2.md) / [ai-result-overlay.md](./ai-result-overlay.md)：`/ws/ai/results/v2` 以稳定 v2 envelope 合并 builtin 与多 app，支持 raw/formatted、latest frame、status 保留与 event 短重放；8123/8124 只作 legacy 兼容。浏览器叠加不进码流。
 - **模型上板（zero-to-deployed）** — [model-onboarding.md](./model-onboarding.md)：方案商把自己的模型跑到设备上的端到端主线——ONNX 导出 → 检查 IR/opset → RKNN 转换（`rknn-toolkit2` 2.3.x，target `rv1126b`）→ 量化校准 → 放进 app `models/` + manifest 声明 → 打包/装/激活/验证。深度转换细节指向 `models/convert/` 项目。
 - **推理即应用** — [inference-as-app.md](./inference-as-app.md)：内建推理经 `builtin.py` driver 变一等 app、`activate` 单活互斥切换、`config_schema` 的 `apply:live|restart` 热更（SIGHUP → kit 自动重绑 + `on_params_changed`）、`SchemaForm` 动态配置面板。
 - **硬件隐私遮罩** — [hw-mask-api.md](./hw-mask-api.md)：`rc_ext_mask_*` / `MaskControl` 控制 VI 层硬件 COVER 遮块，增量移动不闪、不落盘；auto/manual 配额 `[3,6)`/`[0,3)`。
