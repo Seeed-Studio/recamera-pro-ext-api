@@ -132,6 +132,13 @@ def select_frame_source(url: str, prefer: str = "ffmpeg", **kw):
         from .official import OfficialFrameSource
         return OfficialFrameSource(url=url, sock=_frame_sock_path(), **kw)
     from .frame_source import FfmpegRtspSource, SnapshotSource
+    # 走到这里 = 官方 frame.sock 零拷贝通路不可用（固件扩展 API 未装/未起），
+    # 应用将跑在 RTSP 回退路径上：低帧率、重解码、且受流稳定性影响。
+    # 这必须在日志里大声可见，否则现场"部署成功但效果差/检不出"极难定位。
+    print("[adapters] WARNING: official frame.sock unavailable -- falling back "
+          f"to {'SnapshotSource' if prefer == 'snapshot' else 'FfmpegRtspSource'} "
+          "(RTSP). Check /run/recamera/frame.sock and the ext-api install.",
+          flush=True)
     if prefer == "snapshot":
         return SnapshotSource(url=url, **kw)
     return FfmpegRtspSource(url=url, **kw)
