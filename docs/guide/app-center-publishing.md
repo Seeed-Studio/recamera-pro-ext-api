@@ -576,7 +576,9 @@ Web-native manifest v2 主流程：
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
+| GET | `/api/app-center/v1/policy` | 返回运行时 manifest 版本、multipart/解包/暂存限制，以及签名和 developer mode 策略 |
 | POST | `/api/app-center/v1/uploads` | 流式 multipart 上传并 preflight，返回 `upload_id`、manifest、权限、签名和 `release_id` |
+| DELETE | `/api/app-center/v1/uploads/<upload_id>` | 幂等取消未进入安装阶段的暂存上传；安装已排队/进行中返回 `409` |
 | POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限及 developer mode，提交异步安装 |
 | GET | `/api/app-center/v1/apps` | 列出多应用状态 |
 | POST | `/api/app-center/v1/apps/<id>/{start,stop,restart}` | 提交异步生命周期操作 |
@@ -586,6 +588,14 @@ Web-native manifest v2 主流程：
 | GET | `/api/app-center/v1/operations` | 查询异步操作状态 |
 | GET | `/api/app-center/v1/resources` | 查询系统/应用资源视图 |
 | GET | `/api/app-center/v1/events` | SSE 状态更新流 |
+
+`policy` 使用 `{manifest, upload, signature}` 嵌套 envelope；其中
+`upload.max_package_bytes`、`max_signature_bytes` 和 `filename_pattern` 直接来自设备当前
+运行时门禁，前端不应复制编译期常量。上传取消与 finalize 串行，并在上传状态锁内完成
+“读状态→删除”：`install_queued`/`installing` 一律保留并返回 `409`；合法但未知或已经删除的
+32 位十六进制 ID 返回 `200 {deleted:false,state:"absent"}`，所以断线重试不会把成功清理误报
+成失败；成功删除返回 `200 {deleted:true,state:"deleted",previous_status}`。格式不合法的 ID
+不匹配路由并返回 `404`。DELETE 与其他 mutation 一样继续受 JWT 边界和同源 `Origin` 门禁。
 
 以下是 legacy `/api/appMgr/` 兼容参考：
 

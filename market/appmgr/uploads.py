@@ -21,9 +21,16 @@ MAX_SIGNATURE_BYTES = 16 * 1024
 MAX_HEADER_BYTES = 32 * 1024
 CHUNK = 64 * 1024
 _UPLOAD_ID = re.compile(r"[0-9a-f]{32}\Z")
-_PACKAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tar\.gz\Z")
+# The public spelling is deliberately ECMAScript-compatible so the Web client
+# can apply the exact same filename gate.  Python still uses ``fullmatch`` as
+# the authoritative server-side check.
+PACKAGE_FILENAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tar\.gz$"
+_PACKAGE_NAME = re.compile(PACKAGE_FILENAME_PATTERN)
 _UPLOAD_LOCK = threading.RLock()
 _ACTIVE_STATUSES = frozenset(("install_queued", "installing"))
+_CANCELLABLE_STATUSES = frozenset((
+    "uploaded", "preflighted", "rejected", "failed", "installed",
+))
 
 
 class MultipartError(ValueError):
@@ -32,6 +39,10 @@ class MultipartError(ValueError):
 
 class StagingQuotaError(MultipartError):
     """The request is valid, but the bounded upload staging area is full."""
+
+
+class UploadConflictError(RuntimeError):
+    """An upload exists but its current state cannot safely be deleted."""
 
 
 def _remove_entry(path: str) -> bool:
@@ -428,13 +439,17 @@ def load(upload_id: str) -> dict:
 
 
 def update(upload_id: str, **fields) -> dict:
-    metadata = load(upload_id)
-    directory = _directory(upload_id)
-    metadata.pop("package_path", None)
-    metadata.update(fields)
-    metadata["updated_at"] = time.time()
-    _save_metadata(directory, metadata)
-    return load(upload_id)
+    # Status transitions participate in the same lock as cancellation.  In
+    # particular, a preflighted upload must not be deleted between finalize's
+    # transition to ``install_queued`` and the cancellation state check.
+    with _UPLOAD_LOCK:
+        metadata = load(upload_id)
+        directory = _directory(upload_id)
+        metadata.pop("package_path", None)
+        metadata.update(fields)
+        metadata["updated_at"] = time.time()
+        _save_metadata(directory, metadata)
+        return load(upload_id)
 
 
 def verify(upload_id: str) -> dict:
@@ -454,3 +469,42 @@ def remove(upload_id: str) -> bool:
     directory = _directory(upload_id)
     with _UPLOAD_LOCK:
         return _remove_entry(directory)
+
+
+def cancel(upload_id: str) -> dict:
+    """Idempotently delete one inactive browser upload.
+
+    A syntactically valid but absent id is a successful no-op.  The status read
+    and directory removal are one ``_UPLOAD_LOCK`` transaction, and unknown or
+    active states fail closed instead of deleting bytes an install worker may
+    still own.  The server additionally serializes this call with upload
+    finalize so ``preflighted -> install_queued`` cannot race cancellation.
+    """
+    directory = _directory(upload_id)
+    with _UPLOAD_LOCK:
+        if not os.path.lexists(directory):
+            return {
+                "upload_id": upload_id,
+                "deleted": False,
+                "state": "absent",
+            }
+        if os.path.islink(directory) or not os.path.isdir(directory):
+            raise UploadConflictError(
+                "upload staging entry is not a safe directory")
+
+        metadata = load(upload_id)
+        status = metadata.get("status")
+        if status in _ACTIVE_STATUSES:
+            raise UploadConflictError(
+                "upload is active (%s) and cannot be deleted" % status)
+        if status not in _CANCELLABLE_STATUSES:
+            raise UploadConflictError(
+                "upload has unknown state %r and cannot be safely deleted" % status)
+        if not _remove_entry(directory):
+            raise OSError("cannot delete upload staging directory")
+        return {
+            "upload_id": upload_id,
+            "deleted": True,
+            "state": "deleted",
+            "previous_status": status,
+        }

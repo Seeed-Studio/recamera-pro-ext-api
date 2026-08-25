@@ -73,10 +73,10 @@ from urllib.parse import urlparse, parse_qs, quote
 
 from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
-               inference_auth, installer, modelstore, mqtt as mqttcfg,
-               operations as appoperations, paths,
+               inference_auth, installer, manifest as appmanifest, modelstore,
+               mqtt as mqttcfg, operations as appoperations, paths,
                resources as appresources, state, supervisor,
-               uploads as appuploads, voiceruntime)
+               signing as appsigning, uploads as appuploads, voiceruntime)
 
 
 _coordinator_instance = None
@@ -1460,6 +1460,37 @@ def do_set_mqtt(incoming: dict) -> dict:
 # Web-native /api/app-center/v1 facade.  This deliberately does not occupy the
 # firmware's existing /api/v1 namespace, which proxies SenseCraft cloud APIs.
 # --------------------------------------------------------------------------- #
+def do_v1_policy() -> dict:
+    """Return the live, non-secret package admission policy for Web clients."""
+    return {
+        "manifest": {
+            "required_version": appmanifest.MANIFEST_VERSION,
+        },
+        "upload": {
+            "package_field": "package",
+            "signature_field": "signature",
+            "filename_pattern": appuploads.PACKAGE_FILENAME_PATTERN,
+            "max_package_bytes": int(paths.MAX_PKG_BYTES),
+            "max_request_bytes": int(
+                paths.MAX_PKG_BYTES + appuploads.MAX_MULTIPART_OVERHEAD),
+            "max_signature_bytes": int(appuploads.MAX_SIGNATURE_BYTES),
+            "max_unpacked_bytes": int(paths.MAX_UNPACKED_BYTES),
+            "max_members": int(paths.MAX_MEMBERS),
+            "max_staging_bytes": int(paths.MAX_UPLOAD_STAGING_BYTES),
+            "max_staged_uploads": int(paths.MAX_STAGED_UPLOADS),
+            "min_free_bytes": int(paths.MIN_UPLOAD_FREE_BYTES),
+            "ttl_sec": int(paths.UPLOAD_TTL_SEC),
+        },
+        "signature": {
+            "algorithm": appsigning.SIGNATURE_ALG,
+            "encoding": "base64-der",
+            "required": bool(paths.REQUIRE_SIGNATURE),
+            "developer_mode_allowed": _developer_mode_allowed(),
+            "invalid_signatures_rejected": True,
+        },
+    }
+
+
 def _v1_status(app: dict) -> str:
     observed = str(app.get("observed_state") or "stopped")
     if app.get("running") or observed in ("ready", "running", "degraded"):
@@ -1751,6 +1782,18 @@ def do_v1_install(body: dict) -> dict:
         return {"operation": operation}
 
 
+def do_v1_cancel_upload(upload_id: str) -> dict:
+    """Delete an inactive upload without racing installation finalization."""
+    with _upload_finalize_lock:
+        result = appuploads.cancel(upload_id)
+    _audit(
+        "v1_upload_delete", upload_id=upload_id,
+        deleted=result.get("deleted"),
+        previous_status=result.get("previous_status"),
+    )
+    return result
+
+
 def _require_installed(app_id: str) -> None:
     if not paths.valid_app_id(app_id):
         raise ValueError("invalid app id %r" % app_id)
@@ -1923,6 +1966,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _v1_error(self, exc: Exception) -> None:
         if isinstance(exc, FileNotFoundError):
             code = 404
+        elif isinstance(exc, appuploads.UploadConflictError):
+            code = 409
         elif isinstance(exc, appuploads.StagingQuotaError):
             code = 507
         elif isinstance(exc, appoperations.EventCapacityError):
@@ -1978,6 +2023,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+        if path == "/api/app-center/v1/policy":
+            return self._send(200, do_v1_policy())
         if path == "/api/app-center/v1/apps":
             try:
                 return self._send(200, do_v1_apps())
@@ -2239,6 +2286,14 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        upload_match = re.fullmatch(
+            r"/api/app-center/v1/uploads/([0-9a-f]{32})", path)
+        if upload_match:
+            try:
+                return self._send(
+                    200, do_v1_cancel_upload(upload_match.group(1)))
+            except Exception as exc:
+                return self._v1_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})", path)
         if not match:

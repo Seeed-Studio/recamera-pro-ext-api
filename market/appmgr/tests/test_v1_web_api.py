@@ -155,6 +155,194 @@ def test_multipart_type_and_declared_size_fail_before_staging(layout):
     assert not os.path.exists(paths.uploads_dir())
 
 
+def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch):
+    monkeypatch.setattr(paths, "MAX_PKG_BYTES", 123_456)
+    monkeypatch.setattr(paths, "MAX_UNPACKED_BYTES", 654_321)
+    monkeypatch.setattr(paths, "MAX_MEMBERS", 321)
+    monkeypatch.setattr(paths, "MAX_UPLOAD_STAGING_BYTES", 777_777)
+    monkeypatch.setattr(paths, "MAX_STAGED_UPLOADS", 5)
+    monkeypatch.setattr(paths, "MIN_UPLOAD_FREE_BYTES", 44_444)
+    monkeypatch.setattr(paths, "UPLOAD_TTL_SEC", 678)
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
+    monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", False)
+
+    policy = server.do_v1_policy()
+
+    assert policy["manifest"] == {"required_version": 2}
+    assert policy["upload"] == {
+        "package_field": "package",
+        "signature_field": "signature",
+        "filename_pattern": uploads.PACKAGE_FILENAME_PATTERN,
+        "max_package_bytes": 123_456,
+        "max_request_bytes": 123_456 + uploads.MAX_MULTIPART_OVERHEAD,
+        "max_signature_bytes": uploads.MAX_SIGNATURE_BYTES,
+        "max_unpacked_bytes": 654_321,
+        "max_members": 321,
+        "max_staging_bytes": 777_777,
+        "max_staged_uploads": 5,
+        "min_free_bytes": 44_444,
+        "ttl_sec": 678,
+    }
+    assert policy["signature"] == {
+        "algorithm": "ecdsa-sha256",
+        "encoding": "base64-der",
+        "required": True,
+        "developer_mode_allowed": False,
+        "invalid_signatures_rejected": True,
+    }
+
+    # The historic REQUIRE_SIGNATURE=0 switch remains a developer policy input
+    # and the endpoint must report the effective behavior, not only the newer
+    # dedicated flag.
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", False)
+    relaxed = server.do_v1_policy()
+    assert relaxed["signature"]["required"] is False
+    assert relaxed["signature"]["developer_mode_allowed"] is True
+
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
+    monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", True)
+    explicit_developer = server.do_v1_policy()
+    assert explicit_developer["signature"]["required"] is True
+    assert explicit_developer["signature"]["developer_mode_allowed"] is True
+
+
+@pytest.mark.parametrize("status", [
+    "uploaded", "preflighted", "rejected", "failed", "installed",
+])
+def test_cancel_upload_is_idempotent_for_every_inactive_state(layout, status):
+    body, content_type = _multipart(b"inactive-package")
+    record = uploads.receive(io.BytesIO(body), len(body), content_type)
+    if status != "uploaded":
+        uploads.update(record["upload_id"], status=status)
+
+    deleted = server.do_v1_cancel_upload(record["upload_id"])
+    assert deleted == {
+        "upload_id": record["upload_id"],
+        "deleted": True,
+        "state": "deleted",
+        "previous_status": status,
+    }
+    assert not os.path.lexists(os.path.dirname(record["package_path"]))
+
+    repeated = server.do_v1_cancel_upload(record["upload_id"])
+    assert repeated == {
+        "upload_id": record["upload_id"],
+        "deleted": False,
+        "state": "absent",
+    }
+    unknown = server.do_v1_cancel_upload("f" * 32)
+    assert unknown == {
+        "upload_id": "f" * 32,
+        "deleted": False,
+        "state": "absent",
+    }
+
+
+@pytest.mark.parametrize("status", ["install_queued", "installing"])
+def test_cancel_upload_rejects_active_states_without_removing_bytes(layout, status):
+    body, content_type = _multipart(b"active-package")
+    record = uploads.receive(io.BytesIO(body), len(body), content_type)
+    uploads.update(record["upload_id"], status=status)
+
+    with pytest.raises(uploads.UploadConflictError, match="upload is active"):
+        server.do_v1_cancel_upload(record["upload_id"])
+
+    assert uploads.load(record["upload_id"])["status"] == status
+    with open(record["package_path"], "rb") as package:
+        assert package.read() == b"active-package"
+
+
+def test_cancel_upload_fails_closed_for_invalid_or_unknown_state(layout):
+    with pytest.raises(ValueError, match="invalid upload_id"):
+        server.do_v1_cancel_upload("../not-an-upload")
+
+    body, content_type = _multipart(b"unknown-state-package")
+    record = uploads.receive(io.BytesIO(body), len(body), content_type)
+    uploads.update(record["upload_id"], status="future-active-state")
+    with pytest.raises(uploads.UploadConflictError, match="unknown state"):
+        server.do_v1_cancel_upload(record["upload_id"])
+    assert os.path.isfile(record["package_path"])
+
+
+def test_cancel_cannot_race_preflight_to_install_queued_transition(
+        layout, monkeypatch):
+    permissions = {
+        "sdk": [],
+        "filesystem": {"read": [], "write": []},
+        "network": {"listen": [], "outbound": []},
+        "devices": [],
+    }
+    body, content_type = _multipart(b"finalize-race-package")
+    record = uploads.receive(io.BytesIO(body), len(body), content_type)
+    uploads.update(record["upload_id"], status="preflighted", preflight={
+        "manifest": {
+            "manifest_version": 2,
+            "id": "demo",
+            "permissions": permissions,
+        },
+        "release_id": "demo-r1",
+        "signature": {"status": "verified"},
+    })
+
+    submit_entered = threading.Event()
+    release_submit = threading.Event()
+
+    class HeldSubmitManager:
+        def submit(self, operation_type, app_id, callback):
+            assert (operation_type, app_id) == ("install", "demo")
+            submit_entered.set()
+            assert release_submit.wait(timeout=2)
+            return {"id": "held-op", "type": operation_type, "app_id": app_id}
+
+    monkeypatch.setattr(server, "_operation_manager", lambda: HeldSubmitManager())
+    finalize_result = []
+    finalize_error = []
+    cancel_result = []
+    cancel_error = []
+
+    def finalize():
+        try:
+            finalize_result.append(server.do_v1_install({
+                "upload_id": record["upload_id"],
+                "permissions_confirmed": True,
+                "permissions": permissions,
+                "developer_mode": False,
+            }))
+        except Exception as exc:
+            finalize_error.append(exc)
+
+    def cancel():
+        try:
+            cancel_result.append(server.do_v1_cancel_upload(record["upload_id"]))
+        except Exception as exc:
+            cancel_error.append(exc)
+
+    finalize_thread = threading.Thread(target=finalize)
+    cancel_thread = threading.Thread(target=cancel)
+    finalize_thread.start()
+    assert submit_entered.wait(timeout=2)
+    cancel_thread.start()
+    try:
+        # Finalize owns _upload_finalize_lock while submit is held, so delete
+        # cannot observe the earlier preflighted state and remove its bytes.
+        cancel_thread.join(timeout=0.05)
+        assert cancel_thread.is_alive()
+    finally:
+        release_submit.set()
+        finalize_thread.join(timeout=2)
+        cancel_thread.join(timeout=2)
+
+    assert not finalize_error
+    assert finalize_result == [{
+        "operation": {"id": "held-op", "type": "install", "app_id": "demo"},
+    }]
+    assert not cancel_result
+    assert len(cancel_error) == 1
+    assert isinstance(cancel_error[0], uploads.UploadConflictError)
+    assert uploads.load(record["upload_id"])["status"] == "install_queued"
+    assert os.path.isfile(record["package_path"])
+
+
 def test_upload_staging_has_aggregate_quota_count_and_ttl_gc(layout, monkeypatch):
     body, content_type = _multipart(b"first-package")
     first = uploads.receive(io.BytesIO(body), len(body), content_type)
@@ -820,6 +1008,97 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
         assert "apps" in json.loads(response.read())
     finally:
         connection.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_policy_and_idempotent_upload_delete_contract(layout):
+    inactive_body, content_type = _multipart(b"http-inactive-package")
+    inactive = uploads.receive(
+        io.BytesIO(inactive_body), len(inactive_body), content_type)
+    uploads.update(inactive["upload_id"], status="preflighted")
+
+    active_body, active_content_type = _multipart(b"http-active-package")
+    active = uploads.receive(
+        io.BytesIO(active_body), len(active_body), active_content_type)
+    uploads.update(active["upload_id"], status="installing")
+
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+
+    def request(method, path, *, origin=None):
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", httpd.server_port, timeout=5)
+        headers = {"Host": "camera.local", "X-Forwarded-Proto": "https"}
+        if origin is not None:
+            headers["Origin"] = origin
+        try:
+            connection.request(method, path, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        # Policy is read-only; the public nginx layer still supplies JWT auth,
+        # while appmgr itself does not impose the mutation-only Origin gate.
+        status, policy = request("GET", "/api/app-center/v1/policy")
+        assert status == 200
+        assert policy["manifest"]["required_version"] == 2
+        assert policy["upload"]["max_package_bytes"] == paths.MAX_PKG_BYTES
+        assert policy["signature"]["invalid_signatures_rejected"] is True
+
+        inactive_path = "/api/app-center/v1/uploads/" + inactive["upload_id"]
+        status, payload = request(
+            "DELETE", inactive_path, origin="https://evil.local")
+        assert status == 403
+        assert "cross-origin" in payload["error"]
+        assert os.path.isfile(inactive["package_path"])
+
+        status, payload = request(
+            "DELETE", inactive_path, origin="https://camera.local")
+        assert status == 200
+        assert payload == {
+            "upload_id": inactive["upload_id"],
+            "deleted": True,
+            "state": "deleted",
+            "previous_status": "preflighted",
+        }
+        assert not os.path.lexists(os.path.dirname(inactive["package_path"]))
+
+        # A repeat and a never-issued, syntactically valid id are both explicit
+        # successful no-ops; clients may safely retry modal cleanup.
+        status, payload = request(
+            "DELETE", inactive_path, origin="https://camera.local")
+        assert status == 200
+        assert payload["deleted"] is False
+        assert payload["state"] == "absent"
+        unknown_id = "0" * 32
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/uploads/" + unknown_id,
+            origin="https://camera.local")
+        assert status == 200
+        assert payload == {
+            "upload_id": unknown_id,
+            "deleted": False,
+            "state": "absent",
+        }
+
+        active_path = "/api/app-center/v1/uploads/" + active["upload_id"]
+        status, payload = request(
+            "DELETE", active_path, origin="https://camera.local")
+        assert status == 409
+        assert "upload is active (installing)" in payload["error"]
+        assert os.path.isfile(active["package_path"])
+
+        status, payload = request(
+            "DELETE", "/api/app-center/v1/uploads/not-an-id",
+            origin="https://camera.local")
+        assert status == 404
+        assert payload == {"error": "not found"}
+    finally:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=2)
