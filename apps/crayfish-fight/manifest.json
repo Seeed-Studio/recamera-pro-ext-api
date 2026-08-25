@@ -4,8 +4,8 @@
   "version": "0.1.1",
   "image": "/appcenter/apps/crayfish-fight.png",
   "type": "self-hosted",
-  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close, reporting events (never video) plus a quota-limited image dump for retraining.",
-  "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为，只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close -- screened per frame, then confirmed by an 8-frame temporal classifier that sees the motion. Reports events (never video) plus a quota-limited image dump for retraining.",
+  "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为——单帧粗筛，再由 8 帧时序分类器看运动做确认；只上报事件（视频不出场），并按配额落盘图片用于再训练。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "kit": ">=0.1.0",
@@ -35,6 +35,14 @@
       "file": "models/behavior_cls_int8.rknn",
       "task": "classify",
       "input": [1, 224, 224, 3],
+      "quant": "int8",
+      "classes": ["fight", "harass", "none"]
+    },
+    {
+      "id": "behavior_temporal",
+      "file": "models/behavior_temporal_int8.rknn",
+      "task": "classify",
+      "input": [1, 448, 448, 3],
       "quant": "int8",
       "classes": ["fight", "harass", "none"]
     }
@@ -74,7 +82,9 @@
       {"name": "behavior_track_ids", "from": "events[kind=behavior].track_ids", "type": "array<integer>", "event_kind": "behavior", "description": "The two track ids taking part"},
       {"name": "behavior_box", "from": "events[kind=behavior].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "behavior", "description": "Union ROI of the two animals, original-frame xyxy pixels"},
       {"name": "behavior_duration_sec", "from": "events[kind=behavior].duration_sec", "type": "float", "event_kind": "behavior", "description": "Seconds since the event was raised"},
-      {"name": "behavior_frames", "from": "events[kind=behavior].frames", "type": "integer", "event_kind": "behavior", "description": "Confirming frames accumulated in this event"}
+      {"name": "behavior_frames", "from": "events[kind=behavior].frames", "type": "integer", "event_kind": "behavior", "description": "Confirming frames accumulated in this event"},
+      {"name": "behavior_temporal_verdict", "from": "events[kind=behavior].temporal_verdict", "type": "string", "event_kind": "behavior", "description": "Latest 8-frame temporal classifier verdict for this pair (fight/harass/none), null until the pair has been looked at"},
+      {"name": "behavior_temporal_conf", "from": "events[kind=behavior].temporal_conf", "type": "float", "event_kind": "behavior", "description": "Confidence of that temporal verdict, null until the pair has been looked at"}
     ],
     "default_mapping": [
       {"source": "detection.count", "target": "count", "topic": "recamera/{{ app }}/count", "task": "detection"},
@@ -124,6 +134,18 @@
           {"key": "behavior_streak", "type": "integer", "apply": "live", "title": "Consecutive frames to raise", "title_zh": "上报所需连续帧数", "default": 3, "min": 1, "max": 30, "step": 1},
           {"key": "behavior_release", "type": "integer", "apply": "live", "title": "Consecutive misses to clear", "title_zh": "释放所需连续未确认帧数", "default": 3, "min": 1, "max": 30, "step": 1},
           {"key": "behavior_min_conf", "type": "number", "apply": "live", "title": "Min behaviour confidence", "title_zh": "行为置信度下限", "default": 0.5, "min": 0.2, "max": 0.95, "step": 0.05}
+        ]
+      },
+      {
+        "key": "temporal",
+        "title": "Temporal confirmation",
+        "title_zh": "时序确认",
+        "items": [
+          {"key": "temporal_enabled", "type": "boolean", "apply": "live", "title": "Enable 8-frame temporal classifier", "title_zh": "启用 8 帧时序分类", "default": true},
+          {"key": "max_pairs", "type": "integer", "apply": "live", "title": "Max buffered pairs", "title_zh": "最多缓存虾对数", "default": 6, "min": 1, "max": 32, "step": 1},
+          {"key": "temporal_stride", "type": "integer", "apply": "live", "title": "Frames between runs on one pair", "title_zh": "同一对两次推理的间隔帧数", "default": 4, "min": 1, "max": 30, "step": 1},
+          {"key": "temporal_budget", "type": "integer", "apply": "live", "title": "Max temporal inferences per frame", "title_zh": "每帧最多时序推理次数", "default": 1, "min": 0, "max": 4, "step": 1},
+          {"key": "temporal_min_conf", "type": "number", "apply": "live", "title": "Min temporal confidence to vote", "title_zh": "时序投票所需最低置信度", "default": 0.5, "min": 0.2, "max": 0.95, "step": 0.05}
         ]
       },
       {

@@ -7,8 +7,8 @@ PAIR an event when one is fighting or harassing the other. Video never leaves
 the tank room -- only events, and a quota-limited trickle of JPEGs that feeds
 the next training round.
 
-Three models, one loop, in cost order (PLAN §1.1 -- the funnel is the whole
-point: behaviour is rare in time, so the expensive stage must not run per
+Four models, one loop, in cost order (PLAN §1.1 -- the funnel is the whole
+point: behaviour is rare in time, so the expensive stages must not run per
 frame):
 
   frame -> self.pre()                RGA letterbox to 640
@@ -26,6 +26,15 @@ frame):
            ROI, fed through `BehaviorStateMachine` (needs `behavior_streak`
            consecutive confirmations to raise, `behavior_release` misses to
            clear)
+        -> ★stage D★ TEMPORAL confirmation (PLAN §3.3): each triggered pair's
+           224 ROI is also pushed into a `PairFrameBuffer`; once a pair has 8,
+           `TemporalScheduler` picks at most `temporal_budget` pairs per frame
+           (least-recently-run first, no oftener than every `temporal_stride`
+           frames) and runs `behavior_temporal` on their 2x4 collage. That
+           verdict is the sequence-level one -- it sees MOTION, which is what
+           actually separates fight from harass -- so it enters the same state
+           machine worth `TEMPORAL_VOTE_WEIGHT` (2) single-frame votes, while
+           stage C stays as the immediate coarse screen
         -> capture: default `capture_mode="trigger"` dumps frame + ROI + json
            to /userdata/crayfish/<date>/ on every trigger, quota permitting,
            REGARDLESS of the verdict -- the misfires are exactly the samples
@@ -43,7 +52,7 @@ both publish pixels and both declare `"coord": "pixel_xyxy"` in the manifest.
 The one place normalisation happens here is the capture sidecar json, which is
 written resolution-independent so a re-scaled dataset stays valid.
 
-`model_frame = "hw-roi"`: stage A and stage C each need a per-object crop off
+`model_frame = "hw-roi"`: stages A, C and D each need a per-object crop off
 the CAMERA frame. That is the same shape as face-analysis, and the reason this
 app is not "hw-direct": under hw-direct there is no ROI cropper and
 `frame.data` holds the letterbox, so a crop would read the wrong pixels. ROIs
@@ -64,16 +73,27 @@ from kit.logic.tracker import Tracker, TrackerConfig
 from kit.runtime.postprocess import classify as clf
 from kit.runtime.postprocess.detect import postprocess as detect_post
 
-from logic import (BEHAVIOR_LABELS, SEX_LABELS, SEX_UNKNOWN, BehaviorStateMachine,
-                   CaptureDecider, CaptureQuota, ProximityWindow, SexVoter,
+from logic import (BEHAVIOR_LABELS, SEX_LABELS, SEX_UNKNOWN, TEMPORAL_INPUT,
+                   TEMPORAL_LABELS, TEMPORAL_PAD_VALUE, TEMPORAL_TILE,
+                   BehaviorStateMachine, CaptureDecider, CaptureQuota,
+                   PairFrameBuffer, ProximityWindow, SexVoter,
+                   TemporalScheduler, collage_canvas_size, collage_slots,
                    pair_is_close, pair_key, to_norm, union_box)
 
 # Manifest model ids and their input sides (manifest models[].input).
 DET_ID = "crayfish_det"
 SEX_ID = "sex_cls"
 BEHAVIOR_ID = "behavior_cls"
+TEMPORAL_ID = "behavior_temporal"
 SEX_INPUT = 128
 BEHAVIOR_INPUT = 224
+# The temporal collage is built from the SAME 224 crop stage C already cuts,
+# so BEHAVIOR_INPUT and TEMPORAL_TILE must stay equal -- see _collage().
+assert BEHAVIOR_INPUT == TEMPORAL_TILE
+# The temporal verdict is worth this many single-frame votes in the state
+# machine (PLAN §3.3: sequence-level recall 0.95 vs the single-frame model's
+# fight recall of at most 1/14).
+TEMPORAL_VOTE_WEIGHT = 2
 
 # Detector vocabulary. Single class -- declared here AND in the manifest
 # (`models[].classes`), which is what the kit binds onto `self.class_names`.
@@ -113,9 +133,14 @@ class CrayfishFightApp(App):
     capture_full_frame_px = 1280
     suspect_conf = 0.30
     capture_mode = "trigger"
+    temporal_enabled = True
+    max_pairs = 6
+    temporal_stride = 4
+    temporal_budget = 1
+    temporal_min_conf = 0.5
 
     def setup(self, config):
-        """Build the four stateful helpers from the already-bound params."""
+        """Build the stateful helpers from the already-bound params."""
         super().setup(config)
         self._tracker = Tracker(self._tracker_config())
         self._sex = SexVoter(self.sex_vote_frames, self.sex_min_conf)
@@ -125,6 +150,15 @@ class CrayfishFightApp(App):
                                          self.behavior_min_conf)
         self._quota = CaptureQuota(self.capture_per_minute, self.capture_per_day)
         self._decider = CaptureDecider(self.suspect_conf, self.capture_mode)
+        self._tbuf = PairFrameBuffer(self.max_pairs)
+        self._tsched = TemporalScheduler(self.temporal_stride,
+                                         self.temporal_budget)
+        # pair -> {"label", "confidence", "frame"} of its LAST temporal verdict,
+        # so an event / capture written on a frame that ran no temporal pass
+        # still reports the most recent sequence-level read.
+        self._tlast = {}
+        self._temporal_model = None      # resolved lazily; see _temporal()
+        self._temporal_warned = False
         self._prev_pairs = set()
         self._capture_warned = False
         print(f"[crayfish-fight] setup conf={self.conf} iou={self.iou} "
@@ -137,7 +171,11 @@ class CrayfishFightApp(App):
               f"min_conf={self.behavior_min_conf}) "
               f"capture={self.capture_enabled}@{self.capture_dir} "
               f"({self.capture_per_minute}/min, {self.capture_per_day}/day, "
-              f"mode={self.capture_mode}, suspect_conf={self.suspect_conf})",
+              f"mode={self.capture_mode}, suspect_conf={self.suspect_conf}) "
+              f"temporal={self.temporal_enabled}"
+              f"(max_pairs={self.max_pairs}, stride={self.temporal_stride}, "
+              f"budget={self.temporal_budget}/frame, "
+              f"min_conf={self.temporal_min_conf})",
               flush=True)
 
     # -- derived-object builders ------------------------------------------ #
@@ -185,6 +223,11 @@ class CrayfishFightApp(App):
             self._decider.mode = (self.capture_mode
                                   if self.capture_mode in
                                   ("trigger", "alarm_gated") else "trigger")
+        if "max_pairs" in changed:
+            self._tbuf.max_pairs = max(1, int(self.max_pairs))
+        if changed & {"temporal_stride", "temporal_budget"}:
+            self._tsched.stride = max(1, int(self.temporal_stride))
+            self._tsched.budget = max(0, int(self.temporal_budget))
         if "track_max_lost" in changed:
             new = self._tracker_config().clamp()
             self._tracker.cfg.max_lost_frames_center = new.max_lost_frames_center
@@ -209,6 +252,10 @@ class CrayfishFightApp(App):
             self._sex.drop(self._tracker.removed_ids)
             for tid in self._tracker.removed_ids:
                 self._prox.drop_track(tid)
+                self._tbuf.drop_track(tid)
+                self._tsched.drop_track(tid)
+                for k in [k for k in self._tlast if tid in k]:
+                    self._tlast.pop(k, None)
             by_det = {tr.det_index: tr for tr in tracks if tr.det_index >= 0}
 
             # -- 3. stage A: sex, only while a track is still voting ------ #
@@ -243,6 +290,7 @@ class CrayfishFightApp(App):
 
             # -- 5. stage C: behaviour on the union ROI ------------------- #
             events = []
+            pending = {}        # key -> (union_box, single-frame head)
             for key in triggered:
                 ub = union_box(boxes[key[0]], boxes[key[1]],
                                clip=(frame.w, frame.h))
@@ -251,9 +299,52 @@ class CrayfishFightApp(App):
                 head = clf.classify_head(
                     clf.logits_from(self.models[BEHAVIOR_ID].infer(roi),
                                     size=len(BEHAVIOR_LABELS)), BEHAVIOR_LABELS)
+                # The single-frame verdict is the IMMEDIATE coarse screen: one
+                # vote, available on the very first triggered frame. Stage D
+                # below may add a heavier, slower, better-informed one.
                 ev = self._fsm.update(key, head["label"], head["confidence"], t)
                 if ev is not None:
                     events.append(self._behavior_event(ev, key, ub, boxes))
+                # Same crop, no extra RGA pass: park it for the collage.
+                if self.temporal_enabled:
+                    self._tbuf.push(key, roi, t)
+                pending[key] = (ub, head)
+
+            # -- 5b. stage D: temporal confirmation on the 8-frame collage -- #
+            if self.temporal_enabled:
+                # Once a pair stops being triggered its sequence is dead weight
+                # (1.15 MB each) -- drop before selecting, so the budget is
+                # spent on pairs that are still interacting.
+                self._tbuf.retain(triggered)
+                # ★once per frame★ even with nothing ready: `temporal_stride` is
+                # counted in frames, so a skipped call would stretch it.
+                for key in self._tsched.select(self._tbuf.ready_keys()):
+                    thead = self._temporal_infer(self._tbuf.sequence(key))
+                    if thead is None:
+                        break                    # model unavailable this run
+                    self._tlast[key] = {"label": thead["label"],
+                                        "confidence": thead["confidence"],
+                                        "frame": self._tsched.frame}
+                    # Below `temporal_min_conf` the sequence model ABSTAINS
+                    # rather than voting `none`: an unsure temporal read must
+                    # not spend a `miss` against an event the single-frame
+                    # path is still confirming.
+                    if thead["confidence"] < float(self.temporal_min_conf):
+                        continue
+                    ev = self._fsm.update(key, thead["label"],
+                                          thead["confidence"], t,
+                                          weight=TEMPORAL_VOTE_WEIGHT)
+                    if ev is not None:
+                        ub, _ = pending.get(key, (None, None))
+                        events.append(self._behavior_event(ev, key, ub, boxes))
+            elif len(self._tbuf):
+                # Turned off at runtime: release the buffered pixels at once
+                # rather than letting ~7 MB sit idle until the app restarts.
+                self._tbuf.retain([])
+                self._tlast.clear()
+
+            # -- 5c. capture, now that the temporal verdict is known -------- #
+            for key, (ub, head) in pending.items():
                 # ★flywheel★ tag alarm (confirmed) / suspect (raw verdict) /
                 # plain (default: still captured, quota permitting) --
                 # see CaptureDecider / `capture_mode`.
@@ -269,6 +360,8 @@ class CrayfishFightApp(App):
                 ev = self._fsm.timeout(key, t)
                 if ev is not None:
                     events.append(self._behavior_event(ev, key, None, boxes))
+                self._tsched.drop([key])
+                self._tlast.pop(key, None)
             self._prev_pairs = set(triggered)
 
             # -- 6. emit -------------------------------------------------- #
@@ -291,9 +384,17 @@ class CrayfishFightApp(App):
             "sex_conf": r.get("sex_conf", 0.0),
         }
 
-    @staticmethod
-    def _behavior_event(ev, key, union, boxes) -> dict:
-        """One state-machine transition -> the published `behavior` event."""
+    def _behavior_event(self, ev, key, union, boxes) -> dict:
+        """One state-machine transition -> the published `behavior` event.
+
+        `temporal_verdict` / `temporal_conf` carry the pair's MOST RECENT
+        sequence-level read, which is not necessarily from this frame: the
+        temporal model runs at most `temporal_budget` times a frame and no
+        oftener than every `temporal_stride` frames per pair. They are null
+        until that pair has had one (needs 8 buffered frames), which is the
+        honest answer -- a consumer can tell "the sequence model says none"
+        from "the sequence model has not looked yet".
+        """
         out = {
             "kind": "behavior",
             "phase": ev["phase"],
@@ -303,11 +404,77 @@ class CrayfishFightApp(App):
             "frames": ev["frames"],
             "duration_sec": ev["duration_sec"],
         }
+        last = self._tlast.get(key)
+        out["temporal_verdict"] = last["label"] if last else None
+        out["temporal_conf"] = last["confidence"] if last else None
         if ev.get("previous"):
             out["previous"] = ev["previous"]
         if union is not None:
             out["box"] = [round(v, 1) for v in union]
         return out
+
+    # -- stage D: temporal collage ----------------------------------------- #
+    def _temporal_model_handle(self):
+        """Resolve `behavior_temporal` once, or None if this build lacks it.
+
+        Looked up lazily rather than in `setup()` because the model registry is
+        populated by `start()`. A missing model warns ONCE and then degrades to
+        the single-frame path forever -- an app packaged without the temporal
+        rknn must still monitor the tank, just without stage D.
+        """
+        if self._temporal_model is not None:
+            return self._temporal_model
+        try:
+            self._temporal_model = self.models[TEMPORAL_ID]
+        except (AttributeError, KeyError):
+            if not self._temporal_warned:
+                self._temporal_warned = True
+                print(f"[crayfish-fight] no {TEMPORAL_ID!r} model in this "
+                      f"build -- temporal stage disabled, single-frame "
+                      f"behaviour classification only", flush=True)
+        return self._temporal_model
+
+    @staticmethod
+    def _collage(crops):
+        """8 x (224,224,3) uint8 RGB crops -> one (448,448,3) model input.
+
+        The layout is `logic.collage_slots()`: 2 rows x 4 cols in feed order,
+        oldest top-left, newest bottom-right -- byte-for-byte the grid
+        `scripts/temporal_proto.py:collage()` trained on, which is why the
+        geometry lives in `logic.py` and is unit-tested there.
+
+        The final 896x448 -> 448x448 step is an EXACT 2:1 horizontal decimation
+        (the vertical axis is already 448), so it is done as a mean of adjacent
+        column pairs -- no cv2, no interpolation-kernel choice to get wrong, and
+        the same result on device as on a host. Training used PIL's BICUBIC for
+        that same 2:1 step; measured against it on real collages the pair-mean
+        differs by 0.1-0.43 / 255 mean absolute (p99 = 1-5), i.e. far inside the
+        int8 quantisation step, while the PRE-resize 896x448 canvas is
+        byte-identical to `temporal_proto.collage()`.
+        """
+        import numpy as np
+
+        cw, ch = collage_canvas_size(TEMPORAL_TILE)
+        canvas = np.full((ch, cw, 3), TEMPORAL_PAD_VALUE, dtype=np.uint8)
+        for crop, (x0, y0, x1, y1) in zip(crops, collage_slots(TEMPORAL_TILE)):
+            canvas[y0:y1, x0:x1] = crop
+        # (448, 896, 3) -> (448, 448, 2, 3) -> mean over the pair axis.
+        pairs = canvas.reshape(ch, cw // 2, 2, 3)
+        return pairs.mean(axis=2).astype(np.uint8)
+
+    def _temporal_infer(self, crops):
+        """Run the sequence classifier on one pair's 8 buffered crops.
+
+        Returns a `classify_head` dict, or None when the model is unavailable
+        (the caller then stops trying for this frame).
+        """
+        model = self._temporal_model_handle()
+        if model is None or not crops:
+            return None
+        img = self._collage(crops)
+        return clf.classify_head(
+            clf.logits_from(model.infer(img), size=len(TEMPORAL_LABELS)),
+            TEMPORAL_LABELS)
 
     # -- capture (data flywheel) ------------------------------------------- #
     def _capture(self, frame, key, union, head, t, reason) -> None:
@@ -330,6 +497,7 @@ class CrayfishFightApp(App):
         day = time.strftime("%Y-%m-%d", time.localtime(now))
         if not self._quota.allow(now, day):
             return
+        tlast = self._tlast.get(key)
         try:
             import cv2
 
@@ -362,6 +530,11 @@ class CrayfishFightApp(App):
                              "confidence": head["confidence"],
                              "probs": head["probs"],
                              "labels": BEHAVIOR_LABELS},
+                "temporal": ({"label": tlast["label"],
+                              "confidence": tlast["confidence"],
+                              "labels": TEMPORAL_LABELS} if tlast else None),
+                "temporal_verdict": tlast["label"] if tlast else None,
+                "temporal_conf": tlast["confidence"] if tlast else None,
                 "sex": {str(tid): self._sex.sex_of(tid) for tid in key},
                 "quota": self._quota.stats(),
                 "capture_reason": reason,
