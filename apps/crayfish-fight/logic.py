@@ -15,6 +15,10 @@ exercises it on the Mac without a device. `app.py` owns the per-frame plumbing
                            start/stop events with hysteresis, so one bad frame
                            neither raises nor clears an event.
     CaptureQuota        -- rate-limit the data-flywheel dump.
+    PairFrameBuffer     -- keep the last 8 ROI crops of each live pair, so the
+                           TEMPORAL classifier has a motion sequence to look at.
+    TemporalScheduler   -- decide WHICH pairs get a temporal inference this
+                           frame, under a hard per-frame budget.
 
 Coordinates in this module are whatever the caller passes in CONSISTENTLY:
 `ProximityWindow`/`pair_is_close`/`union_box` are scale-free (they only compare
@@ -36,6 +40,12 @@ from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 # i-th logit of the corresponding rknn.
 SEX_LABELS = ["female", "male"]              # runs/sex_cls/best.pt      names
 BEHAVIOR_LABELS = ["fight", "harass", "none"]  # runs/behavior_cls/best.pt names
+# The temporal (8-frame collage) classifier shares the single-frame vocabulary
+# AND its order -- read off runs/behavior_temporal_v3/weights/best.pt:
+#   YOLO(best.pt).names == {0: 'fight', 1: 'harass', 2: 'none'}
+# Same list object semantics on purpose: if one is ever reordered the other
+# must move with it, and `classify_head` is called with the same `size`.
+TEMPORAL_LABELS = list(BEHAVIOR_LABELS)
 SEX_UNKNOWN = "unknown"
 # Behaviour labels that constitute a reportable event ("none" is the negative
 # class and includes "merely close" and "perspective overlap" -- PLAN §3.2).
@@ -329,13 +339,28 @@ class BehaviorStateMachine:
         return self._states.get(key, BehaviorState()).label
 
     def update(self, key: PairKey, label: str, confidence: float,
-               t: float) -> Optional[dict]:
+               t: float, weight: int = 1) -> Optional[dict]:
+        """Feed one verdict. `weight` is how many frames' worth of evidence it
+        is: the SINGLE-FRAME classifier votes 1, the TEMPORAL one votes 2.
+
+        Why the temporal verdict counts double (PLAN §3.3): it looks at 8 frames
+        of motion and scores sequence-level recall 0.95 / precision 0.905, where
+        the single-frame model's fight recall is at most 1/14. Weighting it
+        rather than replacing the single-frame vote keeps the fast path's
+        latency (an event can still raise on 3 consecutive single frames) while
+        letting two temporal confirmations alone clear the default streak of 3.
+
+        RELEASE is deliberately NOT weighted: `misses` still counts one per
+        non-confirming verdict, so hysteresis stays measured in verdicts and a
+        temporal `none` cannot slam an event shut on its own.
+        """
         st = self.state(key)
+        w = max(1, int(weight))
         confirming = (label in BEHAVIOR_EVENT_LABELS
                       and confidence >= self.min_conf)
 
         if confirming:
-            st.streak = st.streak + 1 if st.candidate == label else 1
+            st.streak = st.streak + w if st.candidate == label else w
             st.candidate = label
             st.confidence = float(confidence)
             st.last_at = t
@@ -550,3 +575,227 @@ class CaptureDecider:
             if quota_fraction >= 0.5:
                 return None
         return reason
+
+
+# ---------------------------------------------------------------------------
+# 6. temporal collage geometry (PLAN §3.3, scripts/temporal_proto.py)
+# ---------------------------------------------------------------------------
+# The temporal classifier is the SAME yolo11n-cls architecture as the
+# single-frame one; the only thing that makes it temporal is what it is shown:
+# 8 consecutive ROI crops of the same pair, tiled into one image. No new
+# operator, no 3D conv, no rknn feature the RV1126B lacks -- which is exactly
+# why this route was taken (PLAN §3.3 "拼帧法，零架构改动").
+#
+#   8 x 224x224 crops  ->  2 rows x 4 cols  ->  896 x 448  ->  resize 448x448
+#
+# Frame i goes to row i//4, col i%4, i.e. reading order: the top row is the
+# first 4 (oldest) frames, the bottom row the last 4 (newest). This MUST match
+# `scripts/temporal_proto.py:collage()` exactly -- the model learned that
+# layout, and a transposed grid is a different image to it.
+TEMPORAL_FRAMES = 8
+TEMPORAL_TILE = 224          # per-frame crop side, letterboxed square
+TEMPORAL_COLS = 4
+TEMPORAL_ROWS = 2
+TEMPORAL_INPUT = 448         # rknn input side after the final resize
+# Letterbox fill. RGA pads out-of-frame ROI with gray 114 and so does
+# `temporal_proto.crop()`'s PIL letterbox -- same value on both sides of the
+# train/deploy line, so the model never sees an unfamiliar border.
+TEMPORAL_PAD_VALUE = 114
+
+
+def collage_canvas_size(tile: int = TEMPORAL_TILE) -> Tuple[int, int]:
+    """(width, height) of the pre-resize collage: 4 tiles wide, 2 tall."""
+    return (TEMPORAL_COLS * int(tile), TEMPORAL_ROWS * int(tile))
+
+
+def collage_slots(tile: int = TEMPORAL_TILE) -> List[Tuple[int, int, int, int]]:
+    """Destination rects (x0, y0, x1, y1) of the 8 frames, in feed order.
+
+    Pure arithmetic so the geometry -- the one thing that can silently be wrong
+    and still produce a plausible-looking image -- is unit-tested without
+    numpy. `app.py` does the pixel copy with these slots.
+    """
+    t = int(tile)
+    slots = []
+    for i in range(TEMPORAL_FRAMES):
+        x0 = (i % TEMPORAL_COLS) * t
+        y0 = (i // TEMPORAL_COLS) * t
+        slots.append((x0, y0, x0 + t, y0 + t))
+    return slots
+
+
+# ---------------------------------------------------------------------------
+# 7. temporal frame buffer
+# ---------------------------------------------------------------------------
+@dataclass
+class PairSequence:
+    crops: Deque = field(default_factory=lambda: deque(maxlen=TEMPORAL_FRAMES))
+    first_at: float = 0.0        # pts of the pair's first buffered frame
+    last_at: float = 0.0         # pts of the most recent one
+    pushes: int = 0              # total crops ever appended
+
+    @property
+    def duration(self) -> float:
+        """How long this pair has been continuously close, in seconds."""
+        return max(0.0, self.last_at - self.first_at)
+
+
+class PairFrameBuffer:
+    """Per-pair ring buffer of the last `TEMPORAL_FRAMES` interaction crops.
+
+    Fed ONE crop per pair per TRIGGERED frame -- the very crop stage C already
+    cut for the single-frame classifier, so buffering costs no extra RGA work.
+    Once a pair has 8, it is `ready()` and the temporal model can be run on it.
+
+    ★Why a cap on pairs★ the buffer is the only place in this app that holds
+    pixels across frames: 8 x 224 x 224 x 3 = 1.15 MB per pair. `max_pairs`
+    (default 6 -> ~7 MB) bounds that regardless of how many animals crowd the
+    tank -- n animals make n(n-1)/2 pairs, so 8 animals is already 28 pairs.
+    When over the cap the pairs that have been close LONGEST are kept: a long
+    sustained approach is what an event looks like, while a pair that has been
+    adjacent for three frames is most likely two animals passing each other.
+
+    The buffer holds crops as opaque objects (numpy arrays in production), so
+    this module stays importable without numpy.
+    """
+
+    def __init__(self, max_pairs: int = 6, frames: int = TEMPORAL_FRAMES) -> None:
+        self.max_pairs = max(1, int(max_pairs))
+        self.frames = max(1, int(frames))
+        self._seqs: Dict[PairKey, PairSequence] = {}
+
+    def push(self, key: PairKey, crop, t: float) -> None:
+        """Append this frame's crop for `key`, evicting if over `max_pairs`."""
+        seq = self._seqs.get(key)
+        if seq is None:
+            seq = PairSequence(crops=deque(maxlen=self.frames), first_at=t)
+            self._seqs[key] = seq
+        elif seq.crops.maxlen != self.frames:
+            # `frames` changed under a hot-reload: re-seat the deque.
+            seq.crops = deque(seq.crops, maxlen=self.frames)
+        seq.crops.append(crop)
+        seq.last_at = t
+        seq.pushes += 1
+        self._evict()
+
+    def _evict(self) -> None:
+        if len(self._seqs) <= self.max_pairs:
+            return
+        # Longest-close first; ties broken by the key so eviction is
+        # deterministic (a test, and a device, must agree on who is dropped).
+        ranked = sorted(self._seqs.items(),
+                        key=lambda kv: (-kv[1].duration, kv[0]))
+        for key, _ in ranked[self.max_pairs:]:
+            self._seqs.pop(key, None)
+
+    def ready(self, key: PairKey) -> bool:
+        seq = self._seqs.get(key)
+        return seq is not None and len(seq.crops) >= self.frames
+
+    def ready_keys(self) -> List[PairKey]:
+        return sorted(k for k in self._seqs if self.ready(k))
+
+    def sequence(self, key: PairKey) -> Optional[List]:
+        """The 8 crops oldest-first, or None if the pair is not ready yet."""
+        if not self.ready(key):
+            return None
+        return list(self._seqs[key].crops)
+
+    def duration(self, key: PairKey) -> float:
+        seq = self._seqs.get(key)
+        return seq.duration if seq is not None else 0.0
+
+    def retain(self, keys: Iterable[PairKey]) -> List[PairKey]:
+        """Drop every pair not in `keys`; returns what was dropped.
+
+        Called once a frame with the currently-TRIGGERED pairs: a pair that
+        stopped being close is not going to be classified again, and its 1.15 MB
+        must not linger. `ProximityWindow`'s 5-of-8 window already smooths the
+        flicker, so leaving `triggered` is a real separation, not a dropped
+        detection.
+        """
+        keep = set(keys)
+        gone = [k for k in self._seqs if k not in keep]
+        for k in gone:
+            self._seqs.pop(k, None)
+        return sorted(gone)
+
+    def drop(self, keys: Iterable[PairKey]) -> None:
+        for k in keys:
+            self._seqs.pop(k, None)
+
+    def drop_track(self, track_id: int) -> None:
+        for k in [k for k in self._seqs if track_id in k]:
+            self._seqs.pop(k, None)
+
+    def __len__(self) -> int:
+        return len(self._seqs)
+
+
+# ---------------------------------------------------------------------------
+# 8. temporal inference scheduler
+# ---------------------------------------------------------------------------
+class TemporalScheduler:
+    """Round-robin the temporal model over ready pairs, under a frame budget.
+
+    The 448² collage is ~13 GFLOPs -- roughly 4x one 224² single-frame pass --
+    so it cannot run per pair per frame. Two independent limits make the cost
+    flat instead of quadratic in the number of animals:
+
+      * `budget` (default 1): at most this many temporal inferences PER FRAME,
+        no matter how many pairs are ready. This alone bounds the added load to
+        a constant, which is why 30 pairs cost the same as 2.
+      * `stride` (default 4): a given pair is not re-run until `stride` frames
+        after its last run. At ~12 fps that is a fresh verdict every ~0.33 s per
+        pair, while the buffer's 8 frames span ~0.66 s -- consecutive verdicts
+        overlap by half, so an event cannot slip between two windows.
+
+    Selection is least-recently-run first (never-run pairs lead), so with more
+    ready pairs than budget every pair still gets served in turn rather than the
+    lowest track id monopolising the model.
+    """
+
+    def __init__(self, stride: int = 4, budget: int = 1) -> None:
+        self.stride = max(1, int(stride))
+        self.budget = max(0, int(budget))
+        self._last_run: Dict[PairKey, int] = {}
+        self._frame = 0
+
+    @property
+    def frame(self) -> int:
+        return self._frame
+
+    def select(self, ready: Iterable[PairKey]) -> List[PairKey]:
+        """Advance one frame and return the pairs to infer NOW.
+
+        ★Call exactly once per frame★, even when nothing is ready -- the frame
+        counter is what `stride` is measured in, so skipping a call would make
+        the stride elastic. The returned pairs are recorded as run immediately:
+        the caller is expected to infer all of them.
+        """
+        self._frame += 1
+        if self.budget <= 0:
+            return []
+        due = [k for k in ready
+               if self._frame - self._last_run.get(k, -self.stride) >= self.stride]
+        # least-recently-run first; -1 for never-run so they lead. Key breaks
+        # ties, keeping the order deterministic.
+        due.sort(key=lambda k: (self._last_run.get(k, -1), k))
+        picks = due[: self.budget]
+        for k in picks:
+            self._last_run[k] = self._frame
+        return picks
+
+    def last_run(self, key: PairKey) -> Optional[int]:
+        return self._last_run.get(key)
+
+    def drop(self, keys: Iterable[PairKey]) -> None:
+        for k in keys:
+            self._last_run.pop(k, None)
+
+    def drop_track(self, track_id: int) -> None:
+        for k in [k for k in self._last_run if track_id in k]:
+            self._last_run.pop(k, None)
+
+    def __len__(self) -> int:
+        return len(self._last_run)

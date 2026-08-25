@@ -17,8 +17,11 @@ if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
 from logic import (BehaviorStateMachine, CaptureDecider, CaptureQuota,  # noqa: E402
-                   ProximityWindow, SexVoter, SEX_UNKNOWN, box_iou,
-                   pair_is_close, pair_key, to_norm, union_box)
+                   PairFrameBuffer, ProximityWindow, SexVoter, SEX_UNKNOWN,
+                   TEMPORAL_COLS, TEMPORAL_FRAMES, TEMPORAL_INPUT,
+                   TEMPORAL_LABELS, TEMPORAL_ROWS, TEMPORAL_TILE,
+                   TemporalScheduler, box_iou, collage_canvas_size,
+                   collage_slots, pair_is_close, pair_key, to_norm, union_box)
 
 
 # --------------------------------------------------------------------------- #
@@ -354,3 +357,258 @@ def test_decider_unknown_mode_falls_back_to_trigger():
     assert d.mode == "trigger"
     assert d.decide(is_alarm=False, label="none", confidence=0.9,
                     quota_fraction=0.0) == "plain"
+
+
+# --------------------------------------------------------------------------- #
+# temporal collage geometry
+#
+# The collage layout is the one thing that can be wrong while still producing a
+# perfectly plausible-looking image, so it is asserted directly: 8 solid-colour
+# tiles are painted into a pure-Python canvas through `collage_slots()` and
+# every cell is checked for the colour that belongs there. Must stay identical
+# to scripts/temporal_proto.py:collage() -- the model learned THAT grid.
+# --------------------------------------------------------------------------- #
+def _paint(tile=TEMPORAL_TILE):
+    """Paint 8 solid colours (1..8) through the slots into a w*h canvas."""
+    w, h = collage_canvas_size(tile)
+    canvas = [[0] * w for _ in range(h)]
+    for i, (x0, y0, x1, y1) in enumerate(collage_slots(tile)):
+        for y in range(y0, y1):
+            row = canvas[y]
+            for x in range(x0, x1):
+                row[x] = i + 1
+    return canvas, w, h
+
+
+def test_collage_canvas_is_two_by_four_tiles():
+    assert collage_canvas_size(TEMPORAL_TILE) == (896, 448)
+    assert (TEMPORAL_ROWS, TEMPORAL_COLS) == (2, 4)
+    assert TEMPORAL_ROWS * TEMPORAL_COLS == TEMPORAL_FRAMES == 8
+    # the final resize is an exact 2:1 horizontal decimation, nothing else
+    assert collage_canvas_size(TEMPORAL_TILE)[0] == 2 * TEMPORAL_INPUT
+    assert collage_canvas_size(TEMPORAL_TILE)[1] == TEMPORAL_INPUT
+
+
+def test_collage_slots_are_reading_order():
+    """Frame i -> row i//4, col i%4: oldest top-left, newest bottom-right."""
+    slots = collage_slots(TEMPORAL_TILE)
+    assert len(slots) == 8
+    t = TEMPORAL_TILE
+    assert slots[0] == (0, 0, t, t)                  # first frame: top-left
+    assert slots[3] == (3 * t, 0, 4 * t, t)          # 4th: top-right
+    assert slots[4] == (0, t, t, 2 * t)              # 5th: wraps to row 2
+    assert slots[7] == (3 * t, t, 4 * t, 2 * t)      # last: bottom-right
+
+
+def test_collage_slots_tile_the_canvas_exactly():
+    """No gap, no overlap: every pixel of 896x448 belongs to exactly one frame."""
+    canvas, w, h = _paint(tile=8)          # small tile, same arithmetic
+    flat = [v for row in canvas for v in row]
+    assert 0 not in flat                                    # full coverage
+    for i in range(1, 9):
+        assert flat.count(i) == 8 * 8                       # equal, non-overlapping
+
+
+def test_collage_grid_positions_of_eight_solid_frames():
+    """Sample the centre of each of the 8 cells: it must hold that frame."""
+    t = TEMPORAL_TILE
+    canvas, _, _ = _paint(t)
+    for i in range(8):
+        cx = (i % TEMPORAL_COLS) * t + t // 2
+        cy = (i // TEMPORAL_COLS) * t + t // 2
+        assert canvas[cy][cx] == i + 1
+    # and the corners of the whole canvas are frames 0 and 7
+    assert canvas[0][0] == 1
+    assert canvas[2 * t - 1][4 * t - 1] == 8
+
+
+def test_temporal_labels_match_the_single_frame_vocabulary():
+    """runs/behavior_temporal_v3/weights/best.pt names == fight/harass/none."""
+    assert TEMPORAL_LABELS == ["fight", "harass", "none"]
+
+
+# --------------------------------------------------------------------------- #
+# PairFrameBuffer
+# --------------------------------------------------------------------------- #
+def test_buffer_is_ready_only_at_eight_frames():
+    buf = PairFrameBuffer()
+    for i in range(TEMPORAL_FRAMES - 1):
+        buf.push((1, 2), f"crop{i}", float(i))
+        assert not buf.ready((1, 2))
+        assert buf.sequence((1, 2)) is None
+    buf.push((1, 2), "crop7", 7.0)
+    assert buf.ready((1, 2))
+    assert buf.sequence((1, 2)) == [f"crop{i}" for i in range(7)] + ["crop7"]
+    assert buf.ready_keys() == [(1, 2)]
+
+
+def test_buffer_ring_keeps_the_newest_eight():
+    buf = PairFrameBuffer()
+    for i in range(12):
+        buf.push((1, 2), i, float(i))
+    assert buf.sequence((1, 2)) == [4, 5, 6, 7, 8, 9, 10, 11]
+
+
+def test_buffer_evicts_the_shortest_close_pairs_first():
+    """Over `max_pairs`, the pairs close LONGEST survive (PLAN: a sustained
+    approach is what an event looks like; three adjacent frames is a fly-by)."""
+    buf = PairFrameBuffer(max_pairs=2)
+    buf.push((1, 2), "a", 0.0)
+    buf.push((1, 2), "a", 10.0)            # duration 10
+    buf.push((3, 4), "b", 0.0)
+    buf.push((3, 4), "b", 5.0)             # duration 5
+    assert len(buf) == 2
+    buf.push((5, 6), "c", 100.0)           # duration 0 -> evicted immediately
+    assert len(buf) == 2
+    assert buf.duration((1, 2)) == 10.0
+    assert buf.duration((3, 4)) == 5.0
+    assert buf.duration((5, 6)) == 0.0     # gone: unknown pairs read as 0
+
+
+def test_buffer_eviction_is_deterministic_on_ties():
+    buf = PairFrameBuffer(max_pairs=2)
+    for key in ((3, 4), (1, 2), (5, 6)):   # all duration 0
+        buf.push(key, "x", 0.0)
+    assert sorted(buf.ready_keys() or []) == []
+    assert len(buf) == 2
+    # ties break on the key, so the two lowest survive -- not "whoever pushed"
+    assert buf.duration((1, 2)) == 0.0 and buf.duration((3, 4)) == 0.0
+    remaining = {k for k in ((1, 2), (3, 4), (5, 6)) if k in buf._seqs}
+    assert remaining == {(1, 2), (3, 4)}
+
+
+def test_buffer_retain_drops_pairs_that_stopped_being_triggered():
+    buf = PairFrameBuffer()
+    for key in ((1, 2), (3, 4), (5, 6)):
+        buf.push(key, "x", 0.0)
+    assert buf.retain([(1, 2), (5, 6)]) == [(3, 4)]
+    assert len(buf) == 2
+    assert buf.retain([]) == [(1, 2), (5, 6)]
+    assert len(buf) == 0
+
+
+def test_buffer_drop_track_removes_every_pair_of_that_track():
+    buf = PairFrameBuffer()
+    for key in ((1, 2), (1, 3), (2, 3)):
+        buf.push(key, "x", 0.0)
+    buf.drop_track(1)
+    assert len(buf) == 1
+    assert buf.duration((2, 3)) == 0.0 and (2, 3) in buf._seqs
+
+
+# --------------------------------------------------------------------------- #
+# TemporalScheduler
+# --------------------------------------------------------------------------- #
+def _ready(sched, keys, frames):
+    """Run `frames` frames with a fixed ready set; return the picks per frame."""
+    return [sched.select(keys) for _ in range(frames)]
+
+
+def test_scheduler_respects_the_per_frame_budget():
+    sched = TemporalScheduler(stride=1, budget=1)
+    picks = _ready(sched, [(1, 2), (3, 4), (5, 6)], 3)
+    assert all(len(p) <= 1 for p in picks)
+
+
+def test_scheduler_rotates_over_ready_pairs():
+    """Budget 1, stride 1, 3 ready pairs -> each is served in turn, so no pair
+    starves behind the lowest track id."""
+    sched = TemporalScheduler(stride=1, budget=1)
+    keys = [(1, 2), (3, 4), (5, 6)]
+    picks = [p[0] for p in _ready(sched, keys, 6)]
+    assert picks[:3] == keys              # never-run first, in key order
+    assert picks[3:] == keys              # then round-robin, least-recent first
+
+
+def test_scheduler_stride_holds_a_pair_back():
+    """One ready pair, stride 4: it runs on frames 1, 5, 9 -- not every frame."""
+    sched = TemporalScheduler(stride=4, budget=1)
+    picks = _ready(sched, [(1, 2)], 10)
+    ran = [i + 1 for i, p in enumerate(picks) if p]
+    assert ran == [1, 5, 9]
+
+
+def test_scheduler_stride_is_counted_in_frames_not_calls():
+    """`select` must be called once per frame even with nothing ready, or the
+    stride would stretch. An empty frame still advances the counter."""
+    sched = TemporalScheduler(stride=3, budget=1)
+    assert sched.select([(1, 2)]) == [(1, 2)]     # frame 1
+    assert sched.select([]) == []                 # frame 2: nothing ready
+    assert sched.select([]) == []                 # frame 3
+    assert sched.frame == 3
+    assert sched.select([(1, 2)]) == [(1, 2)]     # frame 4: 3 frames elapsed
+
+
+def test_scheduler_zero_budget_disables_temporal_inference():
+    sched = TemporalScheduler(stride=1, budget=0)
+    assert _ready(sched, [(1, 2), (3, 4)], 5) == [[], [], [], [], []]
+    assert sched.frame == 5                       # still counting frames
+
+
+def test_scheduler_budget_above_one_picks_several():
+    sched = TemporalScheduler(stride=4, budget=2)
+    assert sched.select([(1, 2), (3, 4), (5, 6)]) == [(1, 2), (3, 4)]
+    assert sched.select([(1, 2), (3, 4), (5, 6)]) == [(5, 6)]   # only one due
+
+
+def test_scheduler_drop_track_forgets_its_pairs():
+    sched = TemporalScheduler(stride=10, budget=3)
+    sched.select([(1, 2), (1, 3), (2, 3)])
+    assert len(sched) == 3
+    sched.drop_track(1)
+    assert len(sched) == 1
+    assert sched.last_run((2, 3)) == 1
+    assert sched.last_run((1, 2)) is None
+
+
+# --------------------------------------------------------------------------- #
+# temporal verdicts in the state machine (weighted votes)
+# --------------------------------------------------------------------------- #
+def test_temporal_verdict_counts_as_two_votes():
+    """Default streak is 3: two temporal confirmations (2+2=4) raise on their
+    own, where two single-frame ones (1+1=2) do not."""
+    fsm = BehaviorStateMachine(min_streak=3)
+    assert fsm.update((1, 2), "fight", 0.9, 0.0, weight=2) is None   # streak 2
+    ev = fsm.update((1, 2), "fight", 0.9, 1.0, weight=2)             # streak 4
+    assert ev is not None and ev["phase"] == "start" and ev["label"] == "fight"
+
+
+def test_two_single_frame_votes_do_not_raise():
+    fsm = BehaviorStateMachine(min_streak=3)
+    assert fsm.update((1, 2), "fight", 0.9, 0.0) is None
+    assert fsm.update((1, 2), "fight", 0.9, 1.0) is None             # streak 2
+
+
+def test_temporal_vote_completes_a_single_frame_streak():
+    """The mixed path: one coarse single-frame hit (1) + one temporal (2) = 3."""
+    fsm = BehaviorStateMachine(min_streak=3)
+    assert fsm.update((1, 2), "harass", 0.8, 0.0) is None            # streak 1
+    ev = fsm.update((1, 2), "harass", 0.95, 0.1, weight=2)           # streak 3
+    assert ev is not None and ev["phase"] == "start"
+    assert ev["label"] == "harass"
+
+
+def test_weighted_streak_resets_on_a_label_change():
+    """A temporal `harass` after a single-frame `fight` restarts at ITS weight,
+    it does not inherit the other label's streak."""
+    fsm = BehaviorStateMachine(min_streak=3)
+    fsm.update((1, 2), "fight", 0.9, 0.0)                            # streak 1
+    assert fsm.update((1, 2), "harass", 0.9, 1.0, weight=2) is None   # streak 2
+    ev = fsm.update((1, 2), "harass", 0.9, 2.0)                      # streak 3
+    assert ev is not None and ev["label"] == "harass"
+
+
+def test_release_is_not_weighted():
+    """A temporal `none` spends ONE miss, not two: hysteresis stays measured in
+    verdicts so a single sequence read cannot slam an event shut."""
+    fsm = BehaviorStateMachine(min_streak=1, release_frames=2)
+    assert fsm.update((1, 2), "fight", 0.9, 0.0)["phase"] == "start"
+    assert fsm.update((1, 2), "none", 0.9, 1.0, weight=2) is None    # 1 miss
+    ev = fsm.update((1, 2), "none", 0.9, 2.0, weight=2)              # 2 misses
+    assert ev is not None and ev["phase"] == "end"
+
+
+def test_weight_below_one_is_clamped():
+    fsm = BehaviorStateMachine(min_streak=1)
+    ev = fsm.update((1, 2), "fight", 0.9, 0.0, weight=0)
+    assert ev is not None and ev["frames"] == 1
