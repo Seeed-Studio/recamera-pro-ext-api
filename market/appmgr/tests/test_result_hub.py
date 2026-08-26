@@ -1063,6 +1063,112 @@ class _WsReader:
         self.sock.close()
 
 
+def test_ws_receive_only_client_stays_connected_past_send_timeout(tmp_path):
+    send_timeout = 0.1
+    hub = ResultHub(
+        ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+        formatter=NoopFormatter()).start()
+    # No client has connected yet, so the accept loop will copy this value into
+    # the new _HubClient.  Keep the production default out of this regression's
+    # wall-clock duration.
+    hub._ws.send_timeout = send_timeout
+    identity = _authorize(hub, _identity("receive-only"), fields=[
+        {"from": "results[].box", "coord": "pixel_xyxy"}])
+    ws = _WsReader(hub.ws_port)
+    ws.sock.settimeout(2)
+    try:
+        assert ws.json()["type"] == "hello"
+        assert ws.json()["type"] == "snapshot"
+        started = time.monotonic()
+        seq = 0
+        while time.monotonic() - started <= 3 * send_timeout:
+            seq += 1
+            hub.publish_app(_app_payload(
+                seq=seq, results=[{"box": [0, 0, 20, 20]}]), identity)
+            frame = ws.json()
+            assert frame["type"] == "frame" and frame["seq"] == seq
+            time.sleep(send_timeout / 5)
+
+        # The browser sent only its HTTP upgrade; it did not need to send a
+        # subscribe/ping frame to keep the server-side blocking recv alive.
+        assert time.monotonic() - started > 2 * send_timeout
+        assert hub._ws.status()["subscribers"] == 1
+        with hub._ws._lock:
+            server_client = hub._ws._clients[0]
+        assert server_client.conn.gettimeout() is None
+    finally:
+        ws.close()
+        hub.stop()
+
+
+def test_ws_send_timeout_closes_nonreading_socket_and_unblocks_reader():
+    writer_sock, nonreader_sock = socket.socketpair()
+    writer_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    client = _HubClient(
+        writer_sock, "local", None, max_queue=4,
+        send_timeout=0.05, lag_limit=100)
+    # Much larger than the deliberately tiny kernel send buffer.  With no peer
+    # reader, the strict send deadline must close both Hub threads.
+    assert client._append(
+        "event", "slow-peer", b"x" * (4 * 1024 * 1024), data=True,
+        delivery="edge")
+    started = time.monotonic()
+    try:
+        client.start()
+        client._writer.join(timeout=2)
+        client._reader.join(timeout=2)
+        assert not client._writer.is_alive()
+        assert not client._reader.is_alive()
+        assert client.alive() is False
+        assert time.monotonic() - started < 2
+    finally:
+        client.close()
+        nonreader_sock.close()
+
+
+def test_ws_send_timeout_is_total_deadline_against_trickle_reader():
+    writer_sock, trickle_sock = socket.socketpair()
+    writer_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    send_timeout = 0.05
+    client = _HubClient(
+        writer_sock, "local", None, max_queue=4,
+        send_timeout=send_timeout, lag_limit=100)
+    assert client._append(
+        "event", "trickle-peer", b"x" * (1024 * 1024), data=True,
+        delivery="edge")
+    received = bytearray()
+
+    def read_slowly():
+        try:
+            while True:
+                chunk = trickle_sock.recv(8192)
+                if not chunk:
+                    return
+                received.extend(chunk)
+                time.sleep(0.02)
+        except OSError:
+            return
+
+    reader = threading.Thread(target=read_slowly, daemon=True)
+    reader.start()
+    started = time.monotonic()
+    try:
+        client.start()
+        client._writer.join(timeout=1)
+        client._reader.join(timeout=1)
+        elapsed = time.monotonic() - started
+        assert not client._writer.is_alive()
+        assert not client._reader.is_alive()
+        assert client.alive() is False
+        assert received
+        assert len(received) < 1024 * 1024
+        assert send_timeout <= elapsed < 0.5
+    finally:
+        client.close()
+        trickle_sock.close()
+        reader.join(timeout=1)
+
+
 def test_ws_first_message_hello_then_raw_and_formatted_subscription(tmp_path):
     hub = ResultHub(
         ws_port=0, system_uds_path=str(tmp_path / "system.sock"),

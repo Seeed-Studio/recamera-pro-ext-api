@@ -187,6 +187,8 @@ formatted 对**完整原始 batch**（results + events + summary + 性能字段�
 - 客户端队列满时，淘汰顺序为旧 frame，再到 status/metrics；新 frame 或 status
   以及 state event；任何 state 都不能删除已经排队的 edge。连续饱和会关闭慢客户端，
   使其重连后从短期 edge replay 恢复，而不是永久静默漏事件。
+- 慢客户端的发送超时只作用于 socket 写方向；只接收结果、不发送心跳或重订阅消息的
+  浏览器连接不会因为服务端读线程空闲而被误关闭。
 
 ## system UDS
 

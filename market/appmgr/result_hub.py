@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import socket
 import stat
 import struct
@@ -1057,6 +1058,40 @@ def _read_client_frame(conn: socket.socket, max_payload: int = 16 * 1024):
     return opcode, bytes(payload)
 
 
+def _send_with_deadline(conn: socket.socket, payload: bytes,
+                        timeout_s: float) -> None:
+    """Send one frame within a total deadline without changing read timeout.
+
+    ``socket.settimeout()`` changes the shared socket object's blocking mode and
+    can therefore make a concurrent blocking ``recv()`` time out.  Linux
+    ``MSG_DONTWAIT`` applies only to this send call; readiness waits consume one
+    monotonic deadline for the complete frame, including trickle progress.
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout_s))
+    remaining_payload = memoryview(payload)
+    flags = socket.MSG_DONTWAIT | getattr(socket, "MSG_NOSIGNAL", 0)
+    while remaining_payload:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            raise TimeoutError("websocket frame send timed out")
+        try:
+            _readable, writable, exceptional = select.select(
+                [], [conn], [conn], remaining_s)
+        except InterruptedError:
+            continue
+        if exceptional:
+            raise ConnectionError("websocket socket failed while sending")
+        if not writable:
+            raise TimeoutError("websocket frame send timed out")
+        try:
+            sent = conn.send(remaining_payload, flags)
+        except (BlockingIOError, InterruptedError):
+            continue
+        if sent <= 0:
+            raise ConnectionError("websocket client closed while sending")
+        remaining_payload = remaining_payload[sent:]
+
+
 class _HubClient:
     """One subscriber with bounded, semantic latest-wins buffering."""
 
@@ -1092,6 +1127,10 @@ class _HubClient:
             return self._alive
 
     def start(self) -> None:
+        # The HTTP handshake uses a bounded whole-socket timeout.  Restore
+        # blocking mode exactly once, before either client thread can run.
+        # Writer deadlines are per-call and neither loop mutates socket state.
+        self.conn.settimeout(None)
         self._writer.start()
         self._reader.start()
 
@@ -1303,8 +1342,7 @@ class _HubClient:
                     if not self._alive and not self._items:
                         break
                     _kind, _key, frame, _data, _delivery = self._items.popleft()
-                self.conn.settimeout(self._send_timeout)
-                self.conn.sendall(frame)
+                _send_with_deadline(self.conn, frame, self._send_timeout)
         except Exception:
             pass
         finally:
@@ -1312,7 +1350,6 @@ class _HubClient:
 
     def _read_loop(self) -> None:
         try:
-            self.conn.settimeout(None)
             while self.alive():
                 opcode, payload = _read_client_frame(self.conn)
                 if opcode == 0x8:
