@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -26,6 +27,12 @@ RELEASE_LOCK_VERSION = 1
 RELEASE_LOCK_PATH = "release.lock.json"
 BOM_PATH = "files.sha256"
 RESERVED_PACKAGE_PATHS = frozenset((RELEASE_LOCK_PATH, BOM_PATH))
+MAX_ICON_BYTES = 1024 * 1024
+ICON_MEDIA_EXTENSIONS = {
+    "image/png": (".png",),
+    "image/webp": (".webp",),
+    "image/jpeg": (".jpg", ".jpeg"),
+}
 _FORBIDDEN_KEY_DIRS = frozenset((".ssh", "keys"))
 _FORBIDDEN_KEY_BASENAMES = frozenset(("authorized_keys", "known_hosts"))
 _FORBIDDEN_KEY_SUFFIXES = (".jks", ".key", ".p12", ".pfx", ".pem")
@@ -53,14 +60,15 @@ _V2_REQUIRED = frozenset((
     "resources", "permissions", "health", "instances", "capabilities",
 ))
 _V2_ALLOWED = _V2_REQUIRED | frozenset((
-    "name_zh", "description", "description_zh", "author", "image", "scene",
+    "name_zh", "description", "description_zh", "author", "image", "icon", "scene",
     "scene_zh", "tags", "models", "needs_model", "postproc", "render",
     "output", "ha_entities", "package",
 ))
 
 _CONFIG_TYPES = frozenset((
-    "boolean", "enum", "field_mapping", "integer", "line", "number",
-    "output_filters", "string", "zone",
+    "array", "boolean", "enum", "field_mapping", "integer", "line",
+    "number", "object", "output_filters", "password", "select", "string",
+    "zone",
 ))
 _CONFIG_APPLY = frozenset(("live", "restart", "reschedule"))
 _SDK_PERMISSIONS = frozenset((
@@ -155,6 +163,39 @@ def validate_package_member_path(value: Any, path: str = "package member") -> st
     return text
 
 
+def validate_icon_declaration(value: Any) -> dict[str, str]:
+    """Validate and canonicalise manifest-v2's package-bundled icon."""
+    obj = _expect_object(value, "icon")
+    _closed(obj, frozenset(("path", "media_type")), "icon")
+    _required(obj, frozenset(("path", "media_type")), "icon")
+    icon_path = validate_package_member_path(obj["path"], "icon.path")
+    media_type = _string(obj["media_type"], "icon.media_type", max_len=64)
+    extensions = ICON_MEDIA_EXTENSIONS.get(media_type)
+    if extensions is None:
+        _fail("icon.media_type", "must be image/png, image/webp, or image/jpeg")
+    if not icon_path.endswith(extensions):
+        _fail(
+            "icon.path",
+            "extension must match icon.media_type %r (%s)" % (
+                media_type, ", ".join(extensions)))
+    return {"path": icon_path, "media_type": media_type}
+
+
+def icon_bytes_match_media_type(data: bytes, media_type: str) -> bool:
+    """Return whether a bounded prefix has the declared raster signature."""
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        return False
+    prefix = bytes(data)
+    if media_type == "image/png":
+        return prefix.startswith(b"\x89PNG\r\n\x1a\n")
+    if media_type == "image/webp":
+        return (len(prefix) >= 12 and prefix.startswith(b"RIFF")
+                and prefix[8:12] == b"WEBP")
+    if media_type == "image/jpeg":
+        return prefix.startswith(b"\xff\xd8\xff")
+    return False
+
+
 def _safe_token(value: Any, path: str) -> str:
     text = _string(value, path, max_len=128)
     if not _SAFE_TOKEN_RE.fullmatch(text):
@@ -214,7 +255,128 @@ def _validate_common(manifest: dict) -> None:
             _safe_relpath(obj["file"], p + ".file")
 
 
-def _validate_config_schema(value: Any) -> set[str]:
+def _finite_number(value: Any, *, integer: bool = False) -> bool:
+    if integer:
+        return _is_int(value)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _enum_option_values(options: Any, path: str) -> list:
+    """Validate dropdown options and return their typed values.
+
+    Scalar arrays are the original contract.  Labelled option objects add a
+    convenient self-contained form without removing the parallel
+    ``option_labels``/``option_labels_zh`` arrays used by existing packages.
+    """
+    values = []
+    for index, raw in enumerate(_expect_list(options, path)):
+        option_path = f"{path}[{index}]"
+        value = raw
+        if isinstance(raw, dict):
+            _closed(raw, frozenset(("value", "label", "label_zh")), option_path)
+            _required(raw, frozenset(("value",)), option_path)
+            for label_key in ("label", "label_zh"):
+                if label_key in raw:
+                    _string(raw[label_key], option_path + "." + label_key,
+                            min_len=0, max_len=128)
+            value = raw["value"]
+        if (value is None or isinstance(value, (dict, list))
+                or not isinstance(value, (str, int, float, bool))
+                or isinstance(value, float) and not math.isfinite(value)):
+            _fail(option_path + (".value" if isinstance(raw, dict) else ""),
+                  "must be a finite string/number/integer/boolean scalar")
+        if any(_enum_value_equal(value, old) for old in values):
+            _fail(option_path, "duplicates an earlier option value")
+        values.append(value)
+    if not values:
+        _fail(path, "must be a non-empty array")
+    return values
+
+
+def _enum_value_equal(left: Any, right: Any) -> bool:
+    """Match the JSON/JavaScript wire model without conflating bool and int."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    return type(left) is type(right) and left == right
+
+
+def _validate_config_complex_default(spec: dict, path: str) -> None:
+    """Validate structured manifest defaults rather than accepting opaque JSON."""
+    if "default" not in spec:
+        return
+    value = spec["default"]
+    config_type = spec["type"]
+    if config_type == "zone":
+        if value in (None, []):
+            return
+        points = _expect_list(value, path + ".default")
+        if len(points) < 3:
+            _fail(path + ".default", "zone polygon needs at least 3 points")
+        if "maxPoints" in spec and len(points) > spec["maxPoints"]:
+            _fail(path + ".default", "zone exceeds maxPoints")
+        for index, point in enumerate(points):
+            pp = f"{path}.default[{index}]"
+            coords = _expect_list(point, pp)
+            if (len(coords) != 2 or any(not _finite_number(c)
+                                        or not 0 <= float(c) <= 1 for c in coords)):
+                _fail(pp, "must be [x,y] with finite coordinates in [0,1]")
+    elif config_type == "line":
+        if value in (None, {}):
+            return
+        line = _expect_object(value, path + ".default")
+        _closed(line, frozenset(("a", "b", "in")), path + ".default")
+        _required(line, frozenset(("a", "b")), path + ".default")
+        for endpoint in ("a", "b"):
+            coords = _expect_list(line[endpoint], path + f".default.{endpoint}")
+            if (len(coords) != 2 or any(not _finite_number(c)
+                                        or not 0 <= float(c) <= 1 for c in coords)):
+                _fail(path + f".default.{endpoint}",
+                      "must be [x,y] with finite coordinates in [0,1]")
+        if "in" in line and line["in"] not in ("left", "right"):
+            _fail(path + ".default.in", "must be left or right")
+    elif config_type == "field_mapping":
+        rows = _expect_list(value, path + ".default")
+        for index, raw in enumerate(rows):
+            rp = f"{path}.default[{index}]"
+            row = _expect_object(raw, rp)
+            _closed(row, frozenset(("source", "target", "topic", "task",
+                                    "omit_if_none")), rp)
+            _required(row, frozenset(("source", "target", "topic")), rp)
+            for field in ("source", "target", "topic"):
+                _string(row[field], rp + "." + field, max_len=512)
+            if "task" in row:
+                _string(row["task"], rp + ".task", max_len=64)
+            if "omit_if_none" in row and not isinstance(
+                    row["omit_if_none"], bool):
+                _fail(rp + ".omit_if_none", "must be boolean")
+    elif config_type == "output_filters":
+        filters = _expect_object(value, path + ".default")
+        _closed(filters, frozenset(("only_on_detection", "classes",
+                                    "rate_limit_hz", "preserve_edge_events")),
+                path + ".default")
+        for field in ("only_on_detection", "preserve_edge_events"):
+            if field in filters and not isinstance(filters[field], bool):
+                _fail(path + f".default.{field}", "must be boolean")
+        if "rate_limit_hz" in filters and (not _finite_number(
+                filters["rate_limit_hz"]) or not 0 <= filters["rate_limit_hz"] <= 1000):
+            _fail(path + ".default.rate_limit_hz", "must be in [0,1000]")
+        if "classes" in filters:
+            classes = _expect_list(filters["classes"], path + ".default.classes")
+            if any(v is None or isinstance(v, (dict, list, bool))
+                   or not isinstance(v, (str, int, float))
+                   or isinstance(v, (int, float)) and not _finite_number(v)
+                   for v in classes):
+                _fail(path + ".default.classes", "must contain scalar class ids/names")
+
+
+def _validate_config_schema(value: Any) -> dict[str, str]:
     schema = _expect_object(value, "config_schema")
     _closed(schema, frozenset(("groups", "revision")), "config_schema")
     groups = _expect_list(schema.get("groups"), "config_schema.groups")
@@ -223,6 +385,7 @@ def _validate_config_schema(value: Any) -> set[str]:
 
     seen_groups: set[str] = set()
     seen_items: set[str] = set()
+    apply_modes: dict[str, str] = {}
     group_allowed = frozenset(("key", "title", "title_zh", "description",
                                "description_zh", "items"))
     item_allowed = frozenset((
@@ -258,12 +421,14 @@ def _validate_config_schema(value: Any) -> set[str]:
                 _fail(ip + ".type", "unsupported config type")
             if spec["apply"] not in _CONFIG_APPLY:
                 _fail(ip + ".apply", "must be live, restart or reschedule")
-            if spec["type"] == "enum":
+            apply_modes[ikey] = spec["apply"]
+            if spec["type"] in ("enum", "select"):
                 options = _expect_list(spec.get("options"), ip + ".options")
-                if not options or len({json.dumps(v, sort_keys=True) for v in options}) != len(options):
-                    _fail(ip + ".options", "must be a non-empty unique array")
-                if "default" in spec and spec["default"] not in options:
-                    _fail(ip + ".default", "must be one of options")
+                option_values = _enum_option_values(options, ip + ".options")
+                if "default" in spec and not any(
+                        _enum_value_equal(spec["default"], option)
+                        for option in option_values):
+                    _fail(ip + ".default", "must be one of the typed option values")
                 for labels_key in ("option_labels", "option_labels_zh"):
                     if labels_key in spec:
                         labels = _expect_list(spec[labels_key], ip + "." + labels_key)
@@ -274,16 +439,21 @@ def _validate_config_schema(value: Any) -> set[str]:
             if spec["type"] == "boolean" and "default" in spec \
                     and not isinstance(spec["default"], bool):
                 _fail(ip + ".default", "must match type boolean")
-            if spec["type"] == "string" and "default" in spec \
+            if spec["type"] in ("string", "password") and "default" in spec \
                     and not isinstance(spec["default"], str):
-                _fail(ip + ".default", "must match type string")
+                _fail(ip + ".default", f"must match type {spec['type']}")
+            if spec["type"] == "array" and "default" in spec \
+                    and not isinstance(spec["default"], list):
+                _fail(ip + ".default", "must match type array")
+            if spec["type"] == "object" and "default" in spec \
+                    and not isinstance(spec["default"], dict):
+                _fail(ip + ".default", "must match type object")
             for bound in ("min", "max", "step"):
                 if bound not in spec:
                     continue
                 number = spec[bound]
-                valid_number = (_is_int(number) if spec["type"] == "integer"
-                                else isinstance(number, (int, float))
-                                and not isinstance(number, bool))
+                valid_number = _finite_number(
+                    number, integer=spec["type"] == "integer")
                 if spec["type"] not in ("integer", "number") or not valid_number:
                     _fail(ip + "." + bound, "is only valid as a matching numeric value")
             if "min" in spec and "max" in spec and spec["min"] > spec["max"]:
@@ -292,9 +462,8 @@ def _validate_config_schema(value: Any) -> set[str]:
                 _fail(ip + ".step", "must be positive")
             if spec["type"] in ("integer", "number") and "default" in spec:
                 default = spec["default"]
-                valid_number = (_is_int(default) if spec["type"] == "integer"
-                                else isinstance(default, (int, float))
-                                and not isinstance(default, bool))
+                valid_number = _finite_number(
+                    default, integer=spec["type"] == "integer")
                 if not valid_number:
                     _fail(ip + ".default", f"must match type {spec['type']}")
                 if "min" in spec and default < spec["min"]:
@@ -305,7 +474,10 @@ def _validate_config_schema(value: Any) -> set[str]:
                 _fail(ip + ".directional", "must be a boolean")
             if "maxPoints" in spec:
                 _positive_int(spec["maxPoints"], ip + ".maxPoints")
-    return seen_items
+            if spec["type"] in ("zone", "line", "field_mapping",
+                                "output_filters"):
+                _validate_config_complex_default(spec, ip)
+    return apply_modes
 
 
 def _validate_output_contract(value: Any) -> None:
@@ -371,6 +543,15 @@ def _validate_output_contract(value: Any) -> None:
         _string(field["description"], path + ".description", max_len=1024)
         if "coord" in field and field["coord"] not in _COORD_SPACES:
             _fail(path + ".coord", "unsupported coordinate space")
+        if field["from"] == "geometry[]":
+            if field.get("derived") is True:
+                _fail(path + ".derived",
+                      "geometry[] is runtime data and cannot be derived")
+            if field.get("coord") not in ("pixel_points", "normalized_points"):
+                _fail(path + ".coord",
+                      "geometry[] requires pixel_points or normalized_points")
+            if field_type != "geometry[]":
+                _fail(path + ".type", "geometry[] requires type geometry[]")
         if any(shape in field_type.lower() for shape in
                ("bbox", "quad", "keypoint")) and "coord" not in field:
             _fail(path + ".coord",
@@ -395,14 +576,45 @@ def _validate_output_contract(value: Any) -> None:
             _safe_token(row["task"], path + ".task")
 
 
+_GEOMETRY_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?\Z")
+_GEOMETRY_TYPES = frozenset(("point", "line", "polyline", "polygon"))
+_GEOMETRY_STYLE_FIELDS = frozenset((
+    "color", "line_width", "point_radius", "fill", "fill_color", "opacity",
+))
+
+
+def _validate_geometry_style(value: Any, path: str) -> None:
+    style = _expect_object(value, path)
+    _closed(style, _GEOMETRY_STYLE_FIELDS, path)
+    for key in ("color", "fill_color"):
+        if key in style and (not isinstance(style[key], str)
+                             or not _GEOMETRY_COLOR_RE.fullmatch(style[key])):
+            _fail(path + "." + key, "must be #RRGGBB or #RRGGBBAA")
+    if "fill" in style and not isinstance(style["fill"], bool):
+        _fail(path + ".fill", "must be boolean")
+    bounds = {
+        "line_width": (0.25, 16.0),
+        "point_radius": (0.5, 32.0),
+        "opacity": (0.0, 1.0),
+    }
+    for key, (minimum, maximum) in bounds.items():
+        if key in style and (not _finite_number(style[key])
+                             or not minimum <= float(style[key]) <= maximum):
+            _fail(path + "." + key,
+                  f"must be a finite number in [{minimum},{maximum}]")
+
+
 def _validate_render_contract(value: Any) -> None:
     render = _expect_object(value, "render")
     if "schema_version" not in render:
         return                         # legacy loose render remains compatible
-    if render.get("schema_version") != 1:
+    schema_version = render.get("schema_version")
+    # JSON booleans are distinct from numbers.  Python's ``True == 1`` must
+    # not make runtime admission disagree with Draft 2020-12 ``const: 1``.
+    if isinstance(schema_version, bool) or schema_version != 1:
         _fail("render.schema_version", "must equal 1")
     _closed(render, frozenset((
-        "schema_version", "boxes", "quads", "keypoints", "events",
+        "schema_version", "boxes", "quads", "keypoints", "geometry", "events",
         "stream_osd",
     )), "render")
     if "boxes" in render:
@@ -444,6 +656,35 @@ def _validate_render_contract(value: Any) -> None:
                 _fail("render.keypoints.conf_min", "must be a number in 0..1")
         if "skeleton" in keypoints:
             _expect_list(keypoints["skeleton"], "render.keypoints.skeleton")
+    if "geometry" in render:
+        geometry = _expect_object(render["geometry"], "render.geometry")
+        _closed(geometry, frozenset((
+            "types", "max_items", "max_points", "style",
+        )), "render.geometry")
+        _required(geometry, frozenset(("types",)), "render.geometry")
+        types = _expect_list(geometry["types"], "render.geometry.types")
+        if (not types or len(types) != len(set(types))
+                or any(kind not in _GEOMETRY_TYPES for kind in types)):
+            _fail("render.geometry.types",
+                  "must contain unique point, line, polyline or polygon values")
+        if "max_items" in geometry:
+            _positive_int(geometry["max_items"], "render.geometry.max_items",
+                          maximum=256)
+        if "max_points" in geometry:
+            max_points = _positive_int(
+                geometry["max_points"], "render.geometry.max_points",
+                maximum=256)
+            minimum_by_type = {
+                "point": 1, "line": 2, "polyline": 2, "polygon": 3,
+            }
+            required = max(minimum_by_type[kind] for kind in types)
+            if max_points < required:
+                _fail(
+                    "render.geometry.max_points",
+                    "must be at least %d for declared geometry types" % required,
+                )
+        if "style" in geometry:
+            _validate_geometry_style(geometry["style"], "render.geometry.style")
     if "events" in render:
         events = _expect_object(render["events"], "render.events")
         allowed = frozenset((
@@ -485,11 +726,50 @@ def _validate_render_contract(value: Any) -> None:
 
 def _validate_render_references(output_value: Any, render_value: Any) -> None:
     """Bind strict renderer references to declared runtime result fields."""
-    if not isinstance(output_value, dict) or output_value.get("contract_version") != 2:
+    strict_output = (isinstance(output_value, dict)
+                     and output_value.get("contract_version") == 2)
+    render_version = (render_value.get("schema_version")
+                      if isinstance(render_value, dict) else None)
+    strict_render = (isinstance(render_value, dict)
+                     and not isinstance(render_version, bool)
+                     and render_version == 1)
+    fields = output_value.get("fields") or [] if strict_output else []
+    geometry_fields = [
+        field for field in fields
+        if (isinstance(field, dict)
+            and field.get("from") == "geometry[]"
+            and field.get("derived") is not True)]
+    render_geometry = bool(strict_render and "geometry" in render_value)
+    if render_geometry and not strict_output:
+        _fail("render.geometry",
+              "requires output.contract_version=2 and exactly one geometry[] field")
+    if geometry_fields and not render_geometry:
+        _fail("output.fields",
+              "geometry[] requires render.schema_version=1 with render.geometry")
+    if render_geometry and len(geometry_fields) != 1:
+        _fail("render.geometry",
+              "requires exactly one declared output.fields geometry[] field")
+    if strict_render and "stream_osd" in render_value:
+        if not strict_output:
+            _fail("render.stream_osd", "requires output.contract_version=2")
+        box_fields = [
+            field for field in fields
+            if (isinstance(field, dict)
+                and field.get("from") == "results[].box"
+                and field.get("derived") is not True)
+        ]
+        coordinates = [field.get("coord") for field in box_fields]
+        if (not any(field.get("name") == "box" for field in box_fields)
+                or not coordinates
+                or not all(isinstance(coord, str) for coord in coordinates)
+                or len(set(coordinates)) != 1
+                or coordinates[0] not in (
+                    "pixel_xyxy", "normalized_xyxy")):
+            _fail("render.stream_osd",
+                  "requires a direct field named box from results[].box and "
+                  "one consistent pixel_xyxy or normalized_xyxy space")
+    if not strict_output or not strict_render:
         return
-    if not isinstance(render_value, dict) or render_value.get("schema_version") != 1:
-        return
-    fields = output_value.get("fields") or []
     result_fields = {
         field.get("name"): field
         for field in fields
@@ -524,11 +804,6 @@ def _validate_render_references(output_value: Any, render_value: Any) -> None:
         if kind not in event_kinds:
             _fail("render.events." + kind,
                   "requires an output field with the same event_kind")
-    if "stream_osd" in render_value:
-        box_field = result_fields.get("box") or {}
-        if box_field.get("coord") not in ("pixel_xyxy", "normalized_xyxy"):
-            _fail("render.stream_osd",
-                  "requires an explicitly coordinated results[].box field")
 
 
 def _validate_release(value: Any) -> None:
@@ -715,7 +990,7 @@ def _validate_claims(value: Any, path: str) -> set[str]:
     return seen
 
 
-def _validate_resources(value: Any, config_keys: set[str]) -> set[str]:
+def _validate_resources(value: Any, config_keys: dict[str, str]) -> set[str]:
     obj = _expect_object(value, "resources")
     _closed(obj, frozenset(("claims", "profiles", "limits")), "resources")
     if "claims" not in obj and "profiles" not in obj:
@@ -739,6 +1014,9 @@ def _validate_resources(value: Any, config_keys: set[str]) -> set[str]:
             key = next(iter(when), "")
             if key not in config_keys:
                 _fail(path + ".when", f"references unknown config key {key!r}")
+            if config_keys[key] == "live":
+                _fail(path + ".when",
+                      "profile selector config must restart or reschedule")
             fingerprint = json.dumps(when, sort_keys=True, separators=(",", ":"))
             if fingerprint in seen_when:
                 _fail(path + ".when", "duplicate resource profile condition")
@@ -906,14 +1184,18 @@ def validate_manifest(manifest: Any, *, allow_v1: bool = True) -> int:
                   f"resource {resource_name!r} requires permission {permission!r}")
     _validate_health(obj["health"])
     _validate_instances(obj["instances"])
+    if "icon" in obj:
+        validate_icon_declaration(obj["icon"])
     if "package" in obj:
         _validate_package(obj["package"])
     if "output" in obj:
         _validate_output_contract(obj["output"])
     if "render" in obj:
         _validate_render_contract(obj["render"])
-    if "output" in obj and "render" in obj:
-        _validate_render_references(obj["output"], obj["render"])
+    # Invoke even when either section is absent/legacy: strict geometry is a
+    # bidirectional contract and must never install successfully only to be
+    # discarded silently by Result Hub.
+    _validate_render_references(obj.get("output"), obj.get("render"))
     return MANIFEST_VERSION
 
 
@@ -966,6 +1248,16 @@ def validate_package_files(manifest: Mapping[str, Any], files: Mapping[str, Mapp
             _fail(required, "required package file is missing")
     if version == 1:
         return
+
+    if "icon" in manifest:
+        icon = validate_icon_declaration(manifest["icon"])
+        record = records.get(icon["path"])
+        if record is None:
+            _fail("icon.path", f"package is missing {icon['path']!r}")
+        if record["size"] > MAX_ICON_BYTES:
+            _fail(
+                "icon.path",
+                f"icon exceeds {MAX_ICON_BYTES} byte limit: {record['size']}")
 
     for index, wheel in enumerate(manifest["python"]["wheels"]):
         if wheel["source"] != "bundled":

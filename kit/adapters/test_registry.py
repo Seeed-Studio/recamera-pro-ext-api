@@ -20,12 +20,13 @@ from kit.adapters import registry
 from kit.adapters.frame_source import FfmpegRtspSource, SnapshotSource, open_frame_source
 from kit.adapters.result_sink import StdoutSink, WsResultSink, open_result_sink
 from kit.adapters.official import OfficialFrameSource, OsdInjectResultSink
-from kit.errors import CapabilityError
+from kit.errors import CapabilityError, ConfigurationError
 
 
 def _clear_env():
     for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
               "RECAMERA_RESULT_INGRESS", "RECAMERA_RESULT_OSD", "RECAMERA_CONTROL_API",
+              "RECAMERA_FRAME_SOURCE", "RECAMERA_RESULT_GATEWAY_SOCK",
               "RECAMERA_ADAPTER_PREFER"):
         os.environ.pop(k, None)
 
@@ -143,10 +144,58 @@ def test_prefer_override():
     print("PASS test_prefer_override (workaround-force + official-force)")
 
 
+def test_dedicated_frame_source_policy_does_not_change_result_sink():
+    """The managed opt-in selects frame.sock without opting into OSD."""
+    _clear_env()
+    os.environ["RECAMERA_FRAME_SOURCE"] = "official"
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "workaround"
+    registry.capabilities(refresh=True)
+
+    src = open_frame_source(url="rtsp://sub", prefer="ffmpeg")
+    assert isinstance(src, OfficialFrameSource), type(src)
+    assert src.sock == "/run/recamera/frame.sock", src.sock
+    # A managed launch's dedicated frame contract cannot be bypassed by an app
+    # requesting the low-resolution snapshot workaround.
+    explicit_snapshot = open_frame_source(url="rtsp://sub", prefer="snapshot")
+    assert isinstance(explicit_snapshot, OfficialFrameSource), type(explicit_snapshot)
+
+    ws = open_result_sink("ws", host="127.0.0.1", port=0, app_id="managed")
+    assert isinstance(ws, WsResultSink), type(ws)
+    ws.close()
+
+    os.environ["RECAMERA_FRAME_SOURCE"] = "workaround"
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+    fallback = open_frame_source(
+        url="rtsp://sub", prefer="ffmpeg", width=640, height=480)
+    assert isinstance(fallback, FfmpegRtspSource), type(fallback)
+    fallback.close()
+
+    os.environ["RECAMERA_FRAME_SOURCE"] = "auto"
+    inherited = open_frame_source(url="rtsp://sub", prefer="ffmpeg")
+    assert isinstance(inherited, OfficialFrameSource), type(inherited)
+    _clear_env()
+    print("PASS test_dedicated_frame_source_policy_does_not_change_result_sink")
+
+
+def test_invalid_dedicated_frame_source_policy_fails_closed():
+    _clear_env()
+    os.environ["RECAMERA_FRAME_SOURCE"] = "offical"  # intentional typo
+    try:
+        open_frame_source(
+            url="rtsp://sub", prefer="ffmpeg", width=640, height=480)
+        raise AssertionError("invalid frame-source policy must be rejected")
+    except ConfigurationError as exc:
+        assert "RECAMERA_FRAME_SOURCE" in str(exc), str(exc)
+    _clear_env()
+    print("PASS test_invalid_dedicated_frame_source_policy_fails_closed")
+
+
 if __name__ == "__main__":
     test_no_official_selects_workaround()
     test_simulated_official_selects_official()
     test_result_sink_defaults_to_ws_even_when_socket_present()
     test_prefer_override()
+    test_dedicated_frame_source_policy_does_not_change_result_sink()
+    test_invalid_dedicated_frame_source_policy_fails_closed()
     _clear_env()
     print("ALL REGISTRY TESTS PASSED")

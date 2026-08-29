@@ -147,6 +147,7 @@ def build_namespace(envelope: dict, *, app_id: str, device_id: str = "") -> dict
         "frame": envelope.get("frame") or {},
         "results": results,
         "events": events,
+        "geometry": list(envelope.get("geometry") or [])[:MAX_NS_ITEMS],
         "metrics": dict(envelope.get("metrics") or {}),
         "summary": dict(envelope.get("summary") or {}),
         "render": dict(envelope.get("render") or {}),
@@ -1084,6 +1085,11 @@ def resolve_output_config(manifest: dict, eff: dict) -> dict:
     mapping = eff.get("output_mapping")
     if mapping is None:
         mapping = mout.get("default_mapping") or []
+    template_mode = eff.get("template_mode")
+    if template_mode not in ("mapping", "template"):
+        # Compatibility for packages/config files created before the selector:
+        # preserve the historical mapping-first rule.
+        template_mode = "mapping" if mapping else "template"
 
     return {
         "channels": channels,
@@ -1094,6 +1100,7 @@ def resolve_output_config(manifest: dict, eff: dict) -> dict:
         "templates": templates,
         "dTemplate": dTemplate,
         "mapping": mapping,
+        "template_mode": template_mode,
         "filters": eff.get("output_filters") or {},
     }
 
@@ -1110,7 +1117,10 @@ def build_formatter(mode: str, cfg: dict, *, app_id: str, node: str,
             device_name=device_name)
     if mode == "custom":
         mapping = cfg.get("mapping") or []
-        if mapping:
+        template_mode = cfg.get("template_mode")
+        if template_mode not in ("mapping", "template"):
+            template_mode = "mapping" if mapping else "template"
+        if template_mode == "mapping":
             specs = generate_mapping_templates(mapping)
         else:
             # one per-task template with a default topic

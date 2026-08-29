@@ -9,6 +9,9 @@ dependencies = []
 dev = [
     # Match the NumPy ABI/version provided by the RV1126B firmware image.
     "jinja2>=3.1,<4",
+    # Validate the published manifest schema against the same fixtures as the
+    # runtime validator so packagers and the device cannot disagree.
+    "jsonschema>=4,<5",
     "numpy==1.23.5",
     # Host-side image/postprocess tests; target firmware provides its own cv2.
     "opencv-python-headless==4.8.1.78",

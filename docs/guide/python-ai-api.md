@@ -677,6 +677,36 @@ with FrameSource(timeout_ms=1000) as frames, \
 native handle、frame lease、RGA context、RKNN session 都应通过 context
 manager 或显式 `try/finally` 关闭。
 
+### 10.1 随结果发送通用绘制图元
+
+应用需要画任意点、线或多边形时，用 `GeometryBuilder` 构建 canonical `geometry[]`，
+再交给 `App.emit()`；builder 也接受常见 NumPy 数值/数组，并在发送前拒绝 NaN、负坐标、
+非法颜色和超限图元：
+
+```python
+from kit import GeometryBuilder
+
+drawing = (GeometryBuilder()
+    .point(320, 180, id="nose", color="#00ff00", point_radius=4)
+    .line((100, 100), (400, 100), line_width=2)
+    .box((40, 60, 180, 260), label="person", color="#ffaa00"))
+
+self.emit(
+    events,
+    frame.pts,
+    results=results,
+    geometry=drawing,
+)
+```
+
+也可从 `kit.ai` 导入 `geometry_point/geometry_line/geometry_polygon`，或用
+`geometry_quad/geometry_keypoints/geometry_pose` 将 OCR、关键点和骨架转成基础图元。
+应用 API 故意不接受 `space`：必须在已安装且通过结构/内容校验的 manifest 中以
+`output.fields[from="geometry[]"].coord` 声明 `pixel_points` 或
+`normalized_points`，并用 `render.schema_version=1` 的 `render.geometry` 限定允许类型与
+默认样式。Result Hub 按当前 instance/generation 注入空间；payload 冒充的身份、stream、
+render 或 space 都会被忽略。
+
 ## 11. 上机前检查清单
 
 - [ ] Python wheel/package 中包含 `recamera_ext/errors.py` 和 `buffer.py`；

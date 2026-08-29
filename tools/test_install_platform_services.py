@@ -11,6 +11,24 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "tools/install_platform_services.py"
 
 
+def _location_block(config: str, prefix: str) -> str:
+    pattern = re.compile(
+        rf"^\s*location\s+\^~\s+{re.escape(prefix)}\s*\{{",
+        re.MULTILINE,
+    )
+    match = pattern.search(config)
+    assert match is not None
+    depth = 0
+    for index in range(match.start(), len(config)):
+        if config[index] == "{":
+            depth += 1
+        elif config[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return config[match.start() : index + 1]
+    raise AssertionError(f"unterminated nginx location {prefix}")
+
+
 def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     rootfs = tmp_path / "root"
     oem = tmp_path / "oem"
@@ -51,6 +69,21 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     assert edge.count("$recamera_ai_results_origin_ok = 0") == 1
     assert "proxy_pass http://127.0.0.1:8125;" in edge
     assert "proxy_set_header X-Forwarded-Proto $scheme;" in edge
+    assert re.search(
+        r"^\s*location\s+\^~\s+/appcenter/go2rtc/\s*\{", edge, re.MULTILINE
+    )
+    go2rtc = _location_block(edge, "/appcenter/go2rtc/")
+    assert "set $recamera_go2rtc_connection close;" in go2rtc
+    assert 'if ($http_upgrade ~* "^websocket$")' in go2rtc
+    assert ("proxy_set_header Connection "
+            "$recamera_go2rtc_connection;") in go2rtc
+    assert not re.search(
+        r"proxy_set_header\s+Connection\s+[\"']?Upgrade[\"']?\s*;",
+        go2rtc,
+        re.IGNORECASE,
+    )
+    assert ("proxy_set_header X-ReCamera-App-Center-Route "
+            "authenticated-local-web-v1;") in edge
     for retired in ("upload", "putModel"):
         assert re.search(
             r"location\s+=\s+/api/appMgr/%s\s*\{\s*return\s+410;\s*\}" %

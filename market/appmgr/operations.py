@@ -9,9 +9,11 @@ callables cannot be reconstructed safely from a journal.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import queue
+import re
 import tempfile
 import threading
 import time
@@ -24,6 +26,30 @@ from . import paths
 TERMINAL = frozenset(("succeeded", "failed"))
 ACTIVE = frozenset(("queued", "running"))
 MAX_HISTORY = 200
+_UPLOAD_ID = re.compile(r"[0-9a-f]{32}\Z")
+_REQUEST_FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
+_UNSUPPORTED_DIR_FSYNC = frozenset(filter(None, (
+    errno.EINVAL,
+    getattr(errno, "ENOTSUP", None),
+    getattr(errno, "EOPNOTSUPP", None),
+)))
+
+
+def _fsync_dir(path: str) -> None:
+    """Durably publish a replaced journal directory entry when supported."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        if exc.errno in _UNSUPPORTED_DIR_FSYNC:
+            return
+        raise
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in _UNSUPPORTED_DIR_FSYNC:
+            raise
+    finally:
+        os.close(fd)
 
 
 class OperationBusyError(RuntimeError):
@@ -134,7 +160,10 @@ class OperationManager:
 
     def _save(self) -> None:
         directory = os.path.dirname(self.journal)
+        directory_existed = os.path.lexists(directory)
         os.makedirs(directory, mode=0o700, exist_ok=True)
+        if not directory_existed:
+            _fsync_dir(os.path.dirname(directory) or ".")
         fd, temporary = tempfile.mkstemp(prefix=".operations.", dir=directory)
         try:
             payload = {"schema_version": 1, "operations": self._records[-MAX_HISTORY:]}
@@ -144,6 +173,7 @@ class OperationManager:
                 os.fsync(output.fileno())
             os.replace(temporary, self.journal)
             temporary = None
+            _fsync_dir(directory)
         finally:
             if temporary:
                 try:
@@ -161,7 +191,19 @@ class OperationManager:
         self._worker.start()
 
     def submit(self, kind: str, app_id: Optional[str],
-               callback: Callable[[], object]) -> dict:
+               callback: Callable[[], object], *,
+               upload_id: Optional[str] = None,
+               request_fingerprint: Optional[str] = None) -> dict:
+        if upload_id is not None and (
+                not isinstance(upload_id, str)
+                or _UPLOAD_ID.fullmatch(upload_id) is None):
+            raise ValueError("invalid upload_id")
+        if request_fingerprint is not None and (
+                not isinstance(request_fingerprint, str)
+                or _REQUEST_FINGERPRINT.fullmatch(request_fingerprint) is None):
+            raise ValueError("invalid request_fingerprint")
+        if request_fingerprint is not None and upload_id is None:
+            raise ValueError("request_fingerprint requires upload_id")
         now = time.time()
         record = {
             "id": uuid.uuid4().hex,
@@ -174,9 +216,33 @@ class OperationManager:
             "created_at": now,
             "updated_at": now,
         }
+        if upload_id is not None:
+            record["upload_id"] = upload_id
+        if request_fingerprint is not None:
+            record["request_fingerprint"] = request_fingerprint
         with self._lock:
             if self._closed:
                 raise OperationBusyError("operation manager is closed")
+            if upload_id is not None:
+                existing = next((
+                    item for item in reversed(self._records)
+                    if item.get("upload_id") == upload_id
+                ), None)
+                if existing is not None:
+                    if (existing.get("type") != str(kind)
+                            or existing.get("app_id") != app_id):
+                        raise OperationBusyError(
+                            "upload_id is already bound to a different operation")
+                    if (existing.get("request_fingerprint")
+                            != request_fingerprint):
+                        raise OperationBusyError(
+                            "upload_id finalize request does not match the "
+                            "original operation")
+                    # The upload is a single-use idempotency key.  In particular,
+                    # a client that lost the original HTTP 202 response must get
+                    # the exact already-persisted operation instead of scheduling
+                    # the same root-code install a second time.
+                    return dict(existing)
             if app_id is not None:
                 active = next((item for item in reversed(self._records)
                                if item.get("app_id") == app_id
@@ -194,12 +260,30 @@ class OperationManager:
                 self._save()
                 self._ensure_worker()
                 self._queue.put_nowait((record["id"], callback))
-            except Exception:
-                self._records = [item for item in self._records
-                                 if item.get("id") != record["id"]]
-                self._save()
+            except Exception as exc:
+                # No callback was accepted. Keep a terminal in-memory binding
+                # (and persist it best-effort) so an uncertain journal fsync or
+                # queue-start failure can never turn the same upload_id into a
+                # second install attempt in this daemon.
+                record.update({
+                    "status": "failed",
+                    "finished_at": time.time(),
+                    "updated_at": time.time(),
+                    "error": "%s: %s" % (type(exc).__name__, exc),
+                    "message": "operation was not accepted",
+                    "progress": {"percent": 100},
+                })
+                try:
+                    self._save()
+                except Exception:
+                    pass
                 raise
-        self.events.publish("operation", operation=dict(record))
+        try:
+            self.events.publish("operation", operation=dict(record))
+        except Exception:
+            # The durable queue admission already succeeded. Observer fan-out
+            # is advisory and must never make the caller believe it did not.
+            pass
         return dict(record)
 
     def _update(self, operation_id: str, **fields) -> Optional[dict]:
@@ -223,9 +307,15 @@ class OperationManager:
             if item is None:
                 return
             operation_id, callback = item
-            self._update(operation_id, status="running",
-                         message="running", started_at=time.time(),
-                         progress={"percent": 10})
+            try:
+                self._update(operation_id, status="running",
+                             message="running", started_at=time.time(),
+                             progress={"percent": 10})
+            except Exception:
+                # _update mutates the in-memory record before journal replace.
+                # A transient persistence error must not kill the sole worker
+                # before the callback gets its cleanup/finalization chance.
+                pass
             try:
                 result = callback()
             except BaseException as exc:
@@ -233,14 +323,20 @@ class OperationManager:
                 # API.  The concrete exception class plus message is actionable
                 # and is also recorded in appmgr's normal audit/log paths.
                 message = "%s: %s" % (type(exc).__name__, exc)
-                self._update(operation_id, status="failed", error=message,
-                             message="failed", finished_at=time.time(),
-                             progress={"percent": 100})
+                try:
+                    self._update(operation_id, status="failed", error=message,
+                                 message="failed", finished_at=time.time(),
+                                 progress={"percent": 100})
+                except Exception:
+                    pass
             else:
-                self._update(operation_id, status="succeeded", error=None,
-                             result=result, message="completed",
-                             finished_at=time.time(),
-                             progress={"percent": 100})
+                try:
+                    self._update(operation_id, status="succeeded", error=None,
+                                 result=result, message="completed",
+                                 finished_at=time.time(),
+                                 progress={"percent": 100})
+                except Exception:
+                    pass
 
     def list(self) -> list[dict]:
         with self._lock:
@@ -250,6 +346,16 @@ class OperationManager:
         with self._lock:
             for item in reversed(self._records):
                 if item.get("app_id") == app_id and item.get("status") in ACTIVE:
+                    return dict(item)
+        return None
+
+    def for_upload(self, upload_id: str) -> Optional[dict]:
+        """Return the operation durably correlated with one upload, if any."""
+        if not isinstance(upload_id, str) or _UPLOAD_ID.fullmatch(upload_id) is None:
+            return None
+        with self._lock:
+            for item in reversed(self._records):
+                if item.get("upload_id") == upload_id:
                     return dict(item)
         return None
 

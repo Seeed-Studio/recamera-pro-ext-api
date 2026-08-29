@@ -1,5 +1,6 @@
 import hashlib
 import os
+import socket
 import threading
 import time
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ from kit.errors import CapabilityError, InferenceError, ResourceBusyError
 from kit.app import App
 from kit.capabilities import Capabilities
 from kit.device import Device
+from kit.runtime._inference_protocol import recv_message, send_message
 from kit.runtime.engine import ModelSpec, TensorSpec
 from kit.runtime.remote import RemoteRknnModel, RemoteRknnSession
 from market.inferenced.authorization import (
@@ -66,7 +68,7 @@ class _TestAuthorizer:
 
 class RunningService:
     def __init__(self, tmp_path, *, backend=None, memory_mb=128,
-                 authorizer=None):
+                 authorizer=None, client_idle_timeout=60.0):
         self.socket = str(tmp_path / "inferenced.sock")
         self.backend = backend or FakeBackend()
         self.service = InferenceService(
@@ -75,6 +77,7 @@ class RunningService:
             allowed_roots=[str(tmp_path)],
             memory_budget_mb=memory_mb,
             authorizer=authorizer or _TestAuthorizer(tmp_path),
+            client_idle_timeout=client_idle_timeout,
         )
         self.thread = threading.Thread(target=self.service.serve_forever, daemon=True)
         self.thread.start()
@@ -94,6 +97,101 @@ def model(tmp_path, name="model.rknn", content=b"fake-rknn"):
     path = tmp_path / name
     path.write_bytes(content)
     return path, hashlib.sha256(content).hexdigest()
+
+
+def _wait_for(predicate, timeout=1.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return bool(predicate())
+
+
+def test_authorized_model_connection_survives_idle_timeout(tmp_path):
+    idle_timeout = 0.05
+    running = RunningService(tmp_path, client_idle_timeout=idle_timeout)
+    path, digest = model(tmp_path)
+    session = None
+    try:
+        session = RemoteRknnSession(
+            str(path), socket_path=running.socket, model_sha256=digest,
+            app_id="ppocr-reader", instance_id="idle-recognizer", generation=7,
+        )
+
+        # PPOCR's recognizer is legitimately quiet while the detector sees no
+        # text.  Remaining idle for well beyond the control-client deadline
+        # must not make the next infer/unload hit BrokenPipe.
+        time.sleep(idle_timeout * 3.5)
+        output = session.infer(np.zeros((1, 1, 1, 1), dtype=np.uint8))
+        assert output[0].item() == 1
+        session.release()
+        assert running.backend.released == [str(path)]
+    finally:
+        if session is not None and not session.released:
+            session.release()
+        running.close()
+
+
+def test_control_only_connection_still_expires_when_idle(tmp_path):
+    idle_timeout = 0.05
+    running = RunningService(tmp_path, client_idle_timeout=idle_timeout)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(1.0)
+    try:
+        client.connect(running.socket)
+        send_message(client, {
+            "op": "hello",
+            "request_id": 1,
+            "app_id": "probe",
+            "instance_id": "idle-control",
+            "generation": 0,
+            "control_only": True,
+        })
+        hello, tensors = recv_message(client)
+        assert hello["ok"] is True
+        assert hello["capabilities"]["authorized"] is False
+        assert tensors == []
+
+        assert _wait_for(
+            lambda: running.service.status()["clients"] == 0,
+            timeout=idle_timeout * 6,
+        )
+        with pytest.raises(EOFError):
+            recv_message(client)
+    finally:
+        client.close()
+        running.close()
+
+
+def test_shutdown_wakes_authorized_client_with_no_idle_deadline(tmp_path):
+    running = RunningService(tmp_path, client_idle_timeout=0.05)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(1.0)
+    try:
+        client.connect(running.socket)
+        send_message(client, {
+            "op": "hello",
+            "request_id": 1,
+            "app_id": "ppocr-reader",
+            "instance_id": "blocked-recognizer",
+            "generation": 8,
+        })
+        hello, _ = recv_message(client)
+        assert hello["ok"] is True
+        assert hello["capabilities"]["authorized"] is True
+        assert _wait_for(lambda: running.service.status()["clients"] == 1)
+        with running.service._lock:
+            connection_threads = list(running.service._threads)
+        assert connection_threads
+
+        started = time.monotonic()
+        running.close()
+        assert time.monotonic() - started < 1.0
+        assert all(not thread.is_alive() for thread in connection_threads)
+    finally:
+        client.close()
+        running.close()
 
 
 def test_two_models_are_resident_and_inferred_through_one_backend(tmp_path):

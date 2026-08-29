@@ -8,6 +8,7 @@ import os
 import sys
 
 import pytest
+from jsonschema import Draft202012Validator
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from appmgr import manifest as contract
@@ -87,6 +88,7 @@ def test_minimal_v2_is_valid_and_input_is_not_mutated():
     value = minimal_manifest(**{"x-vendor-note": {"opaque": True}})
     before = copy.deepcopy(value)
     assert contract.validate_manifest(value) == 2
+
     assert value == before
 
 
@@ -95,6 +97,58 @@ def test_v1_is_explicitly_compatible_but_can_be_disabled():
     assert contract.validate_manifest(legacy) == 1
     with pytest.raises(contract.ManifestValidationError, match="legacy v1"):
         contract.validate_manifest(legacy, allow_v1=False)
+
+
+def test_v2_icon_declaration_binds_safe_bounded_package_file():
+    icon_bytes = b"\x89PNG\r\n\x1a\n" + b"icon"
+    value = minimal_manifest(icon={
+        "path": "assets/card.png", "media_type": "image/png"})
+    records = records_for(value, {
+        "assets/card.png": {
+            "sha256": hashlib.sha256(icon_bytes).hexdigest(),
+            "size": len(icon_bytes),
+        },
+    })
+
+    assert contract.validate_manifest(value) == 2
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        validator = Draft202012Validator(json.load(source))
+    assert list(validator.iter_errors(value)) == []
+    contract.validate_package_files(value, records)
+
+    with pytest.raises(contract.ManifestValidationError, match="package is missing"):
+        contract.validate_package_files(value, records_for(value))
+    oversized = copy.deepcopy(records)
+    oversized["assets/card.png"]["size"] = contract.MAX_ICON_BYTES + 1
+    with pytest.raises(contract.ManifestValidationError, match="exceeds"):
+        contract.validate_package_files(value, oversized)
+
+
+@pytest.mark.parametrize("icon", [
+    {"path": "../card.png", "media_type": "image/png"},
+    {"path": "/card.png", "media_type": "image/png"},
+    {"path": "assets\\card.png", "media_type": "image/png"},
+    {"path": "assets//card.png", "media_type": "image/png"},
+    {"path": "keys/icon.png", "media_type": "image/png"},
+    {"path": ".ssh/icon.png", "media_type": "image/png"},
+    {"path": "assets/card.jpg", "media_type": "image/png"},
+    {"path": "assets/card.png", "media_type": "image/svg+xml"},
+    {"path": "assets/card.PNG", "media_type": "image/png"},
+    {"path": "assets/card.png"},
+    {"path": "assets/card.png", "media_type": "image/png", "extra": True},
+])
+def test_v2_icon_python_and_json_schema_reject_same_unsafe_shapes(icon):
+    value = minimal_manifest(icon=icon)
+    with pytest.raises(contract.ManifestValidationError):
+        contract.validate_manifest(value)
+
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        validator = Draft202012Validator(json.load(source))
+    assert list(validator.iter_errors(value))
 
 
 @pytest.mark.parametrize(
@@ -183,8 +237,89 @@ def test_config_keys_and_resource_profile_references_are_strict():
     }]}
     value["permissions"]["sdk"] = ["npu.infer"]
     assert contract.validate_manifest(value) == 2
+    value["config_schema"]["groups"][0]["items"][0]["apply"] = "live"
+    with pytest.raises(
+            contract.ManifestValidationError,
+            match="profile selector config must restart or reschedule"):
+        contract.validate_manifest(value)
+    value["config_schema"]["groups"][0]["items"][0]["apply"] = "reschedule"
     value["resources"]["profiles"][0]["when"] = {"missing": True}
     with pytest.raises(contract.ManifestValidationError, match="unknown config key"):
+        contract.validate_manifest(value)
+
+
+def test_config_schema_supports_ranges_and_labelled_typed_dropdowns():
+    value = minimal_manifest()
+    value["config_schema"]["groups"] = [{
+        "key": "runtime", "title": "Runtime", "items": [
+            {"key": "threshold", "type": "number", "apply": "live",
+             "min": 0.0, "max": 1.0, "step": 0.05, "default": 0.35},
+            {"key": "backend", "type": "select", "apply": "restart",
+             "options": [
+                 {"value": 1, "label": "Fast", "label_zh": "快速"},
+                 {"value": 2, "label": "Accurate", "label_zh": "精确"},
+             ], "default": 1},
+        ],
+    }]
+    assert contract.validate_manifest(value) == 2
+
+    numeric_wire_default = copy.deepcopy(value)
+    numeric_wire_default["config_schema"]["groups"][0]["items"][1]["default"] = 1.0
+    assert contract.validate_manifest(numeric_wire_default) == 2
+
+    bad_step = copy.deepcopy(value)
+    bad_step["config_schema"]["groups"][0]["items"][0]["step"] = 0
+    with pytest.raises(contract.ManifestValidationError, match="must be positive"):
+        contract.validate_manifest(bad_step)
+
+    bad_typed_default = copy.deepcopy(value)
+    bad_typed_default["config_schema"]["groups"][0]["items"][1]["default"] = "1"
+    with pytest.raises(contract.ManifestValidationError,
+                       match="typed option values"):
+        contract.validate_manifest(bad_typed_default)
+
+    duplicate_number = copy.deepcopy(value)
+    duplicate_number["config_schema"]["groups"][0]["items"][1]["options"] = [1, 1.0]
+    with pytest.raises(contract.ManifestValidationError,
+                       match="duplicates an earlier option value"):
+        contract.validate_manifest(duplicate_number)
+
+
+def test_config_schema_password_array_and_object_defaults_are_typed():
+    value = minimal_manifest()
+    value["config_schema"]["groups"] = [{
+        "key": "advanced", "title": "Advanced", "items": [
+            {"key": "token", "type": "password", "apply": "restart",
+             "default": ""},
+            {"key": "labels", "type": "array", "apply": "live",
+             "default": ["person"]},
+            {"key": "metadata", "type": "object", "apply": "live",
+             "default": {"enabled": True}},
+        ],
+    }]
+    assert contract.validate_manifest(value) == 2
+    for index, opaque in ((1, "person"), (2, "enabled=true")):
+        bad = copy.deepcopy(value)
+        bad["config_schema"]["groups"][0]["items"][index]["default"] = opaque
+        with pytest.raises(contract.ManifestValidationError, match="must match type"):
+            contract.validate_manifest(bad)
+
+
+@pytest.mark.parametrize("config_type,opaque", [
+    ("zone", "0,0;1,0;1,1"),
+    ("line", "0,0 -> 1,1"),
+    ("field_mapping", "detection.count -> count"),
+    ("output_filters", "all"),
+])
+def test_config_schema_rejects_opaque_complex_defaults(config_type, opaque):
+    value = minimal_manifest()
+    value["config_schema"]["groups"] = [{
+        "key": "runtime", "title": "Runtime", "items": [{
+            "key": "complex_value", "type": config_type, "apply": "live",
+            "default": opaque,
+        }],
+    }]
+    with pytest.raises(contract.ManifestValidationError, match="must be"):
         contract.validate_manifest(value)
 
 
@@ -235,6 +370,31 @@ def test_typed_output_and_render_contract_is_strict_but_legacy_remains_compatibl
     )
     assert contract.validate_manifest(value) == 2
 
+    osd_only = copy.deepcopy(value)
+    del osd_only["render"]["boxes"]
+    assert contract.validate_manifest(osd_only) == 2
+
+    same_space_alias = copy.deepcopy(osd_only)
+    same_space_alias["output"]["fields"].append({
+        "name": "box_copy", "from": "results[].box",
+        "type": "bbox<float>[4]", "coord": "pixel_xyxy",
+        "description": "Equivalent box alias",
+    })
+    assert contract.validate_manifest(same_space_alias) == 2
+
+    conflicting_alias = copy.deepcopy(same_space_alias)
+    conflicting_alias["output"]["fields"][-1]["coord"] = \
+        "normalized_xyxy"
+    with pytest.raises(contract.ManifestValidationError,
+                       match="one consistent pixel_xyxy or normalized_xyxy"):
+        contract.validate_manifest(conflicting_alias)
+
+    derived_only = copy.deepcopy(osd_only)
+    derived_only["output"]["fields"][0]["derived"] = True
+    with pytest.raises(contract.ManifestValidationError,
+                       match="direct field named box"):
+        contract.validate_manifest(derived_only)
+
     legacy = copy.deepcopy(value)
     legacy["output"] = {"sink": "ws", "vendor_extension": {"old": True}}
     legacy["render"] = {"vendor_shape": {"old": True}}
@@ -271,6 +431,87 @@ def test_typed_output_and_render_contract_is_strict_but_legacy_remains_compatibl
         contract.validate_manifest(bad)
 
 
+def test_geometry_output_and_render_policy_are_closed_and_bounded():
+    value = minimal_manifest(
+        capabilities=["output"],
+        output={
+            "contract_version": 2, "sink": "ws",
+            "schema": "geometry[]{type,points,style}",
+            "default_channel": ["ws"], "default_mode": "raw",
+            "fields": [{
+                "name": "geometry", "from": "geometry[]", "type": "geometry[]",
+                "coord": "normalized_points",
+                "description": "Canonical drawing primitives",
+            }],
+            "default_mapping": [],
+        },
+        render={
+            "schema_version": 1,
+            "geometry": {
+                "types": ["point", "line", "polyline", "polygon"],
+                "max_items": 64, "max_points": 128,
+                "style": {"color": "#00ff00", "line_width": 2,
+                          "point_radius": 4, "fill": False,
+                          "fill_color": "#00ff0080", "opacity": 0.8},
+            },
+        },
+    )
+    assert contract.validate_manifest(value) == 2
+
+    for mutate, match in [
+        (lambda m: m["output"]["fields"][0].update(coord="pixel_xyxy"),
+         "geometry.*requires pixel_points"),
+        (lambda m: m["output"]["fields"][0].update(type="object[]"),
+         "requires type geometry"),
+        (lambda m: m["output"]["fields"][0].update(derived=True),
+         "cannot be derived"),
+        (lambda m: m["render"]["geometry"].update(types=["circle"]),
+         "point, line, polyline or polygon"),
+        (lambda m: m["render"]["geometry"]["style"].update(color="red"),
+         "#RRGGBB"),
+        (lambda m: m["render"]["geometry"].update(max_items=257),
+         "must be <= 256"),
+        (lambda m: m["render"]["geometry"].update(types=["line"], max_points=1),
+         "must be at least 2"),
+        (lambda m: m["render"]["geometry"].update(types=["polygon"], max_points=2),
+         "must be at least 3"),
+    ]:
+        bad = copy.deepcopy(value)
+        mutate(bad)
+        with pytest.raises(contract.ManifestValidationError, match=match):
+            contract.validate_manifest(bad)
+
+    missing = copy.deepcopy(value)
+    missing["output"]["fields"] = []
+    with pytest.raises(contract.ManifestValidationError,
+                       match="requires exactly one declared"):
+        contract.validate_manifest(missing)
+
+    missing_output = copy.deepcopy(value)
+    del missing_output["output"]
+    with pytest.raises(contract.ManifestValidationError,
+                       match="requires output.contract_version=2"):
+        contract.validate_manifest(missing_output)
+
+    loose_output = copy.deepcopy(value)
+    loose_output["output"] = {"sink": "ws"}
+    with pytest.raises(contract.ManifestValidationError,
+                       match="requires output.contract_version=2"):
+        contract.validate_manifest(loose_output)
+
+    missing_render = copy.deepcopy(value)
+    del missing_render["render"]
+    with pytest.raises(contract.ManifestValidationError,
+                       match="geometry.*requires render.schema_version=1"):
+        contract.validate_manifest(missing_render)
+
+    loose_render = copy.deepcopy(value)
+    loose_render["render"] = {"geometry": {"types": ["point"]}}
+    with pytest.raises(contract.ManifestValidationError,
+                       match="geometry.*requires render.schema_version=1"):
+        contract.validate_manifest(loose_render)
+
+
 def test_release_lock_and_bom_are_deterministic_and_exact():
     value = minimal_manifest()
     records = records_for(value, {
@@ -297,3 +538,126 @@ def test_schema_document_is_valid_json_and_tracks_version():
     with open(schema_path, encoding="utf-8") as source:
         schema = json.load(source)
     assert schema["properties"]["manifest_version"]["const"] == 2
+    documented_types = schema["$defs"]["configGroup"]["properties"][
+        "items"]["items"]["properties"]["type"]["enum"]
+    assert set(documented_types) == contract._CONFIG_TYPES
+
+
+def test_schema_geometry_constraints_match_runtime_validator():
+    """Keep the public packaging schema equivalent to runtime admission."""
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        schema = json.load(source)
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+
+    value = minimal_manifest(
+        capabilities=["output"],
+        output={
+            "contract_version": 2, "sink": "ws",
+            "schema": "geometry[]{type,points,style}",
+            "default_channel": ["ws"], "default_mode": "raw",
+            "fields": [{
+                "name": "geometry", "from": "geometry[]",
+                "type": "geometry[]", "coord": "normalized_points",
+                "description": "Canonical drawing primitives",
+            }],
+            "default_mapping": [],
+        },
+        render={
+            "schema_version": 1,
+            "geometry": {
+                "types": ["point", "line", "polyline", "polygon"],
+                "max_items": 64, "max_points": 128,
+                "style": {"color": "#00ff00", "line_width": 2},
+            },
+        },
+    )
+    assert contract.validate_manifest(value) == 2
+    assert list(validator.iter_errors(value)) == []
+
+    invalid_mutations = [
+        lambda m: m.pop("output"),
+        lambda m: m.update(output={"sink": "ws"}),
+        lambda m: m["output"]["fields"].append(
+            copy.deepcopy(m["output"]["fields"][0])),
+        lambda m: m.pop("render"),
+        lambda m: m.update(render={"geometry": {"types": ["point"]}}),
+        lambda m: m["render"]["geometry"].update(
+            types=["line"], max_points=1),
+        lambda m: m["render"]["geometry"].update(
+            types=["polygon"], max_points=2),
+    ]
+    for mutate in invalid_mutations:
+        bad = copy.deepcopy(value)
+        mutate(bad)
+        with pytest.raises(contract.ManifestValidationError):
+            contract.validate_manifest(bad)
+        assert list(validator.iter_errors(bad)), bad
+
+    extended = copy.deepcopy(value)
+    extended["render"]["geometry"]["x-vendor-mode"] = "diagnostic"
+    extended["render"]["geometry"]["style"]["x-vendor-color-space"] = "srgb"
+    assert contract.validate_manifest(extended) == 2
+    assert list(validator.iter_errors(extended)) == []
+
+
+def test_schema_stream_osd_constraints_match_runtime_validator():
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        schema = json.load(source)
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+
+    value = minimal_manifest(
+        capabilities=["output"],
+        output={
+            "contract_version": 2, "sink": "ws",
+            "schema": "results[]{box}",
+            "default_channel": ["ws"], "default_mode": "raw",
+            "fields": [{
+                "name": "box", "from": "results[].box",
+                "type": "bbox<float>[4]", "coord": "pixel_xyxy",
+                "description": "OSD box",
+            }],
+            "default_mapping": [],
+        },
+        render={
+            "schema_version": 1,
+            "stream_osd": {"supported": ["boxes"], "default": False},
+        },
+    )
+
+    same_space_alias = copy.deepcopy(value)
+    same_space_alias["output"]["fields"].append({
+        "name": "box_copy", "from": "results[].box",
+        "type": "bbox<float>[4]", "coord": "pixel_xyxy",
+        "description": "Equivalent alias",
+    })
+    for good in (value, same_space_alias):
+        assert contract.validate_manifest(good) == 2
+        assert list(validator.iter_errors(good)) == []
+
+    invalid = []
+    missing_output = copy.deepcopy(value)
+    missing_output.pop("output")
+    invalid.append(missing_output)
+    derived_only = copy.deepcopy(value)
+    derived_only["output"]["fields"][0]["derived"] = True
+    invalid.append(derived_only)
+    conflicting = copy.deepcopy(same_space_alias)
+    conflicting["output"]["fields"][1]["coord"] = "normalized_xyxy"
+    invalid.append(conflicting)
+    wrong_path = copy.deepcopy(value)
+    wrong_path["output"]["fields"][0]["from"] = "results[].bbox"
+    invalid.append(wrong_path)
+    boolean_render_version = copy.deepcopy(value)
+    boolean_render_version["render"]["schema_version"] = True
+    invalid.append(boolean_render_version)
+
+    for bad in invalid:
+        with pytest.raises(contract.ManifestValidationError):
+            contract.validate_manifest(bad)
+        assert list(validator.iter_errors(bad)), bad

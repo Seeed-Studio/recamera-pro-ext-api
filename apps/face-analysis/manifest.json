@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 2, "channel": "stable"},
+  "release": {"sequence": 3, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64",
@@ -76,8 +76,9 @@
   "id": "face-analysis",
   "name": "Face Analysis",
   "name_zh": "客群分析",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/face-analysis.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Retail & Audience",
   "scene_zh": "零售客群",

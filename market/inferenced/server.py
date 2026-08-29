@@ -519,7 +519,22 @@ class InferenceService:
                     },
                 },
             )
-            conn.settimeout(self.client_idle_timeout)
+            if authorization is None:
+                # Control/probe peers never own model state, so retaining the
+                # idle deadline prevents abandoned status sockets from filling
+                # the bounded client/thread pool.  An authenticated model
+                # client is different: staged pipelines (for example PPOCR's
+                # detector and recognizer) may legitimately leave one model
+                # quiet for minutes.  Keep that generation-bound connection
+                # until EOF/HUP instead of treating inactivity as failure.
+                conn.settimeout(self.client_idle_timeout)
+            else:
+                # Blocking here holds neither _lock nor _driver_lock.  The
+                # socket still counts against max_clients, close() wakes the
+                # recv with shutdown(), and every later operation revalidates
+                # the appmgr authorization in _dispatch (and again at RKNN
+                # admission for infer), so an idle fd is not a bearer bypass.
+                conn.settimeout(None)
             while not self._stopping.is_set():
                 try:
                     request, tensors = recv_message(conn)

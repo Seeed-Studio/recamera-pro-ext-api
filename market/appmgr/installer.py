@@ -22,10 +22,13 @@ import contextlib
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import stat
 import tarfile
 import tempfile
+import time
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from . import config as appconfig, manifest as manifest_contract, paths, pythonenv, signing
@@ -36,6 +39,27 @@ class InstallError(Exception):
 
 
 MAX_METADATA_BYTES = 4 * 1024 * 1024
+INSTALL_TRANSACTION_VERSION = 1
+MAX_INSTALL_TRANSACTION_BYTES = 8 * 1024 * 1024
+_INSTALL_PHASES = (
+    "prepared", "stopped", "publishing_code", "code_published",
+    "publishing_environment", "environment_published", "configured",
+    "restarting", "ready", "committed",
+)
+
+
+@dataclass
+class PreparedInstall:
+    """An authenticated code/environment candidate that has not been published."""
+    app_id: str
+    manifest: dict
+    info: dict
+    dest: str
+    staging: str | None
+    env_candidate: object | None = None
+    transaction_id: str | None = None
+    published: bool = False
+    consumed: bool = False
 
 
 def _fsync_dir(path: str) -> None:
@@ -54,6 +78,175 @@ def _fsync_dir(path: str) -> None:
         pass
     finally:
         os.close(fd)
+
+
+def _install_transaction_path() -> str:
+    return os.path.join(paths.APPMGR_DIR, "install-transaction.json")
+
+
+def _directory_identity(pathname: str) -> list[int] | None:
+    try:
+        info = os.lstat(pathname)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(info.st_mode):
+        raise InstallError("install transaction path is not a directory: %s" % pathname)
+    return [int(info.st_dev), int(info.st_ino)]
+
+
+def _atomic_install_transaction(value: dict) -> None:
+    paths.ensure_dirs()
+    directory = paths.APPMGR_DIR
+    try:
+        encoded = json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise InstallError("install transaction is not JSON serialisable") from exc
+    if len(encoded) > MAX_INSTALL_TRANSACTION_BYTES:
+        raise InstallError("install transaction exceeds size limit")
+    fd, temporary = tempfile.mkstemp(prefix=".install-transaction.", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as output:
+            output.write(encoded)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, _install_transaction_path())
+        temporary = None
+        os.chmod(_install_transaction_path(), 0o600)
+        _fsync_dir(directory)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def load_install_transaction() -> dict | None:
+    """Read and validate the single durable install transaction record."""
+    pathname = _install_transaction_path()
+    try:
+        info = os.lstat(pathname)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        raise InstallError("install transaction journal is not a regular file")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        raise InstallError("install transaction journal has unsafe permissions")
+    if info.st_size > MAX_INSTALL_TRANSACTION_BYTES:
+        raise InstallError("install transaction journal exceeds size limit")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(pathname, flags)
+    try:
+        opened = os.fstat(fd)
+        if (not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != info.st_dev or opened.st_ino != info.st_ino
+                or opened.st_size != info.st_size):
+            raise InstallError("install transaction journal changed while reading")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            raw = source.read(MAX_INSTALL_TRANSACTION_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(raw) != info.st_size:
+        raise InstallError("install transaction journal changed while reading")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise InstallError("install transaction journal is invalid") from exc
+    if (not isinstance(value, dict)
+            or value.get("journal_version") != INSTALL_TRANSACTION_VERSION
+            or value.get("phase") not in _INSTALL_PHASES
+            or not isinstance(value.get("transaction_id"), str)
+            or not isinstance(value.get("app_id"), str)
+            or not paths.valid_app_id(value["app_id"])):
+        raise InstallError("install transaction journal has invalid fields")
+    for field in ("previous_dir_identity", "target_dir_identity"):
+        identity = value.get(field)
+        if identity is not None and (
+                not isinstance(identity, list) or len(identity) != 2
+                or any(type(item) is not int or item < 0 for item in identity)):
+            raise InstallError("install transaction journal has invalid directory identity")
+    return value
+
+
+def begin_install_transaction(candidate: PreparedInstall, *,
+                              config_snapshot: dict,
+                              lifecycle_snapshot: dict) -> dict:
+    """Durably bind rollback inputs before lifecycle or filesystem mutation."""
+    if not isinstance(candidate, PreparedInstall) or not candidate.staging:
+        raise InstallError("invalid prepared install transaction")
+    pathname = _install_transaction_path()
+    if os.path.lexists(pathname):
+        raise InstallError("an interrupted install transaction requires reconciliation")
+    transaction_id = secrets.token_hex(16)
+    value = {
+        "journal_version": INSTALL_TRANSACTION_VERSION,
+        "transaction_id": transaction_id,
+        "app_id": candidate.app_id,
+        "phase": "prepared",
+        "created_at": time.time(),
+        "pre_installed": os.path.isdir(candidate.dest),
+        "previous_dir_identity": _directory_identity(candidate.dest),
+        "target_dir_identity": _directory_identity(candidate.staging),
+        "installed_version": None,
+        "target_version": candidate.manifest.get("version"),
+        "installed_release_id": (
+            _installed_v2_release_id(candidate.dest)
+            if os.path.isdir(candidate.dest) else None),
+        "previous_environment_release_id": None,
+        "target_release_id": ((candidate.info.get("release_lock") or {}).get(
+            "release_id")),
+        "config_snapshot": config_snapshot,
+        "lifecycle_snapshot": lifecycle_snapshot,
+    }
+    try:
+        value["previous_environment_release_id"] = \
+            pythonenv.current_release_id(candidate.app_id)
+    except pythonenv.PythonEnvError as exc:
+        raise InstallError(
+            "installed Python environment cannot be journaled: %s" % exc) from exc
+    try:
+        if os.path.isdir(candidate.dest):
+            with open(os.path.join(candidate.dest, "manifest.json"), "rb") as source:
+                installed_manifest = json.load(source)
+            if isinstance(installed_manifest, dict):
+                value["installed_version"] = installed_manifest.get("version")
+    except (OSError, ValueError):
+        pass
+    _atomic_install_transaction(value)
+    candidate.transaction_id = transaction_id
+    return value
+
+
+def mark_install_transaction(candidate: PreparedInstall, phase: str) -> dict | None:
+    if phase not in _INSTALL_PHASES:
+        raise InstallError("invalid install transaction phase %r" % phase)
+    if not candidate.transaction_id:
+        return None
+    value = load_install_transaction()
+    if (value is None or value.get("transaction_id") != candidate.transaction_id
+            or value.get("app_id") != candidate.app_id):
+        raise InstallError("install transaction journal identity changed")
+    if _INSTALL_PHASES.index(phase) < _INSTALL_PHASES.index(value["phase"]):
+        raise InstallError("install transaction phase cannot move backwards")
+    value["phase"] = phase
+    value["updated_at"] = time.time()
+    _atomic_install_transaction(value)
+    return value
+
+
+def clear_install_transaction(candidate: PreparedInstall | None = None,
+                              *, transaction_id: str | None = None) -> None:
+    value = load_install_transaction()
+    if value is None:
+        return
+    expected = transaction_id or (
+        candidate.transaction_id if isinstance(candidate, PreparedInstall) else None)
+    if expected is not None and value.get("transaction_id") != expected:
+        raise InstallError("refusing to clear a different install transaction")
+    os.unlink(_install_transaction_path())
+    _fsync_dir(paths.APPMGR_DIR)
 
 
 def _validate_pkg_path(pkg_path: str) -> str:
@@ -365,6 +558,38 @@ def _package_records(tar: tarfile.TarFile, members: list[tarfile.TarInfo]) -> di
     return records
 
 
+def _validate_declared_icon_payload(tar: tarfile.TarFile,
+                                    manifest: dict) -> None:
+    """Bind a v2 icon declaration to bounded raster bytes in this tar."""
+    if (manifest_contract.manifest_version(manifest)
+            != manifest_contract.MANIFEST_VERSION
+            or "icon" not in manifest):
+        return
+    icon = manifest_contract.validate_icon_declaration(manifest["icon"])
+    try:
+        member = tar.getmember(icon["path"])
+    except KeyError as exc:
+        raise InstallError(
+            f"declared icon is missing from package: {icon['path']!r}") from exc
+    if not member.isfile():
+        raise InstallError(
+            f"declared icon must be a regular file: {icon['path']!r}")
+    if member.size > paths.MAX_ICON_BYTES:
+        raise InstallError(
+            f"icon too large: {member.size} > {paths.MAX_ICON_BYTES} "
+            f"({icon['path']!r})")
+    source = tar.extractfile(member)
+    if source is None:
+        raise InstallError(f"cannot read declared icon {icon['path']!r}")
+    with source:
+        prefix = source.read(16)
+    if not manifest_contract.icon_bytes_match_media_type(
+            prefix, icon["media_type"]):
+        raise InstallError(
+            "declared icon bytes do not match %s: %r" % (
+                icon["media_type"], icon["path"]))
+
+
 def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
     try:
         members = tar.getmembers()
@@ -388,6 +613,7 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
         manifest_contract.check_platform_compatibility(manifest)
         records = _package_records(tar, members)
         manifest_contract.validate_package_files(manifest, records)
+        _validate_declared_icon_payload(tar, manifest)
     except manifest_contract.ManifestValidationError as exc:
         raise InstallError(f"invalid package contract: {exc}") from exc
 
@@ -534,20 +760,26 @@ def _installed_v2_release_id(root: str) -> str | None:
     return release_id
 
 
-def install(pkg_path: str, signature: Optional[str] = None, *,
-            allow_unsigned: bool = False) -> Tuple[str, dict]:
-    """Authenticate, stage and atomically publish one app release.
+def installed_release_id(app_id: str) -> str | None:
+    """Return the installed v2 release identity for preflight comparison."""
+    if not paths.valid_app_id(app_id):
+        raise InstallError(f"invalid app id {app_id!r}")
+    root = paths.app_dir(app_id)
+    return _installed_v2_release_id(root) if os.path.isdir(root) else None
 
-    v2 packages additionally build their offline per-release environment while
-    both the old code and old ``current`` interpreter are still untouched.  If
-    publishing either side fails, both are restored before the error escapes.
+
+def prepare(pkg_path: str, signature: Optional[str] = None, *,
+            allow_unsigned: bool = False) -> PreparedInstall:
+    """Authenticate and build every fallible candidate without touching live code.
+
+    Release progression, extraction, mode hardening and the complete v2 Python
+    environment build all finish here.  Lifecycle orchestration can therefore
+    call this while the old process is still running and stop it only after the
+    replacement is known to be publishable.
     """
     paths.ensure_dirs()
     staging = None
     env_candidate = None
-    backup = None
-    app_id = None
-    manifest = None
     try:
         with _open_verified_package(
                 pkg_path, signature, allow_unsigned=allow_unsigned) as (tar, sig_status):
@@ -566,35 +798,82 @@ def install(pkg_path: str, signature: Optional[str] = None, *,
                     staging, manifest, info["release_lock"])
             except pythonenv.PythonEnvError as exc:
                 raise InstallError(f"cannot stage Python environment: {exc}") from exc
+        info["preflight"] = _preflight_summary(
+            info, allow_unsigned=allow_unsigned)
+        result = PreparedInstall(
+            app_id=app_id, manifest=manifest, info=info, dest=dest,
+            staging=staging, env_candidate=env_candidate)
+        staging = None
+        env_candidate = None
+        return result
+    finally:
+        if staging and os.path.isdir(staging):
+            shutil.rmtree(staging, ignore_errors=True)
+        if env_candidate is not None:
+            pythonenv.discard_candidate(env_candidate)
 
-        # Rescue the user's config before the code-directory swap.
-        try:
-            appconfig.migrate_legacy_config(app_id)
-        except OSError:
-            pass
 
+def discard_prepared(candidate: PreparedInstall) -> None:
+    """Best-effort cleanup for an unpublished/failed prepared candidate."""
+    if not isinstance(candidate, PreparedInstall) or candidate.consumed:
+        return
+    if candidate.staging and os.path.isdir(candidate.staging):
+        shutil.rmtree(candidate.staging, ignore_errors=True)
+    candidate.staging = None
+    if candidate.env_candidate is not None:
+        pythonenv.discard_candidate(candidate.env_candidate)
+
+
+def commit_prepared(candidate: PreparedInstall) -> Tuple[str, dict]:
+    """Atomically publish a :func:`prepare` result, rolling back on error."""
+    if not isinstance(candidate, PreparedInstall):
+        raise InstallError("invalid prepared install")
+    if candidate.consumed or not candidate.staging:
+        raise InstallError("prepared install was already consumed")
+    app_id = candidate.app_id
+    dest = candidate.dest
+    backup = None
+    code_published = False
+
+    # Rescue the user's config before the code-directory swap.  The server's
+    # surrounding transaction snapshots both locations before calling us, so
+    # a later schema/READY failure can reverse this migration byte-for-byte.
+    try:
+        appconfig.migrate_legacy_config(app_id)
+    except OSError:
+        pass
+
+    try:
+        mark_install_transaction(candidate, "publishing_code")
         if os.path.exists(dest):
             backup = dest + ".prev"
             if os.path.exists(backup):
                 shutil.rmtree(backup, ignore_errors=True)
             os.rename(dest, backup)
         try:
-            os.rename(staging, dest)
-            staging = None
+            os.rename(candidate.staging, dest)
+            candidate.staging = None
+            candidate.published = True
+            code_published = True
             _fsync_dir(paths.APPS_DIR)
         except BaseException:
             if backup and os.path.exists(backup) and not os.path.exists(dest):
                 os.rename(backup, dest)
                 _fsync_dir(paths.APPS_DIR)
             raise
+        mark_install_transaction(candidate, "code_published")
 
-        if env_candidate is not None:
+        if candidate.env_candidate is not None:
             try:
-                pythonenv.activate_environment(env_candidate)
+                mark_install_transaction(candidate, "publishing_environment")
+                pythonenv.activate_environment(candidate.env_candidate)
+                mark_install_transaction(candidate, "environment_published")
             except BaseException as exc:
                 try:
-                    pythonenv.rollback_candidate_activation(env_candidate)
+                    pythonenv.rollback_candidate_activation(candidate.env_candidate)
                     _restore_code_after_publish_failure(dest, backup)
+                    candidate.published = False
+                    code_published = False
                 except BaseException as rollback_exc:
                     raise InstallError(
                         f"Python environment activation failed ({exc}); "
@@ -602,16 +881,40 @@ def install(pkg_path: str, signature: Optional[str] = None, *,
                 if isinstance(exc, Exception):
                     raise InstallError(f"cannot activate Python environment: {exc}") from exc
                 raise
+        else:
+            mark_install_transaction(candidate, "environment_published")
 
         stale = dest + ".old"
         if os.path.isdir(stale):
             shutil.rmtree(stale, ignore_errors=True)
-        return app_id, manifest
+        candidate.consumed = True
+        return app_id, candidate.manifest
+    except BaseException:
+        # The explicit environment-activation branch already restores code.
+        # This fallback covers a future post-publish step without allowing an
+        # exception to escape while live code remains half-swapped.
+        if code_published:
+            try:
+                if candidate.env_candidate is not None:
+                    pythonenv.rollback_candidate_activation(candidate.env_candidate)
+                _restore_code_after_publish_failure(dest, backup)
+                candidate.published = False
+            except BaseException as rollback_exc:
+                raise InstallError(
+                    "install publish failed and rollback also failed: %s" %
+                    rollback_exc) from rollback_exc
+        raise
+
+
+def install(pkg_path: str, signature: Optional[str] = None, *,
+            allow_unsigned: bool = False) -> Tuple[str, dict]:
+    """Authenticate, prepare and atomically publish one app release."""
+    candidate = prepare(
+        pkg_path, signature, allow_unsigned=allow_unsigned)
+    try:
+        return commit_prepared(candidate)
     finally:
-        if staging and os.path.isdir(staging):
-            shutil.rmtree(staging, ignore_errors=True)
-        if env_candidate is not None and staging is not None:
-            pythonenv.discard_candidate(env_candidate)
+        discard_prepared(candidate)
 
 
 def restore_prev(app_id: str) -> bool:
@@ -669,6 +972,185 @@ def restore_prev(app_id: str) -> bool:
     return True
 
 
+def _reconcile_transaction_environment(transaction: dict,
+                                       expected_release: str | None) -> bool:
+    """Leave ``current`` on the pre-transaction release, idempotently."""
+    app_id = transaction["app_id"]
+    target_release = transaction.get("target_release_id")
+    try:
+        current_release = pythonenv.current_release_id(app_id)
+        if (isinstance(target_release, str)
+                and target_release != expected_release
+                and current_release == target_release):
+            pythonenv.restore_previous(app_id)
+            current_release = pythonenv.current_release_id(app_id)
+        if current_release != expected_release:
+            raise pythonenv.PythonEnvError(
+                "current=%r, expected pre-transaction release %r" % (
+                    current_release, expected_release))
+    except pythonenv.PythonEnvError as exc:
+        raise InstallError(
+            "cannot reconcile interrupted Python environment: %s" % exc) from exc
+    return current_release == expected_release
+
+
+def rollback_install_transaction_files(transaction: dict) -> bool:
+    """Restore code/environment described by an unfinished phase journal.
+
+    Directory device/inode identities distinguish the retained pre-upgrade
+    release from an older, perfectly legitimate ``.prev`` generation.  This
+    prevents a crash before the first rename from accidentally downgrading an
+    otherwise untouched app during boot reconciliation.
+    """
+    if not isinstance(transaction, dict):
+        raise InstallError("invalid install transaction")
+    app_id = transaction.get("app_id")
+    if not isinstance(app_id, str) or not paths.valid_app_id(app_id):
+        raise InstallError("invalid install transaction app id")
+    dest = paths.app_dir(app_id)
+    prev = dest + ".prev"
+    current_identity = _directory_identity(dest)
+    previous_identity = transaction.get("previous_dir_identity")
+    target_identity = transaction.get("target_dir_identity")
+    pre_installed = transaction.get("pre_installed") is True
+
+    if pre_installed:
+        if current_identity == previous_identity:
+            # No code rename became visible.  A pre-existing .prev belongs to
+            # an older successful upgrade and must remain untouched.
+            installed_release = transaction.get("installed_release_id")
+            expected_environment = (
+                installed_release if isinstance(installed_release, str)
+                else transaction.get("previous_environment_release_id"))
+            _reconcile_transaction_environment(
+                transaction, expected_environment)
+            failed = dest + ".failed"
+            if _directory_identity(failed) == target_identity:
+                shutil.rmtree(failed)
+                _fsync_dir(paths.APPS_DIR)
+            return False
+        if current_identity is None:
+            if _directory_identity(prev) != previous_identity:
+                raise InstallError(
+                    "interrupted install lost both the live and retained release")
+            failed = dest + ".failed"
+            failed_identity = _directory_identity(failed)
+            if (failed_identity is not None
+                    and failed_identity != target_identity):
+                raise InstallError(
+                    "interrupted install failed-copy identity changed")
+            installed_release = transaction.get("installed_release_id")
+            expected_environment = (
+                installed_release if isinstance(installed_release, str)
+                else transaction.get("previous_environment_release_id"))
+            _reconcile_transaction_environment(
+                transaction, expected_environment)
+            os.rename(prev, dest)
+            _fsync_dir(paths.APPS_DIR)
+            if failed_identity is not None:
+                shutil.rmtree(failed)
+                _fsync_dir(paths.APPS_DIR)
+            return True
+        if current_identity != target_identity:
+            raise InstallError(
+                "installed code identity changed during interrupted transaction")
+        if _directory_identity(prev) != previous_identity:
+            raise InstallError(
+                "retained release identity changed during interrupted transaction")
+        target_release = transaction.get("target_release_id")
+        installed_release = transaction.get("installed_release_id")
+        expected_environment = (
+            installed_release if isinstance(installed_release, str)
+            else transaction.get("previous_environment_release_id"))
+        restore_environment = False
+        if isinstance(target_release, str) and target_release != expected_environment:
+            try:
+                current_release = pythonenv.current_release_id(app_id)
+            except pythonenv.PythonEnvError as exc:
+                raise InstallError(
+                    "cannot inspect interrupted Python environment: %s" % exc) from exc
+            if current_release == target_release:
+                restore_environment = True
+            elif current_release != expected_environment:
+                raise InstallError(
+                    "interrupted environment identity changed: current=%r, "
+                    "installed=%r, target=%r" % (
+                        current_release, expected_environment, target_release))
+
+        # Restore code first but consume pythonenv.rollback.json only when the
+        # active pointer proves THIS transaction switched to target_release.
+        # An older successful activation may legitimately have left its own
+        # rollback record; consuming it while current still equals the installed
+        # release would incorrectly jump back another generation.
+        failed = dest + ".failed"
+        shutil.rmtree(failed, ignore_errors=True)
+        os.rename(dest, failed)
+        environment_changed = False
+        try:
+            os.rename(prev, dest)
+            _fsync_dir(paths.APPS_DIR)
+            if restore_environment:
+                pythonenv.restore_previous(app_id)
+                environment_changed = True
+                restored_release = pythonenv.current_release_id(app_id)
+                if restored_release != expected_environment:
+                    raise pythonenv.PythonEnvError(
+                        "environment rollback restored %r, expected %r" % (
+                            restored_release, expected_environment))
+        except BaseException as exc:
+            try:
+                if not environment_changed:
+                    if os.path.isdir(dest):
+                        os.rename(dest, prev)
+                    if os.path.isdir(failed):
+                        os.rename(failed, dest)
+                    _fsync_dir(paths.APPS_DIR)
+            except BaseException as reverse_exc:
+                raise InstallError(
+                    "interrupted install rollback failed (%s) and code reversal "
+                    "also failed: %s" % (exc, reverse_exc)) from reverse_exc
+            if isinstance(exc, pythonenv.PythonEnvError):
+                raise InstallError(
+                    "cannot restore interrupted Python environment: %s" % exc) from exc
+            raise
+        shutil.rmtree(failed, ignore_errors=True)
+        return True
+
+    if current_identity is None:
+        _reconcile_transaction_environment(
+            transaction, transaction.get("previous_environment_release_id"))
+        return False
+    if current_identity != target_identity:
+        raise InstallError(
+            "new install directory identity changed during interrupted transaction")
+    _reconcile_transaction_environment(
+        transaction, transaction.get("previous_environment_release_id"))
+    shutil.rmtree(dest)
+    _fsync_dir(paths.APPS_DIR)
+    return True
+
+
+def validate_committed_transaction_files(transaction: dict) -> None:
+    """Fail closed unless a terminal journal still names the published pair."""
+    app_id = transaction.get("app_id") if isinstance(transaction, dict) else None
+    if not isinstance(app_id, str) or not paths.valid_app_id(app_id):
+        raise InstallError("invalid committed install transaction")
+    if _directory_identity(paths.app_dir(app_id)) != transaction.get(
+            "target_dir_identity"):
+        raise InstallError("committed install code identity does not match journal")
+    target_release = transaction.get("target_release_id")
+    if isinstance(target_release, str):
+        try:
+            current = pythonenv.current_release_id(app_id)
+        except pythonenv.PythonEnvError as exc:
+            raise InstallError(
+                "cannot inspect committed Python environment: %s" % exc) from exc
+        if current != target_release:
+            raise InstallError(
+                "committed code/environment mismatch: code=%r env=%r" % (
+                    target_release, current))
+
+
 def reconcile_interrupted_installs() -> list:
     """Recover installs a crash/power-cut interrupted mid-swap (健壮#16).
 
@@ -707,6 +1189,21 @@ def reconcile_interrupted_installs() -> list:
             _fsync_dir(paths.APPS_DIR)
             restored.append(base)
         except OSError:
+            pass
+    # A crash during prepare() happens before a code-directory rename but can
+    # leave an unpublished v2 environment candidate.  Sweep only valid app-id
+    # roots; immutable published generations/current pointers are preserved by
+    # pythonenv's own reconciliation contract.
+    try:
+        env_apps = os.listdir(paths.VENVS_DIR)
+    except OSError:
+        env_apps = []
+    for app_id in env_apps:
+        if not paths.valid_app_id(app_id):
+            continue
+        try:
+            pythonenv.reconcile_staging(app_id)
+        except pythonenv.PythonEnvError:
             pass
     return restored
 

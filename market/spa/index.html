@@ -666,13 +666,14 @@ function cfgGroups(schema){
 function fieldHTML(it, val){
   const key = it.key, title = esc(it.title||key);
   const t = it.type||"number";
-  if(t==="number"){
-    const mn = it.min!=null?it.min:0, mx = it.max!=null?it.max:1, st = it.step||0.01;
+  if(t==="number"||t==="integer"){
+    const mn = it.min!=null?it.min:0, mx = it.max!=null?it.max:1,
+          st = it.step||(t==="integer"?1:0.01);
     const v = (val!=null?val:(it.default!=null?it.default:mn));
     const hasRange = (it.min!=null && it.max!=null);
     return '<div class="fld"><label for="f_'+key+'">'+title+'</label><div class="ctrl">'+
-      (hasRange?'<input type="range" data-k="'+key+'" data-t="number" min="'+mn+'" max="'+mx+'" step="'+st+'" value="'+v+'" oninput="this.closest(\'.fld\').querySelector(\'input[type=number]\').value=this.value">':'')+
-      '<input id="f_'+key+'" type="number" data-k="'+key+'" data-t="number" min="'+mn+'" max="'+mx+'" step="'+st+'" value="'+v+'"'+
+      (hasRange?'<input type="range" data-k="'+key+'" data-t="'+t+'" min="'+mn+'" max="'+mx+'" step="'+st+'" value="'+v+'" oninput="this.closest(\'.fld\').querySelector(\'input[type=number]\').value=this.value">':'')+
+      '<input id="f_'+key+'" type="number" data-k="'+key+'" data-t="'+t+'" min="'+mn+'" max="'+mx+'" step="'+st+'" value="'+v+'"'+
         (hasRange?' oninput="this.closest(\'.fld\').querySelector(\'input[type=range]\').value=this.value"':'')+'>'+
       '</div></div>';
   }
@@ -682,23 +683,27 @@ function fieldHTML(it, val){
       '<label class="switch"><input id="f_'+key+'" type="checkbox" data-k="'+key+'" data-t="boolean"'+(on?' checked':'')+'><span class="sl"></span></label>'+
       '</div></div>';
   }
-  if(t==="enum"){
+  if(t==="enum"||t==="select"){
     const opts = it.options||[], labels = it.option_labels||opts;
     const cur = (val!=null?val:it.default);
-    const os = opts.map((o,i)=>'<option value="'+esc(o)+'"'+(o===cur?' selected':'')+'>'+esc(labels[i]||o)+'</option>').join('');
+    const os = opts.map((raw,i)=>{ const o=(raw&&typeof raw==="object")?raw.value:raw;
+      const label=(raw&&typeof raw==="object")?(raw.label||raw.label_zh||o):(labels[i]||o);
+      return '<option value="'+esc(JSON.stringify(o))+'"'+(o===cur?' selected':'')+'>'+esc(label)+'</option>'; }).join('');
     return '<div class="fld"><label for="f_'+key+'">'+title+'</label><div class="ctrl">'+
       '<select id="f_'+key+'" data-k="'+key+'" data-t="enum">'+os+'</select></div></div>';
   }
-  if(t==="string"){
+  if(t==="string"||t==="password"){
     const v = (val!=null?val:(it.default||""));
     return '<div class="fld"><label for="f_'+key+'">'+title+'</label><div class="ctrl">'+
-      '<input id="f_'+key+'" type="text" data-k="'+key+'" data-t="string" value="'+esc(v)+'"></div></div>';
+      '<input id="f_'+key+'" type="'+(t==="password"?'password':'text')+'" data-k="'+key+'" data-t="string" value="'+esc(v)+'"></div></div>';
   }
-  if(t==="zone"||t==="line"){
+  if(t==="zone"||t==="line"||t==="array"||t==="object"){
     // TODO: visual editor (draw on the live frame). For now: editable JSON.
-    const v = (val!=null?JSON.stringify(val):"");
+    const v = (val!=null?JSON.stringify(val):
+      (it.default!=null?JSON.stringify(it.default):""));
     const ph = t==="zone" ? '[[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]'
-                          : '{"a":[0.5,0],"b":[0.5,1],"in":"right"}';
+             : t==="line" ? '{"a":[0.5,0],"b":[0.5,1],"in":"right"}'
+             : t==="array" ? '[]' : '{}';
     return '<div class="fld col"><label for="f_'+key+'">'+title+
       ' <span class="todo">· '+t+' (JSON; visual editor TODO)</span></label>'+
       '<textarea id="f_'+key+'" data-k="'+key+'" data-t="json" placeholder="'+ph+'">'+esc(v)+'</textarea></div>';
@@ -740,8 +745,10 @@ function collectCfg(){
     if(el.tagName==="INPUT" && el.type==="range") return;
     const k = el.dataset.k, t = el.dataset.t;
     if(t==="number"){ if(el.value!=="") out[k] = parseFloat(el.value); }
+    else if(t==="integer"){ if(el.value!=="") out[k] = parseInt(el.value,10); }
     else if(t==="boolean"){ out[k] = el.checked; }
-    else if(t==="enum"||t==="string"){ out[k] = el.value; }
+    else if(t==="enum"){ out[k] = JSON.parse(el.value); }
+    else if(t==="string"){ out[k] = el.value; }
     else if(t==="json"){
       const s = (el.value||"").trim();
       if(s===""){ out[k] = null; }
@@ -769,7 +776,8 @@ document.getElementById("cfgSave").addEventListener("click", async ()=>{
   try{
     const r = await api("/config",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({id:cfgState.id, config})});
-    toast(r.restarted ? "Saved and restarted to apply" : "Saved (applies on next start)");
+    toast(r.noop ? "No effective changes" : r.restarted ? "Saved and restarted to apply" :
+      r.reloaded ? "Saved and applied live" : "Saved (applies on next start)");
     closeConfig();
     setTimeout(loadApps, 600);
   }catch(e){ toast("Save failed: "+e.message, true); }

@@ -50,9 +50,16 @@ from kit.adapters.result_sink import (
     WS_SEND_TIMEOUT,
     effective_bind_host,
 )
+from kit.geometry import (
+    MAX_GEOMETRY_ITEMS,
+    MAX_POINTS_PER_PRIMITIVE,
+    PRIMITIVE_TYPES,
+    sanitize_geometry,
+)
 
 from . import config as appconfig
 from . import paths
+from . import visualization as appvisualization
 
 
 SCHEMA = "recamera.ai.result"
@@ -60,6 +67,7 @@ SCHEMA_VERSION = 2
 SYSTEM_PROTOCOL = "recamera-system-result@1"
 SYSTEM_HELLO_KEYS = frozenset(("type", "protocol", "source"))
 DATA_TYPES = frozenset(("frame", "event", "status", "metrics"))
+RETIRED_APP_GENERATIONS_MAX = 2048
 VIEWS = frozenset(("raw", "formatted"))
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -156,16 +164,18 @@ _EVENT_FIELD_RE = re.compile(
 
 
 def _compile_geometry_contract(manifest: dict) -> dict:
-    """Compile signed manifest field declarations into a tiny hot-path map.
+    """Compile installed, validated manifest fields into a tiny hot-path map.
 
     Only direct ``results[]`` and ``events[]`` fields are accepted.  Derived or
     complex paths never authorize payload geometry.  Conflicting declarations
     fail closed to ``unknown`` even though installed manifests are normally
     schema-validated before this control-plane cache is populated.
     """
-    contract = {"results": {}, "events": {}}
+    contract = {"results": {}, "events": {}, "primitives": {}}
     output = manifest.get("output") if isinstance(manifest, dict) else {}
     fields = output.get("fields") if isinstance(output, dict) else []
+    strict_output = (isinstance(output, dict)
+                     and output.get("contract_version") == 2)
     if not isinstance(fields, list):
         return contract
 
@@ -184,6 +194,15 @@ def _compile_geometry_contract(manifest: dict) -> dict:
         path = value.get("from")
         if not isinstance(path, str):
             continue
+        if path == "geometry[]":
+            if not strict_output:
+                continue
+            coord = str(value.get("coord") or "")
+            previous = contract["primitives"].get("space")
+            space = coord if coord in ("pixel_points", "normalized_points") else "unknown"
+            contract["primitives"]["space"] = (
+                space if previous in (None, space) else "unknown")
+            continue
         match = _RESULT_FIELD_RE.fullmatch(path)
         if match:
             declare(contract["results"], match.group(1), value.get("coord"))
@@ -194,28 +213,51 @@ def _compile_geometry_contract(manifest: dict) -> dict:
         event_kind = str(match.group(1) or value.get("event_kind") or "*").lower()
         target = contract["events"].setdefault(event_kind, {})
         declare(target, match.group(2), value.get("coord"))
+    render = manifest.get("render") if isinstance(manifest, dict) else {}
+    render_version = (render.get("schema_version")
+                      if isinstance(render, dict) else None)
+    policy = (render.get("geometry")
+              if (isinstance(render, dict)
+                  and not isinstance(render_version, bool)
+                  and render_version == 1)
+              else None)
+    if not isinstance(policy, dict) or not contract["primitives"].get("space"):
+        contract["primitives"] = {}
+    else:
+        kinds = policy.get("types") or sorted(PRIMITIVE_TYPES)
+        contract["primitives"].update({
+            "types": [kind for kind in kinds if kind in PRIMITIVE_TYPES],
+            "max_items": min(MAX_GEOMETRY_ITEMS,
+                             max(1, _as_int(policy.get("max_items"), 64))),
+            "max_points": min(MAX_POINTS_PER_PRIMITIVE,
+                              max(1, _as_int(policy.get("max_points"), 128))),
+            "style": copy.deepcopy(policy.get("style") or {}),
+        })
     return contract
 
 
-def _compile_stream_contract(manifest: dict) -> dict:
-    """Map the current Kit camera claim to its authoritative preview stream.
+_NO_STREAM_CONTRACT = {"id": "", "kind": "none"}
+_MANAGED_FRAME_STREAM_CONTRACT = {
+    "id": "main", "kind": "frame.sock", "path": "/live/0"}
 
-    The v2 manifest does not yet carry a selectable stream profile.  On this
-    firmware ``camera.frames`` is the shared frame.sock VI pipe0/ch1 feed that
-    corresponds to the browser's main preview (go2rtc ``/live/0``).  A manifest
-    without that signed claim has no video stream association; app-reported
-    labels such as ``camera-0`` remain diagnostic only.
+
+def _validate_stream_contract(value: object) -> dict:
+    """Accept only the appmgr-managed official-frame preview association.
+
+    A camera permission says what an app may request, not which backend its
+    current process actually opened.  The lifecycle control plane therefore
+    supplies this contract only after selecting the dedicated official
+    ``frame.sock`` backend for that exact instance/generation.  Result payloads
+    and manifests have no path to choose a stream here.  Unknown, partial or
+    extended contracts fail closed so a future backend cannot accidentally be
+    presented as the browser's main preview without an explicit Hub change.
     """
-    resources = manifest.get("resources") if isinstance(manifest, dict) else {}
-    claims = resources.get("claims") if isinstance(resources, dict) else []
-    if not isinstance(claims, list):
-        claims = []
-    has_frames = any(
-        isinstance(value, dict) and value.get("name") == "camera.frames"
-        for value in claims)
-    if not has_frames:
-        return {"id": "", "kind": "none"}
-    return {"id": "main", "kind": "frame.sock", "path": "/live/0"}
+    if (isinstance(value, dict)
+            and frozenset(value) == frozenset(_MANAGED_FRAME_STREAM_CONTRACT)
+            and all(value.get(key) == expected
+                    for key, expected in _MANAGED_FRAME_STREAM_CONTRACT.items())):
+        return dict(_MANAGED_FRAME_STREAM_CONTRACT)
+    return dict(_NO_STREAM_CONTRACT)
 
 
 def _copy_shapes(values: object, geometry: Optional[dict] = None,
@@ -232,7 +274,7 @@ def _copy_shapes(values: object, geometry: Optional[dict] = None,
             continue
         item = dict(value)
         # Payload-level `space(s)` crosses the untrusted data plane.  Discard it
-        # before adding declarations compiled from the signed manifest/system
+        # before adding declarations compiled from the installed manifest/system
         # adapter; consumers must never infer normalized coordinates by value.
         item.pop("space", None)
         item.pop("spaces", None)
@@ -272,6 +314,9 @@ def _coordinate_space(*collections: List[dict]) -> str:
             declared = item.get("spaces") if isinstance(item, dict) else None
             if isinstance(declared, dict):
                 spaces.extend(str(value) for value in declared.values())
+            primitive_space = item.get("space") if isinstance(item, dict) else None
+            if primitive_space is not None:
+                spaces.append(str(primitive_space))
     if not spaces or "unknown" in spaces:
         return "unknown"
     bases = {value.split("_", 1)[0] for value in spaces}
@@ -325,6 +370,7 @@ def _base_envelope(*, message_type: str, message_id: str, source: dict,
                    seq: int, wall_ms: int, pts_us: int, stream: dict,
                    results: Optional[List[dict]] = None,
                    events: Optional[List[dict]] = None,
+                   geometry: Optional[List[dict]] = None,
                    metrics: Optional[dict] = None, summary: Optional[dict] = None,
                    render: Optional[dict] = None,
                    extensions: Optional[dict] = None) -> dict:
@@ -340,6 +386,7 @@ def _base_envelope(*, message_type: str, message_id: str, source: dict,
         "stream": dict(stream),
         "results": list(results or []),
         "events": list(events or []),
+        "geometry": list(geometry or []),
         "metrics": dict(metrics or {}),
         "summary": dict(summary or {}),
         "render": dict(render or {}),
@@ -433,7 +480,26 @@ def normalize_app_payload(payload: dict, identity: dict,
     events = _copy_shapes(
         payload.get("events"), event_contracts=(
             event_geometry if isinstance(event_geometry, dict) else {}))
-    stream = _stream(payload, coordinate_space=_coordinate_space(results, events),
+    frame = payload.get("frame") if isinstance(payload.get("frame"), dict) else {}
+    frame_width = _positive_dimension(frame.get("width", payload.get("width")))
+    frame_height = _positive_dimension(frame.get("height", payload.get("height")))
+    primitive_policy = geometry.get("primitives")
+    if isinstance(primitive_policy, dict):
+        primitives = sanitize_geometry(
+            payload.get("geometry"),
+            space=str(primitive_policy.get("space") or "unknown"),
+            allowed_types=primitive_policy.get("types") or (),
+            max_items=_as_int(primitive_policy.get("max_items"), 64),
+            max_points=_as_int(primitive_policy.get("max_points"), 128),
+            default_style=primitive_policy.get("style"),
+            frame_size=((frame_width, frame_height)
+                        if frame_width is not None and frame_height is not None
+                        else None),
+        )
+    else:
+        primitives = []
+    stream = _stream(
+        payload, coordinate_space=_coordinate_space(results, events, primitives),
                      trusted_stream=(trusted_stream
                                      if isinstance(trusted_stream, dict) else {}))
     if stream["width"] is None or stream["height"] is None:
@@ -451,7 +517,7 @@ def normalize_app_payload(payload: dict, identity: dict,
                         item["space"] = next(iter(unique))
                     else:
                         item.pop("space", None)
-        stream["coordinate_space"] = _coordinate_space(results, events)
+        stream["coordinate_space"] = _coordinate_space(results, events, primitives)
     coordinate_space = stream["coordinate_space"]
     metrics = _metrics(payload)
     summary = _summary(payload)
@@ -463,7 +529,7 @@ def normalize_app_payload(payload: dict, identity: dict,
     known = {
         "type", "app", "instance", "generation", "source", "source_id",
         "seq", "pts", "pts_us", "timestamp", "timestamp_ms", "gateway_ts",
-        "frame", "stream_id", "width", "height", "results", "events",
+        "frame", "stream_id", "width", "height", "results", "events", "geometry",
         "metrics", "summary", "render", "fps", "inference_time_ms",
         "pipeline_ms", "latency_ms", "preprocess_ms", "postprocess_ms",
         "dropped",
@@ -490,13 +556,14 @@ def normalize_app_payload(payload: dict, identity: dict,
     envelopes: List[dict] = []
     is_metrics = legacy_type in ("metric", "metrics", "meta")
     is_status = legacy_type in ("status", "summary", "state")
-    wants_frame = bool(results) or (
+    wants_frame = bool(results or primitives) or (
         legacy_type in ("result", "results", "frame") and not events)
     if wants_frame:
         envelopes.append(_base_envelope(
             message_type="frame", message_id=f"{app_id}:{generation}:{seq}:frame",
             source=source, seq=seq, wall_ms=wall, pts_us=pts, stream=stream,
-            results=results, metrics=metrics, summary=summary, render=render,
+            results=results, geometry=primitives, metrics=metrics,
+            summary=summary, render=render,
             extensions=common_ext,
         ))
     if is_metrics:
@@ -720,6 +787,7 @@ class ResultViewFormatter:
             },
             "results": envelope.get("results") or [],
             "events": envelope.get("events") or [],
+            "geometry": envelope.get("geometry") or [],
             "metrics": envelope.get("metrics") or {},
             "summary": envelope.get("summary") or {},
             "render": envelope.get("render") or {},
@@ -822,6 +890,7 @@ class ResultViewFormatter:
             wall_ms=_as_int((raw.get("time") or {}).get("wall_ms"), _wall_ms({})),
             pts_us=_as_int((raw.get("time") or {}).get("pts_us"), 0),
             stream=raw.get("stream") or {}, metrics=raw.get("metrics") or {},
+            geometry=raw.get("geometry") or [],
             summary=raw.get("summary") or {}, render=raw.get("render") or {},
             extensions=extensions,
         )
@@ -1207,9 +1276,9 @@ class _HubClient:
             self._condition.notify()
             return True
 
-    def offer_control(self, envelope: dict) -> None:
-        self._append(str(envelope.get("type") or "status"), "control",
-                     _ws_frame(_compact_json(envelope)), data=False)
+    def offer_control(self, envelope: dict) -> bool:
+        return self._append(str(envelope.get("type") or "status"), "control",
+                            _ws_frame(_compact_json(envelope)), data=False)
 
     def offer_pong(self, payload: bytes) -> None:
         self._append("pong", "control", _ws_frame(payload, opcode=0xA), data=False)
@@ -1534,6 +1603,23 @@ class _HubWebSocketServer:
             with self._lock:
                 self._clients = [item for item in self._clients if item.alive()]
 
+    def broadcast_control(self, envelope: dict) -> None:
+        """Deliver an ordering control or force a lagging client to replay.
+
+        A source revocation must not be silently dropped behind an all-edge
+        queue: that would leave an already rendered frame visible forever.
+        Closing a client that cannot accept the control is fail-closed because
+        its reconnect snapshot is generated after the revocation fence.
+        """
+        with self._lock:
+            clients = list(self._clients)
+        for client in clients:
+            if not client.offer_control(envelope):
+                client.close()
+        if any(not item.alive() for item in clients):
+            with self._lock:
+                self._clients = [item for item in self._clients if item.alive()]
+
     def purge_source(self, source_id: str) -> int:
         with self._lock:
             clients = list(self._clients)
@@ -1854,6 +1940,12 @@ class ResultHub:
         # Current control-plane-authorized (instance, generation) per app.  The
         # gateway hello refreshes this before acknowledging the publisher.
         self._app_generations: Dict[str, Tuple[str, int]] = {}
+        # Exact retired tuples remain fenced after their active entry is
+        # removed. Without this bounded memory, a delayed old gateway hello can
+        # re-authorize itself in the interval between stop invalidation and the
+        # server's final lifecycle re-read, briefly leaking a frame or edge.
+        self._retired_app_generations = set()
+        self._retired_app_generation_order = deque()
         # app_id -> (instance_id, generation, immutable manifest render copy,
         #            compiled geometry contract, trusted stream contract).
         # This cache is populated only after the gateway has authenticated the
@@ -1886,6 +1978,8 @@ class ResultHub:
         self._generation_records_purged = 0
         self._generation_ingress_purged = 0
         self._generation_client_purged = 0
+        self._stale_manifest_refresh_ignored = 0
+        self._retired_manifest_refresh_ignored = 0
         self._stale_app_rejected = 0
 
     def _next_source_seq(self, source_id: str) -> int:
@@ -1894,13 +1988,15 @@ class ResultHub:
             self._source_seq[source_id] = value
             return value
 
-    def _control(self, message_type: str, *, summary=None, extensions=None) -> dict:
+    def _control(self, message_type: str, *, summary=None, extensions=None,
+                 source=None) -> dict:
         with self._state_lock:
             self._control_seq += 1
             seq = self._control_seq
         return _base_envelope(
             message_type=message_type, message_id=f"result-hub:{seq}:{message_type}",
-            source={"kind": "builtin", "id": "result-hub", "trust": "local"},
+            source=(source or
+                    {"kind": "builtin", "id": "result-hub", "trust": "local"}),
             seq=seq, wall_ms=int(time.time() * 1000), pts_us=0,
             stream={"id": "", "width": None, "height": None,
                     "coordinate_space": "unknown"},
@@ -1927,6 +2023,21 @@ class ResultHub:
 
     def control_status(self, summary: dict) -> dict:
         return self._control("status", summary=summary)
+
+    def source_invalidated_envelope(self, app_id: str, identity=None) -> dict:
+        """Canonical tombstone for one retired app source tuple."""
+        current = identity if isinstance(identity, tuple) else ("", None)
+        instance = str(current[0] or "")
+        generation = current[1]
+        source = {
+            "kind": "app", "id": str(app_id), "app_id": str(app_id),
+            "instance": instance, "trust": "local",
+        }
+        if generation is not None:
+            source["generation"] = int(generation)
+        return self._control(
+            "source_invalidated", source=source,
+            extensions={"reason": "lifecycle", "scope": "source"})
 
     def _prepare_system_path(self) -> None:
         parent = os.path.dirname(self.system_uds_path)
@@ -2190,14 +2301,38 @@ class ResultHub:
         with self._state_lock:
             return self._app_generations.get(app_id) == (instance, generation)
 
-    def refresh_app_manifest(self, identity: dict, manifest: dict) -> bool:
-        """Cache trusted ``manifest.render`` for one authenticated generation.
+    def _retire_app_generation_locked(self, app_id: str,
+                                      identity: Optional[tuple]) -> None:
+        if not identity:
+            return
+        key = (str(app_id), str(identity[0] or ""), _as_int(identity[1], -1))
+        if not key[0] or not key[1] or key[2] < 0 \
+                or key in self._retired_app_generations:
+            return
+        self._retired_app_generations.add(key)
+        self._retired_app_generation_order.append(key)
+        while len(self._retired_app_generation_order) \
+                > RETIRED_APP_GENERATIONS_MAX:
+            self._retired_app_generations.discard(
+                self._retired_app_generation_order.popleft())
+
+    def refresh_app_manifest(self, identity: dict, manifest: dict,
+                             stream_contract: Optional[dict] = None) -> bool:
+        """Cache trusted manifest and launch contracts for one generation.
 
         The caller is the appmgr control plane, after
         ``AppCoordinator.resolve_identity`` accepted the SO_PEERCRED-bound
         process.  Untrusted application messages have no path to this method.
         Manifest v2 and an exact id match are required; malformed input clears
         any prior entry for that app and fails closed to an empty render object.
+        ``stream_contract`` is an independent fact from the controlled launch
+        path: a manifest camera claim alone never authorizes a preview mapping.
+
+        Refreshes are monotonic per app.  A delayed authenticated hello from an
+        older generation -- or from a different instance reusing the current
+        generation number -- is a successful no-op.  Returning ``True`` for
+        that case is intentional: the server treats ``False`` as a malformed
+        current manifest and would otherwise invalidate the newer generation.
         """
         app_id = str((identity or {}).get("app_id") or "")
         instance = str((identity or {}).get("instance_id") or "")
@@ -2209,13 +2344,17 @@ class ResultHub:
             and manifest.get("manifest_version") == 2
             and str(manifest.get("id") or "") == app_id
         )
-        render = manifest.get("render") if valid else None
-        if render is not None and not isinstance(render, dict):
+        raw_render = manifest.get("render") if valid else None
+        if raw_render is not None and not isinstance(raw_render, dict):
             valid = False
+        render = (appvisualization.effective_render(manifest)
+                  if valid else None)
         geometry = _compile_geometry_contract(manifest) if valid else {}
-        stream_contract = _compile_stream_contract(manifest) if valid else {}
+        trusted_stream = (_validate_stream_contract(stream_contract)
+                          if valid else dict(_NO_STREAM_CONTRACT))
         current = (instance, generation)
         generation_changed = False
+        retired_identity = None
         purged_records = 0
         ws = None
         observers = []
@@ -2227,18 +2366,36 @@ class ResultHub:
             "valid": bool(valid),
             "render": copy.deepcopy(render or {}) if valid else {},
             "geometry": copy.deepcopy(geometry) if valid else {},
-            "stream": copy.deepcopy(stream_contract) if valid else {},
+            "stream": copy.deepcopy(trusted_stream),
         }
         with self._publish_fence:
             with self._state_lock:
+                previous = self._app_generations.get(app_id)
+                retired_refresh = (
+                    app_id, instance, generation
+                ) in self._retired_app_generations
+                if retired_refresh:
+                    self._retired_manifest_refresh_ignored += 1
+                    return True
+                stale_refresh = bool(
+                    identity_valid
+                    and previous is not None
+                    and (generation < previous[1]
+                         or (generation == previous[1]
+                             and instance != previous[0])))
+                if stale_refresh:
+                    self._stale_manifest_refresh_ignored += 1
+                    return True
                 if identity_valid:
+                    retired_identity = previous if previous != current else None
+                    self._retire_app_generation_locked(app_id, retired_identity)
                     generation_changed = self._app_generations.get(app_id) != current
                     self._app_generations[app_id] = current
                     purged_records = self._purge_app_records_locked(app_id, current)
                 if valid:
                     self._app_render_cache[app_id] = (
                         instance, generation, copy.deepcopy(render or {}),
-                        copy.deepcopy(geometry), copy.deepcopy(stream_contract))
+                        copy.deepcopy(geometry), copy.deepcopy(trusted_stream))
                 elif app_id:
                     self._app_render_cache.pop(app_id, None)
                 ws = self._ws
@@ -2248,6 +2405,9 @@ class ResultHub:
                               if identity_valid else 0)
             purged_clients = (ws.purge_source(app_id)
                               if ws is not None and generation_changed else 0)
+            if ws is not None and retired_identity is not None:
+                ws.broadcast_control(self.source_invalidated_envelope(
+                    app_id, retired_identity))
             # This is deliberately inside the publish ordering domain but is
             # only an in-memory bounded-queue operation.  It cannot run bridge
             # code or block ingress.  New-generation records are offered after
@@ -2263,14 +2423,25 @@ class ResultHub:
                 self._generation_client_purged += purged_clients
         return valid
 
-    def invalidate_app_manifest(self, app_id: Optional[str] = None) -> None:
-        """Revoke trusted generation/render state after lifecycle writes."""
+    def invalidate_app_manifest(self, app_id: Optional[str] = None,
+                                identity: Optional[dict] = None) -> bool:
+        """Revoke trusted generation/render state after lifecycle writes.
+
+        ``identity`` makes the revocation an exact-generation compare-and-swap.
+        This is used by the gateway hello path: a delayed old hello that loses
+        a lifecycle race must not erase a newer generation already registered
+        by another publisher.
+        """
         purged_apps = []
+        retired_identities = {}
         observers = []
         with self._publish_fence:
             with self._state_lock:
                 if app_id is None:
                     purged_apps = list(self._app_generations)
+                    retired_identities = dict(self._app_generations)
+                    for source_id, current in retired_identities.items():
+                        self._retire_app_generation_locked(source_id, current)
                     self._app_render_cache.clear()
                     self._app_generations.clear()
                     for source_id in purged_apps:
@@ -2278,9 +2449,20 @@ class ResultHub:
                             self._purge_app_records_locked(source_id)
                 else:
                     source_id = str(app_id)
+                    if identity is not None:
+                        expected = (
+                            str((identity or {}).get("instance_id")
+                                or (identity or {}).get("instance") or ""),
+                            _as_int((identity or {}).get("generation"), -1),
+                        )
+                        if self._app_generations.get(source_id) != expected:
+                            return False
                     purged_apps = [source_id]
                     self._app_render_cache.pop(source_id, None)
-                    self._app_generations.pop(source_id, None)
+                    retired_identities[source_id] = \
+                        self._app_generations.pop(source_id, None)
+                    self._retire_app_generation_locked(
+                        source_id, retired_identities[source_id])
                     self._generation_records_purged += \
                         self._purge_app_records_locked(source_id)
                 ws = self._ws
@@ -2290,6 +2472,10 @@ class ResultHub:
             clients = (sum(ws.purge_source(source_id) for source_id in purged_apps)
                        if ws is not None else 0)
             for source_id in purged_apps:
+                if (ws is not None
+                        and retired_identities.get(source_id) is not None):
+                    ws.broadcast_control(self.source_invalidated_envelope(
+                        source_id, retired_identities.get(source_id)))
                 for observer in observers:
                     observer.invalidate_source(
                         source_id, identity=None,
@@ -2298,6 +2484,7 @@ class ResultHub:
         with self._state_lock:
             self._generation_ingress_purged += ingress
             self._generation_client_purged += clients
+        return True
 
     def _trusted_app_contract(self, identity: dict) -> Tuple[dict, dict, dict]:
         app_id = str(identity.get("app_id") or "")
@@ -2368,6 +2555,9 @@ class ResultHub:
         projection["events"] = [
             copy.deepcopy(event)
             for value in envelopes for event in (value.get("events") or [])]
+        projection["geometry"] = next((
+            copy.deepcopy(value.get("geometry") or [])
+            for value in envelopes if value.get("geometry")), [])
         metrics = {}
         summary = {}
         for value in envelopes:
@@ -2402,6 +2592,7 @@ class ResultHub:
             legacy["stream_id"] = (projection.get("stream") or {}).get("id")
             legacy["results"] = copy.deepcopy(projection["results"])
             legacy["events"] = copy.deepcopy(projection["events"])
+            legacy["geometry"] = copy.deepcopy(projection["geometry"])
             legacy["metrics"] = copy.deepcopy(metrics)
             legacy["summary"] = copy.deepcopy(summary)
             legacy["render"] = copy.deepcopy(projection.get("render") or {})
@@ -2679,6 +2870,7 @@ class ResultHub:
             replay_states = replay_events - replay_edges
             trusted_app_renders = len(self._app_render_cache)
             active_app_generations = len(self._app_generations)
+            retired_app_generations = len(self._retired_app_generations)
             published = dict(self._published)
             ws = self._ws
         with self._ingress_condition:
@@ -2708,6 +2900,10 @@ class ResultHub:
             "active_app_generations": active_app_generations,
             "generation_fence": {
                 "stale_rejected": self._stale_app_rejected,
+                "stale_refresh_ignored": self._stale_manifest_refresh_ignored,
+                "retired_refresh_ignored":
+                    self._retired_manifest_refresh_ignored,
+                "retired_generations": retired_app_generations,
                 "records_purged": self._generation_records_purged,
                 "ingress_purged": self._generation_ingress_purged,
                 "client_queued_purged": self._generation_client_purged,

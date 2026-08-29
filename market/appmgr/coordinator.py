@@ -69,6 +69,18 @@ class AppCoordinator:
         manifest.setdefault("id", app_id)
         return manifest
 
+    def _has_run_record(self, app_id: str) -> bool:
+        """Treat an unreadable persisted process identity as an active fence."""
+        check = getattr(self.supervisor, "has_run_record", None)
+        if not callable(check):
+            return False
+        try:
+            return bool(check(app_id))
+        except Exception:
+            # Failure to inspect the only teardown identity cannot authorize a
+            # release/restart.  A later explicit stop can diagnose it safely.
+            return True
+
     def _on_spawn(self, app_id: str, instance_id: str, generation: int,
                   allocations: list, pid: int,
                   inference_policy: Optional[dict] = None) -> None:
@@ -149,6 +161,15 @@ class AppCoordinator:
                     "inference": (self.inference_service_sock
                                   if running_plan.npu_mode == "scheduled" else None),
                 },
+                # Do not infer a route for an adopted process.  Only a launch
+                # performed by the current supervisor mints this field.
+                frame_stream_contract=
+                    supervisor.normalise_managed_frame_stream_contract(
+                        current.get("frame_stream_contract")),
+                blocked_resource=None,
+                resource_owners=[],
+                dependency=None,
+                runtime_guard=None,
             )
             if running_plan.npu_mode == "scheduled":
                 policy = self.inference_registry.prepare(app_id, manifest)
@@ -168,6 +189,8 @@ class AppCoordinator:
         generation = int(rec["generation"])
         plan = resources.plan_manifest(
             manifest, appconfig.effective_values(manifest, app_id))
+        frame_stream_contract = supervisor.managed_frame_stream_contract(
+            plan.as_dict())
 
         # Scheduled NPU is a service dependency, not a claim on the direct
         # inference-control owner.  Until inferenced exists, keep the desired
@@ -187,6 +210,7 @@ class AppCoordinator:
                 self.inference_service_sock, ": " + detail if detail else "")
             rec = self.state.transition(app_id, "waiting_dependency",
                                         reason=reason, resource_plan=plan.as_dict(),
+                                        frame_stream_contract=frame_stream_contract,
                                         dependency=dependency)
             return self._result(app_id, rec, None, accepted=True)
 
@@ -204,7 +228,10 @@ class AppCoordinator:
                 raise
 
         self.state.transition(app_id, "waiting_resource", reason=None,
-                              resource_plan=plan.as_dict())
+                              blocked_resource=None, resource_owners=[],
+                              dependency=None, runtime_guard=None,
+                              resource_plan=plan.as_dict(),
+                              frame_stream_contract=frame_stream_contract)
         try:
             allocations = self.resources.reserve(app_id, instance_id,
                                                  generation, plan)
@@ -217,8 +244,11 @@ class AppCoordinator:
 
         allocation_ids = [a["allocation_id"] for a in allocations]
         self.state.transition(app_id, "starting", reason=None,
+                              blocked_resource=None, resource_owners=[],
+                              dependency=None, runtime_guard=None,
                               allocations=allocation_ids,
-                              resource_plan=plan.as_dict())
+                              resource_plan=plan.as_dict(),
+                              frame_stream_contract=frame_stream_contract)
         spawned_pid = {"value": None}
         startup_revoke = {"complete": inference_policy is None, "error": None}
 
@@ -255,6 +285,7 @@ class AppCoordinator:
             "instance_generation": generation,
             "result_gateway_sock": (self.result_gateway_sock
                                     if plan.result_gateway else None),
+            "frame_stream_contract": frame_stream_contract,
             "npu_mode": plan.npu_mode,
             "inference_service_sock": (self.inference_service_sock
                                        if plan.npu_mode == "scheduled" else None),
@@ -268,9 +299,13 @@ class AppCoordinator:
                 pid = launch(**kwargs)
             bound = self.resources.bind(instance_id, generation)
             self.state.transition(app_id, "ready", pid=pid, pgid=pid,
+                                  blocked_resource=None, resource_owners=[],
+                                  dependency=None, runtime_guard=None,
                                   allocations=[a["allocation_id"] for a in bound])
             rec = self.state.transition(
                 app_id, "running", pid=pid, pgid=pid, reason=None,
+                blocked_resource=None, resource_owners=[],
+                dependency=None, runtime_guard=None,
                 started_at=time.time(), next_retry_at=None,
                 allocations=[a["allocation_id"] for a in bound],
                 endpoints={
@@ -289,13 +324,44 @@ class AppCoordinator:
                 revoke_spawned_generation()
             except Exception:
                 pass
+            process_fenced = bool(
+                getattr(exc, "process_fence_active", False)
+                or self._has_run_record(app_id))
+            if process_fenced:
+                # The leader may have exited while an authenticated helper
+                # remains in its group.  Preserve this exact generation and all
+                # reservations; releasing either would allow an overlapping
+                # replacement while the old native/camera work is still live.
+                reason = "%s failed with process fence: %s" % (operation, exc)
+                if startup_revoke["error"] is not None:
+                    reason += "; inference authorization revoke failed: %s" % (
+                        startup_revoke["error"])
+                fence_pid = (spawned_pid["value"]
+                             or getattr(exc, "pid", None))
+                fence_pgid = getattr(exc, "pgid", None) or fence_pid
+                fields = {
+                    "reason": reason,
+                    "teardown_pending": True,
+                    "allocations": allocation_ids,
+                }
+                if isinstance(fence_pid, int) and not isinstance(fence_pid, bool):
+                    fields["pid"] = fence_pid
+                if isinstance(fence_pgid, int) and not isinstance(fence_pgid, bool):
+                    fields["pgid"] = fence_pgid
+                self.state.transition(app_id, "stopping", **fields)
+                if startup_revoke["error"] is not None and hasattr(exc, "add_note"):
+                    exc.add_note(
+                        "inference authorization revoke also failed: %s" %
+                        startup_revoke["error"])
+                raise
             if startup_revoke["error"] is not None:
                 reason = (
                     "%s failed: %s; inference authorization revoke failed: %s"
                     % (operation, exc, startup_revoke["error"])
                 )
                 self.state.transition(
-                    app_id, "failed", reason=reason, teardown_pending=True)
+                    app_id, "failed", reason=reason, teardown_pending=True,
+                    frame_stream_contract={"id": "", "kind": "none"})
                 if hasattr(exc, "add_note"):
                     exc.add_note(
                         "inference authorization revoke failed; previous "
@@ -307,6 +373,7 @@ class AppCoordinator:
             self.state.transition(
                 app_id, "failed", pid=None, pgid=None, allocations=[],
                 teardown_pending=False,
+                frame_stream_contract={"id": "", "kind": "none"},
                 reason="%s failed: %s" % (operation, exc))
             # Preserve the existing exception type/API contract for callers.
             raise
@@ -384,6 +451,7 @@ class AppCoordinator:
             # new generation could overlap a stale authorization record.
             self.state.transition(
                 app_id, "stopping", teardown_pending=True,
+                frame_stream_contract={"id": "", "kind": "none"},
                 reason="inference authorization revoke failed: %s" % revoke_error)
             raise CoordinatorError(
                 "application stopped but inference authorization revoke failed; "
@@ -393,6 +461,11 @@ class AppCoordinator:
             self.resources.release(rec["instance_id"], int(rec.get("generation", 0)))
         stopped = self.state.transition(app_id, "stopped", pid=None, pgid=None,
                                         allocations=[], reason=None, endpoints={},
+                                        blocked_resource=None,
+                                        resource_owners=[], dependency=None,
+                                        runtime_guard=None,
+                                        frame_stream_contract={
+                                            "id": "", "kind": "none"},
                                         teardown_pending=False,
                                         restart_history=[], next_retry_at=None,
                                         started_at=None)
@@ -413,6 +486,18 @@ class AppCoordinator:
         rec = self.state.get_app(app_id)
         if rec is None:
             return None
+        if pid is None and self._has_run_record(app_id):
+            # A dead leader is not equivalent to an empty process group.  The
+            # supervisor deliberately retains this identity while a trusted
+            # same-boot helper survives containment; reads must not release its
+            # reservations or erase the exact generation needed by stop retry.
+            if (rec.get("observed_state") != "stopping"
+                    or not rec.get("teardown_pending")):
+                rec = self.state.transition(
+                    app_id, "stopping", teardown_pending=True,
+                    reason=(rec.get("reason")
+                            or "persisted process fence remains active"))
+            return rec
         if pid is not None:
             live_phases = ("starting", "ready", "running", "degraded")
             if rec.get("observed_state") in live_phases:
@@ -446,6 +531,7 @@ class AppCoordinator:
             except Exception as exc:
                 self.state.transition(
                     app_id, "failed", teardown_pending=True,
+                    frame_stream_contract={"id": "", "kind": "none"},
                     reason="process exited; inference authorization revoke failed: %s"
                     % exc,
                     exited_at=time.time(), last_exit=last_exit,
@@ -463,6 +549,11 @@ class AppCoordinator:
                 reason = "process exited: %s" % last_exit
             rec = self.state.transition(app_id, target, pid=None, pgid=None,
                                         allocations=[], reason=reason,
+                                        blocked_resource=None,
+                                        resource_owners=[], dependency=None,
+                                        runtime_guard=None,
+                                        frame_stream_contract={
+                                            "id": "", "kind": "none"},
                                         teardown_pending=False,
                                         exited_at=time.time(), last_exit=last_exit,
                                         started_at=None)
@@ -497,6 +588,22 @@ class AppCoordinator:
         if rec is None:
             return {"id": app_id, "action": "absent"}
         running = self.supervisor.is_running(app_id)
+        if running is None and self._has_run_record(app_id):
+            # sweep_stale/drain_exits deliberately retain a same-boot record
+            # while its process group survives SIGKILL.  Do not reinterpret a
+            # dead leader as a normal crash and release/start over its helpers.
+            if (rec.get("observed_state") != "stopping"
+                    or not rec.get("teardown_pending")):
+                rec = self.state.transition(
+                    app_id, "stopping", teardown_pending=True,
+                    reason=(rec.get("reason")
+                            or "persisted process fence remains active"))
+            return {
+                "id": app_id,
+                "action": "teardown_pending",
+                "observed_state": rec.get("observed_state"),
+                "reason": rec.get("reason"),
+            }
         exit_info = self.supervisor.last_exit(app_id)
         if (isinstance(exit_info, dict) and rec.get("pid") is not None
                 and exit_info.get("pid") is not None
@@ -506,6 +613,28 @@ class AppCoordinator:
             exit_info = None
         if running is not None:
             rec = self.observe(app_id, running, exit_info)
+            violation = self.resources.runtime_guard()
+            if violation is not None:
+                # Preserve desired=running so the existing waiting-resource
+                # reconciler can restore this app only after the lower start
+                # threshold is satisfied.  Stop/release the exact generation
+                # first; a hot process must not retain camera/NPU/model leases.
+                self.stop(app_id, desired=state.DESIRED_RUNNING)
+                rec = self.state.transition(
+                    app_id, "waiting_resource",
+                    pid=None, pgid=None, allocations=[],
+                    frame_stream_contract={"id": "", "kind": "none"},
+                    blocked_resource=violation["resource"],
+                    resource_owners=[], reason=violation["message"],
+                    runtime_guard=violation,
+                )
+                return {
+                    "id": app_id,
+                    "action": "safety_stop",
+                    "observed_state": rec.get("observed_state"),
+                    "reason": rec.get("reason"),
+                    "runtime_guard": violation,
+                }
             stabilization = max(0, int(
                 ((manifest.get("health") or {}).get("stabilization_sec", 0))))
             started = rec.get("started_at") if rec else None
@@ -646,8 +775,9 @@ class AppCoordinator:
     def reconcile_allocations(self) -> list:
         live = []
         for app_id, rec in self.state.app_states().items():
-            if (rec.get("instance_id") and self.supervisor.is_running(app_id)
-                    is not None):
+            if (rec.get("instance_id")
+                    and (self.supervisor.is_running(app_id) is not None
+                         or self._has_run_record(app_id))):
                 live.append(rec["instance_id"])
         return self.resources.reconcile(live)
 
@@ -669,6 +799,9 @@ class AppCoordinator:
             "reason": rec.get("reason"),
             "allocations": list(rec.get("allocations") or []),
             "endpoints": dict(rec.get("endpoints") or {}),
+            "frame_stream_contract":
+                supervisor.normalise_managed_frame_stream_contract(
+                    rec.get("frame_stream_contract")),
         }
         out.update(extra)
         return out

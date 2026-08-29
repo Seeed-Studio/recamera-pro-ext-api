@@ -37,6 +37,7 @@ def test_policy_rejects_implicit_builtin_and_invalid_shape(tmp_path, monkeypatch
         [],
         {"osd": True},
         {"osd": {"enabled": 1}},
+        {"osd": {"enabled": True, "sources": []}},
         {"osd": {"sources": ["builtin"]}},
         {"osd": {"sources": ["../bad"]}},
         {"extra": {}},
@@ -47,6 +48,121 @@ def test_policy_rejects_implicit_builtin_and_invalid_shape(tmp_path, monkeypatch
             pass
         else:
             raise AssertionError("invalid visualization policy accepted: %r" % value)
+
+
+def test_old_empty_enabled_policy_is_disabled_across_read_bridge_and_api(
+        tmp_path, monkeypatch):
+    v = _module(tmp_path, monkeypatch)
+    path = os.environ["APPMGR_VISUALIZATION_CONFIG"]
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump({"osd": {"enabled": True, "sources": []}}, stream)
+    expected = {"osd": {"enabled": False, "sources": []}}
+    assert v.load() == expected
+
+    bridge = v.DetectionOsdBridge(sink_factory=_Sink)
+    assert bridge.status()["enabled"] is False
+    assert bridge.status()["sources"] == []
+
+    public = v.public_view(bridge)
+    assert public["osd"]["enabled"] is False
+    assert public["osd"]["sources"] == []
+    assert public["osd"]["status"]["enabled"] is False
+    assert public["osd"]["status"]["sources"] == []
+
+
+def test_effective_box_osd_capability_is_strict_and_non_mutating(
+        tmp_path, monkeypatch):
+    v = _module(tmp_path, monkeypatch)
+    legacy = {
+        "manifest_version": 2,
+        "id": "legacy-detector",
+        "render": {"schema_version": 1, "boxes": {"line_width": 2}},
+        "output": {"contract_version": 2, "fields": [{
+            "name": "box", "from": "results[].box", "coord": "pixel_xyxy",
+        }]},
+    }
+    assert v.supports_detection_stream_osd(legacy) is True
+    projected = v.effective_render(legacy)
+    assert projected == {
+        "schema_version": 1,
+        "boxes": {"line_width": 2},
+        "stream_osd": {"supported": ["boxes"], "default": False},
+    }
+    assert "stream_osd" not in legacy["render"]
+
+    explicit = json.loads(json.dumps(legacy))
+    explicit["render"]["stream_osd"] = {
+        "supported": ["boxes"], "default": False,
+    }
+    assert v.supports_detection_stream_osd(explicit) is True
+    assert v.effective_render(explicit) == explicit["render"]
+
+    explicit_osd_only = json.loads(json.dumps(explicit))
+    explicit_osd_only["render"].pop("boxes")
+    assert v.supports_detection_stream_osd(explicit_osd_only) is True
+    assert v.effective_render(explicit_osd_only) == \
+        explicit_osd_only["render"]
+
+    same_space_alias = json.loads(json.dumps(explicit_osd_only))
+    same_space_alias["output"]["fields"].append({
+        "name": "box_copy", "from": "results[].box",
+        "coord": "pixel_xyxy",
+    })
+    assert v.supports_detection_stream_osd(same_space_alias) is True
+
+    conflicting_alias = json.loads(json.dumps(same_space_alias))
+    conflicting_alias["output"]["fields"][1]["coord"] = "normalized_xyxy"
+    assert v.supports_detection_stream_osd(conflicting_alias) is False
+    assert "stream_osd" not in v.effective_render(conflicting_alias)
+
+    derived_only = json.loads(json.dumps(explicit_osd_only))
+    derived_only["output"]["fields"][0]["derived"] = True
+    assert v.supports_detection_stream_osd(derived_only) is False
+    assert "stream_osd" not in v.effective_render(derived_only)
+
+    variants = []
+    no_render_boxes = json.loads(json.dumps(legacy))
+    no_render_boxes["render"] = {"schema_version": 1, "keypoints": {}}
+    variants.append(no_render_boxes)
+    loose_output = json.loads(json.dumps(legacy))
+    loose_output["output"].pop("contract_version")
+    variants.append(loose_output)
+    loose_render = json.loads(json.dumps(legacy))
+    loose_render["render"].pop("schema_version")
+    variants.append(loose_render)
+    derived = json.loads(json.dumps(legacy))
+    derived["output"]["fields"][0]["derived"] = True
+    variants.append(derived)
+    unknown_space = json.loads(json.dumps(legacy))
+    unknown_space["output"]["fields"][0]["coord"] = "unknown"
+    variants.append(unknown_space)
+    unhashable_space = json.loads(json.dumps(legacy))
+    unhashable_space["output"]["fields"][0]["coord"] = ["pixel_xyxy"]
+    variants.append(unhashable_space)
+    duplicate = json.loads(json.dumps(legacy))
+    duplicate["output"]["fields"].append(dict(
+        duplicate["output"]["fields"][0]))
+    variants.append(duplicate)
+    explicit_deny = json.loads(json.dumps(legacy))
+    explicit_deny["render"]["stream_osd"] = {
+        "supported": [], "default": False,
+    }
+    variants.append(explicit_deny)
+    for value in variants:
+        assert v.supports_detection_stream_osd(value) is False
+        assert "stream_osd" not in v.effective_render(value) or value is explicit_deny
+
+    loose_positive_output = json.loads(json.dumps(explicit))
+    loose_positive_output["output"].pop("contract_version")
+    loose_positive_render = json.loads(json.dumps(explicit))
+    loose_positive_render["render"].pop("schema_version")
+    boolean_positive_render = json.loads(json.dumps(explicit))
+    boolean_positive_render["render"]["schema_version"] = True
+    for loose_positive in (
+            loose_positive_output, loose_positive_render,
+            boolean_positive_render):
+        assert v.supports_detection_stream_osd(loose_positive) is False
+        assert "stream_osd" not in v.effective_render(loose_positive)
 
 
 class _Sink:

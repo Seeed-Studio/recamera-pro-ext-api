@@ -9,6 +9,8 @@ Pins the invariants the kit/appmgr schema code now relies on:
     in this repo may reintroduce it -- two parallel shapes is what forced every
     reader to carry a double branch.
   * no `pipeline` key: nothing reads it, so a published one silently misleads.
+  * every primary sample declares a bounded raster icon that is packaged with
+    the release, while retaining its catalog `image` URL for old clients.
 
 Run:  python3 -m pytest apps/test_manifest_schema.py
 """
@@ -26,6 +28,8 @@ from kit import config as kitconfig                                # noqa: E402
 from market.appmgr import manifest as manifest_contract            # noqa: E402
 
 _MANIFESTS = sorted(glob.glob(os.path.join(_ROOT, "apps", "*", "manifest.json")))
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_MAX_ICON_BYTES = 1024 * 1024
 
 
 def _load(path):
@@ -42,6 +46,31 @@ class ManifestSchemaShapeTests(unittest.TestCase):
         for path in _MANIFESTS:
             with self.subTest(app=os.path.basename(os.path.dirname(path))):
                 self.assertEqual(manifest_contract.validate_manifest(_load(path)), 2)
+
+    def test_every_shipped_manifest_declares_a_safe_packaged_icon(self):
+        """Examples must work after install without a front-end asset rebuild."""
+        for path in _MANIFESTS:
+            app_dir = os.path.dirname(path)
+            app_id = os.path.basename(app_dir)
+            manifest = _load(path)
+            with self.subTest(app=app_id):
+                self.assertEqual(manifest.get("icon"), {
+                    "path": "icon.png",
+                    "media_type": "image/png",
+                })
+                # Keep the catalog thumbnail for old catalog clients while the
+                # declared package asset is authoritative after installation.
+                self.assertEqual(
+                    manifest.get("image"), f"/appcenter/apps/{app_id}.png")
+                icon_path = os.path.join(app_dir, manifest["icon"]["path"])
+                self.assertFalse(os.path.islink(icon_path))
+                self.assertTrue(os.path.isfile(icon_path))
+                size = os.path.getsize(icon_path)
+                self.assertGreater(size, len(_PNG_SIGNATURE))
+                self.assertLessEqual(size, _MAX_ICON_BYTES)
+                with open(icon_path, "rb") as icon_file:
+                    self.assertEqual(icon_file.read(len(_PNG_SIGNATURE)),
+                                     _PNG_SIGNATURE)
 
     def test_config_schema_is_grouped(self):
         for path in _MANIFESTS:

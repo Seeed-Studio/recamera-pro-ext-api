@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 2, "channel": "stable"},
+  "release": {"sequence": 3, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64", "python": "==3.11.*",
@@ -46,8 +46,9 @@
   "id": "facemesh-reader",
   "name": "Facemesh Reader",
   "name_zh": "面部疲劳检测",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/facemesh-reader.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",

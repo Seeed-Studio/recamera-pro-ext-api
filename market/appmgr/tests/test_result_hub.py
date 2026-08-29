@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import http.client
 import json
 import os
@@ -9,13 +10,18 @@ import struct
 import sys
 import threading
 import time
+from contextlib import contextmanager, nullcontext
 from http.server import ThreadingHTTPServer
+
+import pytest
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from appmgr import config as appconfig, paths, result_hub as result_hub_module, server  # noqa: E402
+from appmgr import (config as appconfig, paths,
+                    result_hub as result_hub_module, server,
+                    visualization as appvisualization)  # noqa: E402
 from appmgr.result_hub import (  # noqa: E402
     DATA_TYPES,
     SCHEMA,
@@ -89,10 +95,16 @@ def _manifest(app="demo", *, fields=None, camera=True, render=None):
     }
 
 
+def _managed_stream(camera=True):
+    return ({"id": "main", "kind": "frame.sock", "path": "/live/0"}
+            if camera else None)
+
+
 def _authorize(hub, identity, *, fields=None, camera=True, render=None):
     assert hub.refresh_app_manifest(
         identity, _manifest(identity["app_id"], fields=fields,
-                            camera=camera, render=render))
+                            camera=camera, render=render),
+        stream_contract=_managed_stream(camera))
     return identity
 
 
@@ -197,7 +209,155 @@ def test_app_geometry_is_unknown_without_reference_dimensions():
     assert frame["results"][0]["spaces"]["quad"] == "unknown"
 
 
-def test_manifest_geometry_supports_normalized_and_stream_is_trusted_main(tmp_path):
+def test_canonical_geometry_uses_manifest_space_and_bounded_render_policy():
+    payload = _app_payload(
+        results=[], events=[],
+        geometry=[
+            {"type": "point", "points": [[0.25, 0.75]],
+             "space": "pixel_points", "id": "nose",
+             "style": {"color": "#00FF00", "point_radius": 5,
+                       "filter": "url(javascript:bad)"}},
+            {"type": "line", "points": [[0.1, 0.1], [0.9, 0.9]],
+             "style": {"opacity": 2}},
+            {"type": "polygon", "points": [[0, 0], [1, 0], [1, 1]]},
+            {"type": "point", "points": [[2, 2]]},
+        ],
+        render={"geometry": {"types": ["polygon"]}},
+        stream_id="spoofed-substream",
+    )
+    envelopes = normalize_app_payload(
+        payload, _identity(generation=4),
+        trusted_render={
+            "schema_version": 1,
+            "geometry": {"types": ["point", "line"], "max_items": 8,
+                         "max_points": 8,
+                         "style": {"line_width": 2, "opacity": 0.8}},
+        },
+        trusted_geometry={
+            "results": {}, "events": {},
+            "primitives": {
+                "space": "normalized_points", "types": ["point", "line"],
+                "max_items": 8, "max_points": 8,
+                "style": {"line_width": 2, "opacity": 0.8},
+            },
+        },
+        trusted_stream={"id": "main", "kind": "frame.sock", "path": "/live/0"},
+    )
+    assert len(envelopes) == 1
+    frame = envelopes[0]
+    assert frame["type"] == "frame"
+    assert frame["source"]["generation"] == 4
+    assert frame["stream"]["id"] == "main"
+    assert frame["stream"]["coordinate_space"] == "normalized_xyxy"
+    assert frame["render"]["geometry"]["types"] == ["point", "line"]
+    assert frame["geometry"] == [
+        {"type": "point", "points": [[0.25, 0.75]],
+         "space": "normalized_points", "id": "nose",
+         "style": {"line_width": 2.0, "opacity": 0.8,
+                   "color": "#00ff00", "point_radius": 5.0}},
+        {"type": "line", "points": [[0.1, 0.1], [0.9, 0.9]],
+         "space": "normalized_points",
+         "style": {"line_width": 2.0, "opacity": 0.8}},
+    ]
+    assert "geometry" not in (frame["extensions"].get("payload") or {})
+
+
+def test_shared_geometry_fixture_is_exact_hub_sanitizer_output(monkeypatch):
+    """The React overlay suite reads this same file; keep one wire oracle."""
+    monkeypatch.setattr(result_hub_module.time, "time", lambda: 1_780_000_000.0)
+    render = {
+        "schema_version": 1,
+        "geometry": {
+            "types": ["point", "line", "polyline", "polygon"],
+            "max_items": 64, "max_points": 128,
+            "style": {"line_width": 2, "opacity": 0.8},
+        },
+    }
+    trusted_geometry = {
+        "results": {}, "events": {},
+        "primitives": {
+            "space": "normalized_points",
+            "types": ["point", "line", "polyline", "polygon"],
+            "max_items": 64, "max_points": 128,
+            "style": {"line_width": 2, "opacity": 0.8},
+        },
+    }
+    payload = _app_payload(
+        seq=7, pts=1.234567, gateway_ts=1_780_000_000.0,
+        stream_id="spoofed", render={"geometry": {"types": ["polygon"]}},
+        geometry=[
+            {"type": "point", "points": [[0.25, 0.75]],
+             "space": "pixel_points", "id": "nose", "label": "nose",
+             "score": 0.96,
+             "style": {"color": "#00FF00", "point_radius": 5,
+                       "filter": "url(javascript:bad)"}},
+            {"type": "line", "points": [[0.1, 0.1], [0.9, 0.9]]},
+            {"type": "polyline",
+             "points": [[0.1, 0.2], [0.3, 0.4], [0.6, 0.2]]},
+            {"type": "polygon",
+             "points": [[0.1, 0.1], [0.3, 0.1], [0.3, 0.3]],
+             "style": {"opacity": 0.5, "fill": True,
+                       "fill_color": "#0088FF80"}},
+        ],
+    )
+    actual = normalize_app_payload(
+        payload, _identity("demo", "i-4", 4), trusted_render=render,
+        trusted_geometry=trusted_geometry,
+        trusted_stream={"id": "main", "kind": "frame.sock", "path": "/live/0"},
+    )
+    fixture_path = os.path.join(
+        os.path.dirname(__file__), "fixtures", "geometry-v2-canonical.json")
+    with open(fixture_path, encoding="utf-8") as source:
+        expected = json.load(source)
+    assert actual == [expected]
+
+
+def test_geometry_fails_closed_without_installed_manifest_policy():
+    envelopes = normalize_app_payload(
+        _app_payload(results=[], geometry=[
+            {"type": "point", "points": [[1, 2]], "space": "pixel_points"}]),
+        _identity(), trusted_geometry={"results": {}, "events": {}},
+        trusted_stream={"id": "main", "kind": "frame.sock", "path": "/live/0"})
+    frame = next(value for value in envelopes if value["type"] == "frame")
+    assert frame["geometry"] == []
+
+
+def test_geometry_compiler_requires_strict_output_and_render_versions():
+    field = {
+        "name": "geometry", "from": "geometry[]", "type": "geometry[]",
+        "coord": "normalized_points",
+    }
+    policy = {"types": ["point"], "max_items": 4, "max_points": 2}
+    loose_output = {
+        "output": {"fields": [field]},
+        "render": {"schema_version": 1, "geometry": policy},
+    }
+    loose_render = {
+        "output": {"contract_version": 2, "fields": [field]},
+        "render": {"geometry": policy},
+    }
+    boolean_render = {
+        "output": {"contract_version": 2, "fields": [field]},
+        "render": {"schema_version": True, "geometry": policy},
+    }
+    strict = {
+        "output": {"contract_version": 2, "fields": [field]},
+        "render": {"schema_version": 1, "geometry": policy},
+    }
+    derived = copy.deepcopy(strict)
+    derived["output"]["fields"][0]["derived"] = True
+
+    assert result_hub_module._compile_geometry_contract(loose_output)["primitives"] == {}
+    assert result_hub_module._compile_geometry_contract(loose_render)["primitives"] == {}
+    assert result_hub_module._compile_geometry_contract(boolean_render)["primitives"] == {}
+    assert result_hub_module._compile_geometry_contract(derived)["primitives"] == {}
+    assert result_hub_module._compile_geometry_contract(strict)["primitives"] == {
+        "space": "normalized_points", "types": ["point"],
+        "max_items": 4, "max_points": 2, "style": {},
+    }
+
+
+def test_manifest_geometry_and_controlled_launch_stream_are_trusted(tmp_path):
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=NoopFormatter())
     identity = _authorize(hub, _identity("normalized-app"), fields=[
@@ -220,6 +380,65 @@ def test_manifest_geometry_supports_normalized_and_stream_is_trusted_main(tmp_pa
         "id": "main", "kind": "frame.sock", "path": "/live/0"}
     assert frame["results"][0]["spaces"]["box"] == "normalized_xyxy"
     assert event["events"][0]["spaces"]["box"] == "normalized_xyxy"
+
+
+def test_camera_permission_alone_cannot_claim_main_preview(tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    identity = _identity("permission-only")
+    # camera.frames is an authorization declaration, not evidence that this
+    # exact process generation opened the managed official frame source.
+    assert hub.refresh_app_manifest(identity, _manifest("permission-only"))
+    frame = hub.publish_app(_app_payload(
+        results=[{"box": [1, 2, 3, 4]}], stream_id="main"), identity)[0]
+    assert frame["stream"]["id"] == ""
+    assert frame["extensions"]["reported_stream_id"] == "main"
+    assert frame["extensions"]["stream_source"] == {
+        "id": "", "kind": "none"}
+
+
+def test_launch_stream_contract_is_strictly_whitelisted_and_generation_bound(
+        tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    manifest = _manifest("stream-app", fields=[
+        {"from": "results[].box", "coord": "pixel_xyxy"}])
+    first = _identity("stream-app", "official", 1)
+    contract = _managed_stream()
+    assert hub.refresh_app_manifest(first, manifest, stream_contract=contract)
+    contract["id"] = "mutated-after-refresh"
+    frame = hub.publish_app(_app_payload(
+        results=[{"box": [1, 2, 3, 4]}]), first)[0]
+    assert frame["stream"]["id"] == "main"
+    assert frame["extensions"]["stream_source"] == _managed_stream()
+
+    invalid = [
+        {"id": "main", "kind": "frame.sock"},
+        {"id": "main", "kind": "frame.sock", "path": "/live/1"},
+        {"id": "sub", "kind": "frame.sock", "path": "/live/0"},
+        {"id": "main", "kind": "ffmpeg", "path": "/live/0"},
+        {"id": "main", "kind": "frame.sock", "path": "/live/0",
+         "extra": True},
+        "main",
+    ]
+    for offset, candidate in enumerate(invalid, start=2):
+        current = _identity("stream-app", "generation-%s" % offset, offset)
+        assert hub.refresh_app_manifest(
+            current, manifest, stream_contract=candidate)
+        frame = hub.publish_app(_app_payload(
+            seq=offset, results=[{"box": [1, 2, 3, 4]}]), current)[0]
+        assert frame["stream"]["id"] == ""
+        assert frame["extensions"]["stream_source"] == {
+            "id": "", "kind": "none"}
+
+    # The replacement generation cannot inherit the preceding generation's
+    # main association when its launch supplied no contract.
+    replacement = _identity("stream-app", "no-stream", 20)
+    assert hub.refresh_app_manifest(replacement, manifest)
+    assert hub.publish_app(_app_payload(seq=20), first) == []
+    frame = hub.publish_app(_app_payload(
+        seq=20, results=[{"box": [1, 2, 3, 4]}]), replacement)[0]
+    assert frame["stream"]["id"] == ""
 
 
 def test_untrusted_geometry_aliases_and_conflicting_manifest_fail_closed(tmp_path):
@@ -283,6 +502,56 @@ def test_app_render_is_only_generation_bound_installed_manifest_data(tmp_path):
     assert hub.publish_app(malicious, newer) == []
 
 
+def test_result_hub_projects_strict_legacy_box_osd_capability(tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    identity = _identity("legacy-box", "instance-1", 1)
+    manifest = {
+        "manifest_version": 2,
+        "id": "legacy-box",
+        "render": {"schema_version": 1, "boxes": {"line_width": 2}},
+        "output": {"contract_version": 2, "fields": [{
+            "name": "box", "from": "results[].box", "coord": "pixel_xyxy",
+        }]},
+    }
+    assert hub.refresh_app_manifest(identity, manifest) is True
+    published = hub.publish_app(
+        _app_payload(results=[{"box": [1, 2, 30, 40]}]), identity)
+    frame = next(value for value in published if value["type"] == "frame")
+    assert frame["render"] == {
+        "schema_version": 1,
+        "boxes": {"line_width": 2},
+        "stream_osd": {"supported": ["boxes"], "default": False},
+    }
+    assert "stream_osd" not in manifest["render"]
+
+    denied = _identity("legacy-box", "instance-2", 2)
+    manifest["render"]["stream_osd"] = {
+        "supported": [], "default": False,
+    }
+    assert hub.refresh_app_manifest(denied, manifest) is True
+    denied_frame = next(value for value in hub.publish_app(
+        _app_payload(results=[{"box": [1, 2, 30, 40]}]), denied)
+        if value["type"] == "frame")
+    assert denied_frame["render"]["stream_osd"]["supported"] == []
+
+    explicit = _identity("legacy-box", "instance-3", 3)
+    manifest["render"] = {
+        "schema_version": 1,
+        "stream_osd": {"supported": ["boxes"], "default": False},
+    }
+    manifest["output"]["fields"].append({
+        "name": "box_copy", "from": "results[].box",
+        "coord": "pixel_xyxy",
+    })
+    assert hub.refresh_app_manifest(explicit, manifest) is True
+    explicit_frame = next(value for value in hub.publish_app(
+        _app_payload(results=[{"box": [1, 2, 30, 40]}]), explicit)
+        if value["type"] == "frame")
+    assert explicit_frame["render"] == manifest["render"]
+    assert explicit_frame["results"][0]["spaces"]["box"] == "pixel_xyxy"
+
+
 def test_manifest_render_cache_rejects_wrong_id_or_manifest_version(tmp_path):
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=NoopFormatter())
@@ -311,9 +580,22 @@ def test_gateway_hello_primes_render_once_off_result_hot_path(tmp_path, monkeypa
     def read_manifest(app_id):
         reads.append(app_id)
         return {"manifest_version": 2, "id": app_id,
-                "render": {"boxes": {"label": "label"}}}
+                "resources": {"claims": [{
+                    "name": "camera.frames", "mode": "shared",
+                    "required": True,
+                }]},
+                    "render": {"boxes": {"label": "label"}}}
 
     monkeypatch.setattr(server, "_read_manifest", read_manifest)
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: {
+        "instance_id": "instance-1",
+        "generation": 3,
+        "pid": os.getpid(),
+        "observed_state": "running",
+        "frame_stream_contract": {
+            "id": "main", "kind": "frame.sock", "path": "/live/0",
+        },
+    })
     resolved = server._resolve_result_identity(
         Coordinator(), hub, os.getpid(), "demo", "instance-1", 3)
     assert resolved == identity
@@ -322,7 +604,427 @@ def test_gateway_hello_primes_render_once_off_result_hot_path(tmp_path, monkeypa
             _app_payload(seq=seq, results=[{"box": [0, 0, 1, 1]}]),
             identity)[0]
         assert frame["render"]["boxes"]["label"] == "label"
+        assert frame["stream"]["id"] == "main"
+        assert frame["extensions"]["stream_source"] == _managed_stream()
     assert reads == ["demo"]
+
+
+def test_gateway_hello_losing_stop_race_cannot_revive_retired_generation(
+        tmp_path, monkeypatch):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    identity = _identity("race-stop", "old-run", 2)
+    live_state = {
+        "instance_id": "old-run", "generation": 2, "pid": os.getpid(),
+        "observed_state": "running",
+        "frame_stream_contract": _managed_stream(),
+    }
+
+    class Coordinator:
+        @staticmethod
+        def resolve_identity(*_args):
+            return dict(identity)
+
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: dict(live_state))
+    monkeypatch.setattr(server, "_read_manifest", lambda app_id: _manifest(app_id))
+    assert hub.refresh_app_manifest(
+        identity, _manifest("race-stop"), stream_contract=_managed_stream())
+    original_refresh = hub.refresh_app_manifest
+    published_inside_revoked_window = []
+
+    def stop_between_second_read_and_refresh(*args, **kwargs):
+        live_state["observed_state"] = "stopping"
+        hub.invalidate_app_manifest("race-stop")
+        refreshed = original_refresh(*args, **kwargs)
+        published_inside_revoked_window.extend(
+            hub.publish_app(_app_payload(seq=8), identity))
+        return refreshed
+
+    monkeypatch.setattr(hub, "refresh_app_manifest", stop_between_second_read_and_refresh)
+    assert server._resolve_result_identity(
+        Coordinator(), hub, os.getpid(), "race-stop", "old-run", 2) is None
+    assert hub.status()["active_app_generations"] == 0
+    assert hub.status()["generation_fence"]["retired_refresh_ignored"] == 1
+    assert published_inside_revoked_window == []
+    assert hub.publish_app(_app_payload(seq=9), identity) == []
+
+
+def test_nonlive_new_generation_clears_older_hub_snapshot(tmp_path, monkeypatch):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    old = _authorize(hub, _identity("waiting-app", "old-run", 1))
+    hub.publish_app(_app_payload(seq=1), old)
+    waiting = {
+        "app_id": "waiting-app", "instance_id": "new-run", "generation": 2,
+        "pid": None, "observed_state": "waiting_resource",
+        "frame_stream_contract": _managed_stream(),
+    }
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: dict(waiting))
+
+    assert server._refresh_result_manifest(
+        "waiting-app", _manifest("waiting-app"), waiting) is False
+    assert hub.status()["active_app_generations"] == 0
+    assert not hub.snapshot_records()
+
+
+def test_failed_stop_still_revokes_hub_generation_and_latest_frame(
+        tmp_path, monkeypatch):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    identity = _authorize(hub, _identity("stop-error", "old-run", 3))
+    hub.publish_app(_app_payload(seq=1), identity)
+    current = {
+        "instance_id": "old-run", "generation": 3, "pid": os.getpid(),
+        "observed_state": "running", "launch_mode": "managed",
+        "frame_stream_contract": _managed_stream(),
+    }
+
+    class Coordinator:
+        @staticmethod
+        def stop(_app_id):
+            current["observed_state"] = "stopping"
+            raise RuntimeError("teardown uncertain")
+
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: dict(current))
+    monkeypatch.setattr(server, "busy_gate", lambda **_kwargs: nullcontext())
+
+    with pytest.raises(RuntimeError, match="teardown uncertain"):
+        server.do_stop("stop-error")
+    assert hub.status()["active_app_generations"] == 0
+    assert not hub.snapshot_records()
+
+
+def test_managed_upgrade_rollback_fences_failed_generation_before_restore_and_refreshes_old(
+        tmp_path, monkeypatch):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    failed = _authorize(
+        hub, _identity("rollback-app", "failed-upgrade", 2), fields=[
+            {"from": "results[].box", "coord": "pixel_xyxy"},
+        ])
+    hub.publish_app(_app_payload(
+        seq=1, results=[{"box": [0, 0, 10, 10]}]), failed)
+    current = {
+        "instance_id": "failed-upgrade", "generation": 2, "pid": None,
+        "observed_state": "failed",
+        "frame_stream_contract": {"id": "", "kind": "none"},
+    }
+    restored = {
+        "app_id": "rollback-app", "instance_id": "restored-old-version",
+        "generation": 3, "pid": os.getpid(), "observed_state": "running",
+        "frame_stream_contract": _managed_stream(),
+    }
+    old_manifest = _manifest("rollback-app", fields=[
+        {"from": "results[].box", "coord": "pixel_xyxy"},
+    ])
+    order = []
+
+    class Coordinator:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            # The failed upgrade's presentation generation must be gone before
+            # the retained version is allowed to launch.
+            assert hub.status()["active_app_generations"] == 0
+            assert not hub.snapshot_records()
+            order.append("restore-start")
+            current.clear()
+            current.update(restored)
+            return dict(restored)
+
+    original_invalidate = hub.invalidate_app_manifest
+
+    def invalidate(*args, **kwargs):
+        order.append("invalidate")
+        return original_invalidate(*args, **kwargs)
+
+    monkeypatch.setattr(hub, "invalidate_app_manifest", invalidate)
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: dict(current))
+    monkeypatch.setattr(server.state, "clear_active_if", lambda _app_id: None)
+    monkeypatch.setattr(server.supervisor, "stop", lambda _app_id: {})
+    monkeypatch.setattr(server.installer, "restore_prev", lambda _app_id: True)
+    monkeypatch.setattr(server, "_read_manifest", lambda _app_id: old_manifest)
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: None)
+
+    assert server._rollback_upgrade(
+        "rollback-app", restore_active=False, restore_managed=True,
+    ) == "rollback-app"
+    assert order[:2] == ["invalidate", "restore-start"]
+    assert hub.status()["active_app_generations"] == 1
+    assert hub.publish_app(_app_payload(seq=2), failed) == []
+    frame = hub.publish_app(_app_payload(
+        seq=2, width=1280, height=720,
+        results=[{"box": [1, 2, 3, 4]}]), restored)[0]
+    assert frame["source"]["instance"] == "restored-old-version"
+    assert frame["stream"]["id"] == "main"
+    assert frame["extensions"]["stream_source"] == _managed_stream()
+
+
+def test_failed_upgrade_rollback_start_leaves_result_hub_empty(
+        tmp_path, monkeypatch):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    failed = _authorize(hub, _identity("rollback-fails", "upgrade", 4))
+    hub.publish_app(_app_payload(seq=1), failed)
+    attempted = _identity("rollback-fails", "old-version-attempt", 5)
+    current = {
+        **attempted, "observed_state": "running",
+        "frame_stream_contract": _managed_stream(),
+    }
+
+    class Coordinator:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            assert hub.status()["active_app_generations"] == 0
+            assert hub.refresh_app_manifest(
+                attempted, _manifest("rollback-fails"),
+                stream_contract=_managed_stream())
+            hub.publish_app(_app_payload(seq=2), attempted)
+            current["observed_state"] = "failed"
+            current["pid"] = None
+            current["frame_stream_contract"] = {"id": "", "kind": "none"}
+            raise server.supervisor.SupervisorError("old version also failed")
+
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server.state, "get_app", lambda _app_id: dict(current))
+    monkeypatch.setattr(server.state, "clear_active_if", lambda _app_id: None)
+    monkeypatch.setattr(server.supervisor, "stop", lambda _app_id: {})
+    monkeypatch.setattr(server.installer, "restore_prev", lambda _app_id: True)
+    monkeypatch.setattr(
+        server, "_read_manifest", lambda app_id: _manifest(app_id))
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: None)
+
+    assert server._rollback_upgrade(
+        "rollback-fails", restore_active=False, restore_managed=True,
+    ) is None
+    assert hub.status()["active_app_generations"] == 0
+    assert not hub.snapshot_records()
+    assert hub.publish_app(_app_payload(seq=3), attempted) == []
+
+
+def test_reconciler_observes_legacy_crash_revokes_and_tombstones_without_restart(
+        tmp_path, monkeypatch):
+    apps = tmp_path / "apps"
+    appmgr = tmp_path / "appmgr"
+    apps.mkdir()
+    appmgr.mkdir()
+    monkeypatch.setattr(paths, "APPS_DIR", str(apps))
+    monkeypatch.setattr(paths, "APPMGR_DIR", str(appmgr))
+    monkeypatch.setattr(paths, "STATE_FILE", str(apps / "state.json"))
+    monkeypatch.setattr(server, "_coordinator_instance", None)
+    monkeypatch.setattr(server, "_coordinator_layout", None)
+
+    app_id = "legacy-crash"
+    app_dir = paths.app_dir(app_id)
+    os.makedirs(app_dir)
+    manifest = _manifest(app_id)
+    manifest.update({"version": "1.0.0", "entry": "app.py"})
+    with open(os.path.join(app_dir, "manifest.json"), "w") as f:
+        json.dump(manifest, f)
+    server.cache_clear()
+    server.state.save({"active_app": None, "active_version": None})
+    started = server.state.begin_start(
+        app_id, "legacy-instance", version="1.0.0", launch_mode="legacy")
+    generation = int(started["generation"])
+    server.state.transition(
+        app_id, "running", pid=4321, pgid=4321,
+        frame_stream_contract=_managed_stream(), started_at=time.time())
+
+    revocations = []
+
+    class Registry:
+        @staticmethod
+        def revoke(pid, **identity):
+            revocations.append((pid, identity))
+
+    coord = server._coordinator()
+    coord.inference_registry = Registry()
+    monkeypatch.setattr(server.supervisor, "reap_children", lambda: 0)
+    monkeypatch.setattr(server.supervisor, "drain_exits", lambda: [])
+    monkeypatch.setattr(server.supervisor, "sweep_stale", lambda: [])
+    monkeypatch.setattr(server.supervisor, "is_running", lambda _app_id: None)
+    monkeypatch.setattr(
+        server.supervisor, "last_exit",
+        lambda _app_id: {"pid": 4321, "exit_code": 137})
+
+    class Events:
+        published = []
+
+        @classmethod
+        def publish(cls, *args, **kwargs):
+            cls.published.append((args, kwargs))
+
+    class Operations:
+        events = Events()
+
+    monkeypatch.setattr(server, "_operation_manager", lambda: Operations())
+
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    identity = _authorize(
+        hub, {"app_id": app_id, "instance_id": "legacy-instance",
+              "generation": generation, "pid": 4321})
+    hub.publish_app(_app_payload(seq=1), identity)
+    controls = []
+
+    class WebSockets:
+        @staticmethod
+        def purge_source(_source_id):
+            return 0
+
+        @staticmethod
+        def broadcast_control(envelope):
+            controls.append(envelope)
+
+    hub._ws = WebSockets()
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+
+    result = server._reconcile_once()
+
+    assert result == [{
+        "id": app_id, "action": "legacy-unmanaged",
+        "observed_state": "failed",
+    }]
+    assert revocations == [(4321, {
+        "app_id": app_id, "instance_id": "legacy-instance",
+        "generation": generation,
+    })]
+    record = server.state.get_app(app_id)
+    assert record["observed_state"] == "failed"
+    assert record["pid"] is None
+    assert record["frame_stream_contract"] == {"id": "", "kind": "none"}
+    hub._ws = None
+    assert hub.status()["active_app_generations"] == 0
+    assert not hub.snapshot_records()
+    assert hub.publish_app(_app_payload(seq=2), identity) == []
+    assert [item["type"] for item in controls] == ["source_invalidated"]
+    assert controls[0]["source"] == {
+        "kind": "app", "id": app_id, "app_id": app_id,
+        "instance": "legacy-instance", "generation": generation,
+        "trust": "local",
+    }
+
+
+def test_reconciler_missing_install_rechecks_under_gate_and_preserves_reinstalled_generation(
+        tmp_path, monkeypatch):
+    apps = tmp_path / "apps"
+    appmgr = tmp_path / "appmgr"
+    apps.mkdir()
+    appmgr.mkdir()
+    monkeypatch.setattr(paths, "APPS_DIR", str(apps))
+    monkeypatch.setattr(paths, "APPMGR_DIR", str(appmgr))
+    monkeypatch.setattr(paths, "STATE_FILE", str(apps / "state.json"))
+
+    app_id = "reinstall-race"
+    server.state.save({"active_app": None, "active_version": None})
+    started = server.state.begin_start(
+        app_id, "reinstalled-instance", version="2.0.0",
+        launch_mode="managed")
+    generation = int(started["generation"])
+    server.state.transition(
+        app_id, "running", pid=5432, pgid=5432,
+        frame_stream_contract=_managed_stream(), started_at=time.time())
+    identity = {
+        "app_id": app_id, "instance_id": "reinstalled-instance",
+        "generation": generation, "pid": 5432,
+    }
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    _authorize(hub, identity)
+    hub.publish_app(_app_payload(seq=1), identity)
+    monkeypatch.setattr(server, "_result_hub_instance", hub)
+
+    class Coordinator:
+        @staticmethod
+        def reconcile_one(_app_id, **_kwargs):
+            assert os.path.isdir(paths.app_dir(app_id))
+            return {
+                "id": app_id, "action": "healthy", "pid": 5432,
+                "observed_state": "running",
+            }
+
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: None)
+    monkeypatch.setattr(server.supervisor, "reap_children", lambda: 0)
+    monkeypatch.setattr(server.supervisor, "drain_exits", lambda: [])
+    monkeypatch.setattr(server.supervisor, "sweep_stale", lambda: [])
+
+    gate_calls = []
+
+    @contextmanager
+    def raced_gate(**_kwargs):
+        gate_calls.append(len(gate_calls) + 1)
+        if len(gate_calls) == 2:
+            # The first gate is the stale-process sweep.  Reinstallation wins
+            # while this app's reconcile tick is waiting for the mutation gate.
+            directory = paths.app_dir(app_id)
+            os.makedirs(directory)
+            manifest = _manifest(app_id)
+            manifest.update({"version": "2.0.0", "entry": "app.py"})
+            with open(os.path.join(directory, "manifest.json"), "w") as f:
+                json.dump(manifest, f)
+            server.cache_clear()
+        yield
+
+    monkeypatch.setattr(server, "busy_gate", raced_gate)
+
+    assert server._reconcile_once() == [{
+        "id": app_id, "action": "healthy", "pid": 5432,
+        "observed_state": "running",
+    }]
+    assert gate_calls == [1, 2]
+    record = server.state.get_app(app_id)
+    assert record["observed_state"] == "running"
+    assert record["instance_id"] == "reinstalled-instance"
+    assert record["frame_stream_contract"] == _managed_stream()
+    assert hub.status()["active_app_generations"] == 1
+    assert hub.publish_app(_app_payload(seq=2), identity)
+
+
+def test_ws_generation_change_sends_exact_tombstone_and_cas_preserves_winner(
+        tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter()).start()
+    old = _authorize(hub, _identity("demo", "old-run", 4), fields=[
+        {"from": "results[].box", "coord": "pixel_xyxy"}])
+    ws = _WsReader(hub.ws_port)
+    ws.sock.settimeout(2)
+    try:
+        assert ws.json()["type"] == "hello"
+        assert ws.json()["type"] == "snapshot"
+        hub.publish_app(_app_payload(
+            seq=1, results=[{"box": [0, 0, 10, 10]}]), old)
+        assert ws.json()["type"] == "frame"
+
+        current = _identity("demo", "new-run", 5)
+        assert hub.refresh_app_manifest(
+            current, _manifest("demo"), stream_contract=_managed_stream())
+        tombstone = ws.json()
+        assert tombstone["type"] == "source_invalidated"
+        assert tombstone["source"] == {
+            "kind": "app", "id": "demo", "app_id": "demo",
+            "instance": "old-run", "generation": 4, "trust": "local",
+        }
+        assert not [record for record in hub.snapshot_records()
+                    if record.source_id == "demo"]
+
+        # A delayed old control path may revoke only the tuple it authenticated;
+        # the winning generation and its trusted stream remain intact.
+        assert hub.invalidate_app_manifest("demo", identity=old) is False
+        frame = hub.publish_app(_app_payload(
+            seq=2, width=1280, height=720,
+            results=[{"box": [1, 2, 3, 4]}]), current)[0]
+        assert frame["source"]["instance"] == "new-run"
+        assert frame["stream"]["id"] == "main"
+        assert ws.json()["source"]["instance"] == "new-run"
+    finally:
+        ws.close()
+        hub.stop()
 
 
 def test_system_adapter_preserves_box_object_and_marks_normalized_space():
@@ -592,6 +1294,74 @@ def test_generation_refresh_purges_only_that_apps_old_snapshot_records(tmp_path)
     fence = hub.status()["generation_fence"]
     assert fence["records_purged"] == 3
     assert fence["stale_rejected"] == 1
+
+
+def test_manifest_refresh_cannot_downgrade_generation_or_replace_same_generation(
+        tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter())
+    current = _identity("monotonic-app", "current-instance", 2)
+    current_manifest = _manifest(
+        "monotonic-app",
+                fields=[{
+                    "name": "box", "from": "results[].box",
+                    "coord": "pixel_xyxy",
+                }],
+        render={"boxes": {"color_by": "label", "line_width": 2}},
+    )
+    assert hub.refresh_app_manifest(
+        current, current_manifest, stream_contract=_managed_stream())
+    assert hub.publish_app(_app_payload(
+        seq=20, width=1280, height=720,
+        results=[{"box": [10, 20, 30, 40], "label": "current"}],
+        events=[{"kind": "fall", "event_id": 20}],
+        summary={"state": "current"}), current)
+
+    before_records = json.dumps(
+        [record.raw for record in hub.snapshot_records()], sort_keys=True)
+    before_contract = hub._trusted_app_contract(current)
+    before_replay = dict(hub.status()["event_replay"])
+    before_purged = hub.status()["generation_fence"]["records_purged"]
+
+    # A delayed old hello may arrive after its manifest disappeared or was
+    # replaced.  It is still a successful no-op: returning False would make
+    # server._resolve_result_identity invalidate the current generation.
+    old = _identity("monotonic-app", "old-instance", 1)
+    assert hub.refresh_app_manifest(old, None, stream_contract={
+        "id": "sub", "kind": "ffmpeg", "path": "/live/1"})
+
+    # A generation number uniquely names one instance.  Another instance with
+    # the same number must not replace the current contract either.
+    collision = _identity("monotonic-app", "collision-instance", 2)
+    replacement_manifest = _manifest(
+        "monotonic-app",
+        fields=[{"from": "results[].box", "coord": "normalized_xyxy"}],
+        render={"boxes": {"color_by": "score", "line_width": 9}},
+    )
+    assert hub.refresh_app_manifest(
+        collision, replacement_manifest, stream_contract=None)
+
+    assert hub._is_current_app_identity(current)
+    assert not hub._is_current_app_identity(old)
+    assert not hub._is_current_app_identity(collision)
+    assert hub._trusted_app_contract(current) == before_contract
+    assert json.dumps(
+        [record.raw for record in hub.snapshot_records()], sort_keys=True
+    ) == before_records
+    assert hub.status()["event_replay"] == before_replay
+    fence = hub.status()["generation_fence"]
+    assert fence["records_purged"] == before_purged
+    assert fence["stale_refresh_ignored"] == 2
+
+    assert hub.publish_app(_app_payload(seq=21), old) == []
+    assert hub.publish_app(_app_payload(seq=22), collision) == []
+    frame = hub.publish_app(_app_payload(
+        seq=23, width=1280, height=720,
+        results=[{"box": [20, 30, 40, 50], "label": "still-current"}]),
+        current)[0]
+    assert frame["source"]["instance"] == "current-instance"
+    assert frame["source"]["generation"] == 2
+    assert frame["stream"]["id"] == "main"
 
 
 def test_generation_final_cas_blocks_inflight_old_publish_and_future_wall(
@@ -925,10 +1695,24 @@ def test_observer_is_bounded_async_mutation_safe_and_failure_isolated(tmp_path):
 def test_observer_revoke_orders_inflight_old_generation_before_new(tmp_path):
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=NoopFormatter(), observer_queue=4)
-    old_identity = _authorize(
-        hub, _identity(instance="old", generation=1),
-        fields=[{"from": "results[].box", "coord": "pixel_xyxy"}],
-        render={"stream_osd": {"supported": ["boxes"]}})
+    def osd_manifest():
+        value = _manifest(
+            "demo",
+            fields=[{
+                "name": "box", "from": "results[].box",
+                "coord": "pixel_xyxy",
+            }],
+            render={
+                "schema_version": 1,
+                "boxes": {},
+                "stream_osd": {"supported": ["boxes"], "default": False},
+            })
+        value["output"]["contract_version"] = 2
+        return value
+
+    old_identity = _identity(instance="old", generation=1)
+    assert hub.refresh_app_manifest(
+        old_identity, osd_manifest(), stream_contract=_managed_stream())
 
     class BlockingBridge:
         def __init__(self):
@@ -972,10 +1756,7 @@ def test_observer_revoke_orders_inflight_old_generation_before_new(tmp_path):
         new_identity = _identity(instance="new", generation=2)
         assert hub.refresh_app_manifest(
             new_identity,
-            _manifest(
-                "demo",
-                fields=[{"from": "results[].box", "coord": "pixel_xyxy"}],
-                render={"stream_osd": {"supported": ["boxes"]}}))
+            osd_manifest())
         # Revocation reaches the bridge before refresh returns.  The blocked
         # old callback will therefore fail its epoch check before side effects.
         with bridge.lock:
@@ -1001,7 +1782,9 @@ def test_observer_revoke_orders_inflight_old_generation_before_new(tmp_path):
             assert details["identity"]["generation"] == 2
             assert details["capability"]["valid"] is True
             assert details["capability"]["render"]["stream_osd"] == {
-                "supported": ["boxes"]}
+                "supported": ["boxes"], "default": False}
+            assert details["capability"]["stream"] == {
+                "id": "", "kind": "none"}
         observer_status = hub.status()["observers"]
         assert observer_status["invalidations"] == 1
         assert observer_status["invalidated_queued"] >= 1
@@ -1475,7 +2258,8 @@ def test_formatted_projection_renders_complete_legacy_batch_once(tmp_path, monke
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=ResultViewFormatter())
     identity = _identity("batch-app")
-    assert hub.refresh_app_manifest(identity, manifest)
+    assert hub.refresh_app_manifest(
+        identity, manifest, stream_contract=_managed_stream())
     published = hub.publish_app(_app_payload(
         results=[{"box": [1, 2, 30, 40], "label": "person"}],
         events=[{"kind": "fall", "event_id": 7}],
@@ -1489,7 +2273,7 @@ def test_formatted_projection_renders_complete_legacy_batch_once(tmp_path, monke
     assert hub.status()["formatted_batches"] == 1
     formatted = records[0].formatted[0]
     assert formatted["payload"] == "1|1|alarm|12.5|20.0|main"
-    assert formatted["render"] == manifest["render"]
+    assert formatted["render"] == appvisualization.effective_render(manifest)
     assert formatted["extensions"]["batch_types"] == [
         "frame", "status", "event"]
 

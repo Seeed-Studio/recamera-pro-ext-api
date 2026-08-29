@@ -11,7 +11,8 @@ import tarfile
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from appmgr import installer, manifest as contract, paths, pythonenv  # noqa: E402
+from appmgr import (installer, manifest as contract, paths, pythonenv,
+                    resources)  # noqa: E402
 
 
 def manifest_v2(version="1.0.0", sequence=1):
@@ -52,12 +53,18 @@ def manifest_v2(version="1.0.0", sequence=1):
 
 
 def package_v2(path, *, version="1.0.0", sequence=1, marker="ONE",
-               tamper_payload=False):
+               tamper_payload=False, icon_bytes=None,
+               icon_path="assets/icon.png", icon_media_type="image/png"):
     manifest = manifest_v2(version, sequence)
+    if icon_bytes is not None:
+        manifest["icon"] = {
+            "path": icon_path, "media_type": icon_media_type}
     manifest_bytes = contract.canonical_json(manifest)
     original_entry = f"# {marker}\n".encode()
     files = {"manifest.json": manifest_bytes, "src/main.py": original_entry,
              "marker.txt": marker.encode()}
+    if icon_bytes is not None:
+        files[icon_path] = icon_bytes
     records = {
         name: {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
         for name, data in files.items()
@@ -137,6 +144,52 @@ def test_valid_v2_install_builds_and_activates_matching_environment(layout):
     assert installed_version(layout) == "1.0.0"
     assert pythonenv.current_release_id(app_id) == lock["release_id"]
     assert os.path.isfile(pythonenv.current_python(app_id))
+
+
+def test_declared_v2_icon_is_installed_only_when_magic_matches_media(layout):
+    png = b"\x89PNG\r\n\x1a\n" + b"card"
+    package, manifest, _ = package_v2(
+        str(layout / "icon.tar.gz"), icon_bytes=png)
+
+    installer.install(package, allow_unsigned=True)
+
+    icon_path = layout / "apps" / "v2-app" / manifest["icon"]["path"]
+    assert icon_path.read_bytes() == png
+
+    mismatch, _, _ = package_v2(
+        str(layout / "icon-mismatch.tar.gz"), version="2.0.0", sequence=2,
+        icon_bytes=png, icon_path="assets/icon.jpg",
+        icon_media_type="image/jpeg")
+    with pytest.raises(installer.InstallError, match="bytes do not match"):
+        installer.install(mismatch, allow_unsigned=True)
+    assert installed_version(layout) == "1.0.0"
+
+
+def test_install_validates_static_resources_but_ignores_live_reservations(layout):
+    package, manifest, _ = package_v2(str(layout / "resource-conflict.tar.gz"))
+    manager = resources.ResourceManager(
+        paths.resource_state_file(),
+        runtime_probe=lambda: {
+            "mem_available_mb": 4096,
+            "storage_free_mb": 16384,
+            "temperature_c": 40.0,
+        })
+    manager.reserve(
+        "legacy-holder", "holder-instance", 1,
+        resources.Plan(requests=(
+            resources.Request("npu.direct", "exclusive", 1, 1),
+        ), npu_mode="legacy-direct"))
+    plan = resources.plan_manifest(manifest)
+    assert manager.conflicts(plan), "fixture must contain a real live conflict"
+
+    # Package installation is storage/contract admission only. The same plan
+    # is checked and reserved atomically later by Coordinator.start().
+    app_id, installed_manifest = installer.install(
+        package, allow_unsigned=True)
+
+    assert app_id == "v2-app"
+    assert installed_manifest["resources"] == manifest["resources"]
+    assert installed_version(layout) == "1.0.0"
 
 
 def test_schema_and_release_bom_fail_before_existing_release_changes(layout):

@@ -1,6 +1,7 @@
 """Manifest-v2 build tests: shared validation plus deterministic lock/BOM."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -19,6 +20,10 @@ from appmgr import manifest as contract
 _SPEC = importlib.util.spec_from_file_location("packaging_build_v2", os.path.join(_HERE, "build.py"))
 build_mod = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(build_mod)
+
+ICON_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmM"
+    "IQAAAABJRU5ErkJggg==")
 
 
 def manifest_v2(**updates):
@@ -84,8 +89,11 @@ def tar_payload(package):
 
 
 def test_v2_build_embeds_one_canonical_release_lock_and_bom(tmp_path):
-    source = make_source(str(tmp_path / "app"), manifest_v2(), {
+    source = make_source(str(tmp_path / "app"), manifest_v2(icon={
+        "path": "icon.png", "media_type": "image/png",
+    }), {
         "data/labels.txt": b"cat\ndog\n",
+        "icon.png": ICON_PNG,
     })
     package = build_mod.build(source, str(tmp_path / "dist"))
     members, contents = tar_payload(package)
@@ -93,10 +101,15 @@ def test_v2_build_embeds_one_canonical_release_lock_and_bom(tmp_path):
     assert names.count(contract.RELEASE_LOCK_PATH) == 1
     assert names.count(contract.BOM_PATH) == 1
     assert "src/main.py" in names and "app.py" not in names
+    assert contents["icon.png"] == ICON_PNG
 
     records = {
         name: {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
         for name, data in contents.items() if name not in contract.RESERVED_PACKAGE_PATHS
+    }
+    assert records["icon.png"] == {
+        "sha256": hashlib.sha256(ICON_PNG).hexdigest(),
+        "size": len(ICON_PNG),
     }
     value = json.loads(contents["manifest.json"])
     lock = json.loads(contents[contract.RELEASE_LOCK_PATH])

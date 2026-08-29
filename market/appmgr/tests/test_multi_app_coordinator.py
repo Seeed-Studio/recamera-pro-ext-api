@@ -1,12 +1,13 @@
 import json
 import os
 import sys
+import time
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
-from appmgr import coordinator, paths, resources, state
+from appmgr import coordinator, paths, resources, state, supervisor
 
 
 class FakeSupervisor:
@@ -19,9 +20,13 @@ class FakeSupervisor:
         self.events = events if events is not None else []
         self.stop_hook = None
         self.force_stop = False
+        self.run_records = set()
 
     def is_running(self, app_id):
         return self.running.get(app_id)
+
+    def has_run_record(self, app_id):
+        return app_id in self.run_records
 
     def start(self, app_id, **kwargs):
         assert app_id not in self.running, "max_instances=1 violated"
@@ -140,11 +145,79 @@ def test_two_cpu_apps_run_concurrently_and_same_app_is_idempotent(managed):
                for call in fake.starts)
     assert all(call[1]["instance_id"] for call in fake.starts)
 
+    # Admission diagnostics belong only to waiting_resource/dependency.  A
+    # successful stop must clear old persisted values so later API snapshots
+    # cannot report owners from an unrelated generation.
+    state.transition(
+        "cpu-a", "running",
+        blocked_resource="camera.frame:camera-0",
+        resource_owners=["old-owner"],
+        dependency={"available": False},
+        runtime_guard={"resource": "thermal.runtime"},
+    )
     stopped = coord.stop("cpu-a")
     assert stopped["observed_state"] == "stopped"
+    stopped_state = state.get_app("cpu-a")
+    assert stopped_state["blocked_resource"] is None
+    assert stopped_state["resource_owners"] == []
+    assert stopped_state["dependency"] is None
+    assert stopped_state["runtime_guard"] is None
+    # Assert the raw durable document too: state.get_app() normalises reads and
+    # could otherwise hide a regression that leaves stale owners on disk.
+    with open(paths.STATE_FILE) as state_file:
+        persisted = json.load(state_file)["apps"]["cpu-a"]
+    assert persisted["blocked_resource"] is None
+    assert persisted["resource_owners"] == []
+    assert persisted["dependency"] is None
+    assert persisted["runtime_guard"] is None
     assert fake.is_running("cpu-b") == b["pid"]
     allocations = manager.snapshot()["allocations"]
     assert {item["app_id"] for item in allocations} == {"cpu-b"}
+
+
+def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
+        managed):
+    coord, fake, manager = managed
+    sample = {
+        "mem_available_mb": 4096,
+        "storage_free_mb": 16384,
+        "temperature_c": 50.0,
+    }
+    manager._runtime_probe = lambda: dict(sample)
+    manifest = _manifest("thermal-app", [{
+        "name": "result.publish", "mode": "brokered", "required": True,
+    }])
+    manifest["resources"]["limits"] = {
+        "memory_mb": 128,
+        "storage_mb": 16,
+        "cpu_percent": 100,
+        "shutdown_grace_sec": 5,
+    }
+    started = coord.start("thermal-app", manifest=manifest)
+    assert started["observed_state"] == "running"
+
+    sample["temperature_c"] = 85.1
+    stopped = coord.reconcile_one(
+        "thermal-app", manifest=manifest,
+        launch=lambda **kwargs: fake.start("thermal-app", **kwargs),
+        now=100.0, retry_interval=0.01,
+    )
+    assert stopped["action"] == "safety_stop"
+    assert stopped["observed_state"] == "waiting_resource"
+    assert stopped["runtime_guard"]["resource"] == "thermal.runtime"
+    assert fake.is_running("thermal-app") is None
+    assert state.get_app("thermal-app")["desired_state"] == state.DESIRED_RUNNING
+    assert not [item for item in manager.snapshot()["allocations"]
+                if item["app_id"] == "thermal-app"]
+
+    sample["temperature_c"] = 70.0
+    restored = coord.reconcile_one(
+        "thermal-app", manifest=manifest,
+        launch=lambda **kwargs: fake.start("thermal-app", **kwargs),
+        now=time.time() + 2.0, retry_interval=0.01,
+    )
+    assert restored["observed_state"] == "running"
+    assert restored["generation"] > started["generation"]
 
 
 def test_unbound_starting_observation_is_not_misclassified_as_a_crash(managed):
@@ -328,10 +401,116 @@ def test_forced_stop_revokes_exact_generation_before_sigkill(managed):
     )]
 
 
+def test_supervisor_stop_error_retains_generation_and_allocations(
+        managed, monkeypatch):
+    coord, fake, manager = managed
+    app_id = "stuck-stop"
+    claims = [{"name": "npu.rknn", "mode": "scheduled", "required": True}]
+    started = coord.start(app_id, manifest=_manifest(app_id, claims))
+    allocation_ids = list(started["allocations"])
+
+    def failed_stop(failed_app_id, **_kwargs):
+        fake.events.append(("supervisor.stop", failed_app_id))
+        raise RuntimeError("trusted process group remains alive")
+
+    monkeypatch.setattr(fake, "stop", failed_stop)
+
+    with pytest.raises(RuntimeError, match="process group remains alive"):
+        coord.stop(app_id)
+
+    retained = state.get_app(app_id)
+    assert retained["observed_state"] == "stopping"
+    assert retained["teardown_pending"] is True
+    assert retained["pid"] == started["pid"]
+    assert retained["instance_id"] == started["instance_id"]
+    assert retained["generation"] == started["generation"]
+    assert retained["allocations"] == allocation_ids
+    assert fake.running[app_id] == started["pid"]
+    assert [item["allocation_id"] for item in
+            manager.allocations_for(started["instance_id"])] == allocation_ids
+
+
+def test_start_process_fence_retains_generation_resources_and_reconcile_waits(
+        managed):
+    coord, fake, manager = managed
+    app_id = "startup-fence"
+    manifest = _manifest(app_id, [
+        {"name": "npu.rknn", "mode": "scheduled", "required": True},
+    ])
+    failed_pid = 7333
+
+    def launch(**kwargs):
+        fake.running[app_id] = failed_pid
+        kwargs["on_spawn"](failed_pid)
+        # Model a leader exit whose same-boot helper remains in the committed
+        # run.pgid.  is_running() is now false, but the identity is still the
+        # only safe teardown/retry authority.
+        fake.running.pop(app_id)
+        fake.run_records.add(app_id)
+        raise supervisor.ProcessFenceError(
+            app_id, failed_pid, failed_pid,
+            leader_alive=False, group_alive=True)
+
+    with pytest.raises(supervisor.ProcessFenceError):
+        coord.start(app_id, manifest=manifest, launch=launch)
+
+    retained = state.get_app(app_id)
+    allocation_ids = list(retained["allocations"])
+    assert retained["observed_state"] == "stopping"
+    assert retained["teardown_pending"] is True
+    assert retained["pid"] == failed_pid
+    assert retained["pgid"] == failed_pid
+    assert retained["instance_id"]
+    assert retained["generation"] > 0
+    assert allocation_ids
+    assert [item["allocation_id"] for item in manager.allocations_for(
+        retained["instance_id"])] == allocation_ids
+
+    observed = coord.observe(app_id, None)
+    assert observed["observed_state"] == "stopping"
+    assert observed["teardown_pending"] is True
+    assert observed["allocations"] == allocation_ids
+
+    reconciled = coord.reconcile_one(
+        app_id, manifest=manifest,
+        launch=lambda **_kwargs: pytest.fail("fenced app must not restart"))
+    assert reconciled["action"] == "teardown_pending"
+    assert state.get_app(app_id)["allocations"] == allocation_ids
+    assert manager.allocations_for(retained["instance_id"])
+
+
+def test_allocation_reconcile_treats_retained_run_record_as_live(managed):
+    coord, fake, manager = managed
+    app_id = "boot-residual-group"
+    started = coord.start(app_id, manifest=_manifest(app_id))
+    instance_id = started["instance_id"]
+    allocation_ids = [item["allocation_id"] for item in
+                      manager.allocations_for(instance_id)]
+    assert allocation_ids
+
+    # Model daemon restart after the leader exited but supervisor retained the
+    # same-boot identity for a helper that survived containment.
+    fake.running.pop(app_id)
+    fake.run_records.add(app_id)
+    assert coord.reconcile_allocations() == []
+    assert [item["allocation_id"] for item in
+            manager.allocations_for(instance_id)] == allocation_ids
+
+    # Once a successful teardown retires that identity, ordinary startup
+    # reconciliation may reclaim the now-stale reservations.
+    fake.run_records.remove(app_id)
+    assert set(coord.reconcile_allocations()) == set(allocation_ids)
+    assert manager.allocations_for(instance_id) == []
+
+
 def test_crash_observation_revokes_without_waiting_for_cooperative_stop(managed):
     coord, fake, manager = managed
-    claims = [{"name": "npu.rknn", "mode": "scheduled", "required": True}]
+    claims = [
+        {"name": "npu.rknn", "mode": "scheduled", "required": True},
+        {"name": "camera.frames", "mode": "shared", "required": True},
+    ]
     started = coord.start("crashed", manifest=_manifest("crashed", claims))
+    assert started["frame_stream_contract"]["kind"] == "frame.sock"
     fake.crash("crashed", code=137)
 
     offset = len(fake.events)
@@ -339,6 +518,7 @@ def test_crash_observation_revokes_without_waiting_for_cooperative_stop(managed)
 
     assert fake.events[offset:] == [("registry.revoke", started["pid"])]
     assert observed["observed_state"] == "failed"
+    assert observed["frame_stream_contract"] == {"id": "", "kind": "none"}
     assert not [item for item in manager.snapshot()["allocations"]
                 if item["app_id"] == "crashed"]
 
@@ -429,6 +609,47 @@ def test_resource_profile_uses_effective_config_and_max_instances_is_one():
     manifest["instances"]["max"] = 2
     with pytest.raises(resources.ResourceError, match="instances.max=1"):
         resources.plan_manifest(manifest)
+
+
+def test_resolved_camera_profile_is_persisted_and_passed_to_launch(
+        managed, monkeypatch):
+    coord, fake, _manager = managed
+
+    def profiled(app_id):
+        manifest = _manifest(app_id)
+        manifest["resources"] = {"profiles": [
+            {"when": {"backend": "native"}, "claims": [
+                {"name": "camera.frames", "mode": "shared", "required": True},
+                {"name": "result.publish", "mode": "brokered", "required": True},
+            ]},
+            {"when": {"backend": "cpu"}, "claims": [
+                {"name": "result.publish", "mode": "brokered", "required": True},
+            ]},
+        ]}
+        return manifest
+
+    monkeypatch.setattr(
+        coordinator.appconfig, "effective_values",
+        lambda _manifest_value, app_id: {
+            "backend": "native" if app_id == "profile-native" else "cpu",
+        })
+    native = coord.start("profile-native", manifest=profiled("profile-native"))
+    cpu = coord.start("profile-cpu", manifest=profiled("profile-cpu"))
+
+    expected = {"id": "main", "kind": "frame.sock", "path": "/live/0"}
+    assert native["frame_stream_contract"] == expected
+    assert cpu["frame_stream_contract"] == {"id": "", "kind": "none"}
+    assert fake.starts[0][1]["frame_stream_contract"] == expected
+    assert fake.starts[1][1]["frame_stream_contract"] == {
+        "id": "", "kind": "none"}
+    assert state.get_app("profile-native")["frame_stream_contract"] == expected
+    assert state.get_app("profile-cpu")["frame_stream_contract"] == {
+        "id": "", "kind": "none"}
+
+    stopped = coord.stop("profile-native")
+    assert stopped["observed_state"] == "stopped"
+    assert state.get_app("profile-native")["frame_stream_contract"] == {
+        "id": "", "kind": "none"}
 
 
 def test_stale_generation_cannot_release_new_allocation(managed):

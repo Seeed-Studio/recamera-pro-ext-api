@@ -154,6 +154,7 @@ def test_registry_uses_gateway_only_when_managed_env_is_present(tmp_path,
     try:
         monkeypatch.delenv("RECAMERA_RESULT_OSD", raising=False)
         monkeypatch.delenv("RECAMERA_ADAPTER_PREFER", raising=False)
+        monkeypatch.setenv("RECAMERA_FRAME_SOURCE", "official")
         monkeypatch.setenv("RECAMERA_RESULT_GATEWAY_SOCK", gateway.uds_path)
         monkeypatch.setenv("RECAMERA_APP_ID", identity[0])
         monkeypatch.setenv("RECAMERA_APP_INSTANCE", identity[1])

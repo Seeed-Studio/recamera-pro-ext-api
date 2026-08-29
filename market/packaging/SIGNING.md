@@ -75,6 +75,16 @@ Set on the appmgr process (env), default **on**:
 - **`0`:** unsigned packages are **allowed** (audited as a warning) — a bad
   signature is **still** refused. This is the migration/escape hatch.
 
+The authenticated same-origin local Web v1 upload route has a narrower product
+exception that does not require changing this global switch. Its server-minted
+preflight returns a critical root-code warning and finalize requires both
+the independent permission confirmation and `unsigned_risk_confirmed: true`;
+`developer_mode` is an obsolete compatibility field and is not a gate. The
+resulting app is installed stopped and needs a separate Start action. Direct/API, cloud and
+legacy routes do not inherit that exception. nginx overwrites the internal
+route stamp after JWT authentication, so client-provided `source`/`channel`
+fields cannot opt into it.
+
 A **present-but-bad** signature is *always* refused, regardless of the switch.
 Already-installed apps are never re-verified, so flipping this never bricks a
 running device — it only governs new installs.

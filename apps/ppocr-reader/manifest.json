@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 2, "channel": "stable"},
+  "release": {"sequence": 3, "channel": "stable"},
   "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
   "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
   "artifacts": [
@@ -20,8 +20,9 @@
   "id": "ppocr-reader",
   "name": "PP-OCR Reader",
   "name_zh": "文字识别",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/ppocr-reader.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "OCR & Text",
   "scene_zh": "文字识别",

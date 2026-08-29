@@ -9,7 +9,8 @@ must therefore opt in explicitly (for example
 ``RECAMERA_ADAPTER_PREFER=official``); a future native handshake may safely
 mark a capability ``AVAILABLE`` and let ``auto`` switch on its own.
 
-    FrameSource  = caps.frame_broker   ? OfficialFrameSource  : FfmpegRtspSource
+    FrameSource  = dedicated policy / caps.frame_broker
+                   ? OfficialFrameSource : FfmpegRtspSource
     ResultSink   = WsResultSink (DEFAULT, software overlay :8124);
                    OsdInjectResultSink (burn into码流) is EXPLICIT opt-in only
                    (RECAMERA_ADAPTER_PREFER=official | RECAMERA_RESULT_OSD=1 |
@@ -31,6 +32,12 @@ Overrides (both for real deployments and for testing the switch logic)
 * `RECAMERA_CONTROL_API=1` is an explicit control-plane opt-in: selection uses
   `OfficialControl` even though the capability is still reported as
   ``UNKNOWN`` until a versioned handshake exists.
+* `RECAMERA_FRAME_SOURCE` = `official` | `workaround` | `auto` is the dedicated
+  frame-source policy.  appmgr sets `official` only for a managed app whose
+  installed, validated manifest claims `camera.frames`; no result/audio/control adapter reads
+  this variable.  `auto` (and an unset variable) retains the existing global
+  preference / verified-capability policy.  Invalid values are rejected rather
+  than silently falling back to RTSP.
 * `RECAMERA_ADAPTER_PREFER` = `auto` (default) | `official` | `workaround`
   -- a global manifest-style override of the per-capability auto selection
   (docs/guide/adapter-bootstrap.md §3: "可留 manifest 里 prefer: official|workaround 供覆盖").
@@ -50,6 +57,7 @@ from kit.capabilities import (
     probe_socket_path,
     result_socket_path,
 )
+from kit.errors import ConfigurationError
 
 
 # -- capability probing ------------------------------------------------------- #
@@ -93,20 +101,57 @@ def _prefer_official(capability: Capability) -> bool:
     return capability.status is CapabilityStatus.AVAILABLE
 
 
+def _prefer_official_frame(capability: Capability) -> bool:
+    """Resolve the frame-only policy before consulting the global policy.
+
+    ``RECAMERA_FRAME_SOURCE`` is deliberately separate from
+    ``RECAMERA_ADAPTER_PREFER``.  A managed camera application needs the native
+    frame geometry without also opting its result sink into device OSD (or
+    changing its audio/control adapters).  Unset/``auto`` preserves the legacy
+    selection rule; explicit ``official``/``workaround`` affects only this
+    factory.  Treat typos as configuration errors so a managed launch cannot
+    silently fall back to the 640x480 RTSP substream.
+    """
+    raw = os.environ.get("RECAMERA_FRAME_SOURCE")
+    if raw is None:
+        return _prefer_official(capability)
+    pref = str(raw).strip().lower()
+    if pref == "official":
+        return True
+    if pref == "workaround":
+        return False
+    if pref == "auto":
+        return _prefer_official(capability)
+    raise ConfigurationError(
+        "RECAMERA_FRAME_SOURCE must be 'official', 'workaround', or 'auto' "
+        f"(got {raw!r})",
+        operation="frame.select",
+        details={
+            "environment": "RECAMERA_FRAME_SOURCE",
+            "value": str(raw),
+            "allowed": ["official", "workaround", "auto"],
+        },
+    )
+
+
 # -- factories ---------------------------------------------------------------- #
 def select_frame_source(url: str | None = None, prefer: str = "ffmpeg", **kw):
     """Pick a FrameSource implementation.
 
     `prefer` selects the *workaround backend* ("ffmpeg" streaming | "snapshot"
-    low-fps fallback). The official broker, when present, supersedes both --
-    except when the caller explicitly asks for the "snapshot" debug fallback,
-    which is honoured verbatim.
+    low-fps fallback). An explicit ``RECAMERA_FRAME_SOURCE=official`` is a
+    launch-time integrity contract and therefore supersedes both values.  With
+    the dedicated policy unset/``auto``, an explicit ``prefer="snapshot"``
+    remains the caller's debug fallback as before.
     """
     caps = capabilities()
+    use_official = _prefer_official_frame(caps.get("frame"))
     if url is None:
         from .frame_source import DEFAULT_SUB_STREAM
         url = DEFAULT_SUB_STREAM
-    if prefer != "snapshot" and _prefer_official(caps.get("frame")):
+    dedicated_official = str(os.environ.get(
+        "RECAMERA_FRAME_SOURCE", "")).strip().lower() == "official"
+    if use_official and (prefer != "snapshot" or dedicated_official):
         from .official import OfficialFrameSource
         return OfficialFrameSource(url=url, sock=_frame_sock_path(), **kw)
     from .frame_source import FfmpegRtspSource, SnapshotSource

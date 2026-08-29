@@ -58,11 +58,13 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import hashlib
 import ipaddress
 import json
 import os
 import queue
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -89,6 +91,7 @@ _result_hub_instance = None
 _visualization_bridge_instance = None
 _operation_manager_instance = None
 _operation_manager_layout = None
+_operation_manager_lock = threading.Lock()
 _upload_finalize_lock = threading.Lock()
 _reconcile_stop = None
 _reconcile_thread = None
@@ -113,16 +116,8 @@ def remove_result_observer(callback) -> bool:
 
 
 def _supports_detection_stream_osd(manifest: dict) -> bool:
-    """Whether one installed v2 manifest explicitly opts into box burn-in."""
-    if not isinstance(manifest, dict) or manifest.get("manifest_version") != 2:
-        return False
-    render = manifest.get("render")
-    if not isinstance(render, dict) or render.get("schema_version") != 1:
-        return False
-    stream_osd = render.get("stream_osd")
-    supported = (stream_osd.get("supported")
-                 if isinstance(stream_osd, dict) else None)
-    return isinstance(supported, list) and "boxes" in supported
+    """Whether one trusted installed manifest supports box burn-in."""
+    return appvisualization.supports_detection_stream_osd(manifest)
 
 
 def do_get_visualization() -> dict:
@@ -233,13 +228,18 @@ def _operation_manager() -> appoperations.OperationManager:
     """Return the operation journal/event bus for the selected device layout."""
     global _operation_manager_instance, _operation_manager_layout
     layout = paths.operation_state_file()
-    if (_operation_manager_instance is None
-            or _operation_manager_layout != layout):
-        if _operation_manager_instance is not None:
-            _operation_manager_instance.close()
-        _operation_manager_instance = appoperations.OperationManager(layout)
-        _operation_manager_layout = layout
-    return _operation_manager_instance
+    # ThreadingHTTPServer may deliver the first apps/SSE/finalize requests at
+    # the same instant. Without serialized lazy construction, multiple managers
+    # can load the same old journal, run parallel workers, and overwrite each
+    # other's upload correlation with last-writer-wins atomic replaces.
+    with _operation_manager_lock:
+        if (_operation_manager_instance is None
+                or _operation_manager_layout != layout):
+            if _operation_manager_instance is not None:
+                _operation_manager_instance.close()
+            _operation_manager_instance = appoperations.OperationManager(layout)
+            _operation_manager_layout = layout
+        return _operation_manager_instance
 
 
 def _managed_launch(app_id: str, operation: str, manifest: dict):
@@ -345,7 +345,7 @@ def busy_gate(*, wait_timeout: float = 0.0,
 _SETTLE_SEC = 1.0
 
 _manifest_cache: dict = {}     # app_id -> (statkey, manifest)
-_icon_cache: dict = {}         # app_id -> (statkey, icon_path or None)
+_icon_cache: dict = {}         # app_id -> (source identity, validated icon info)
 
 
 def _stat_key(path: str):
@@ -393,6 +393,49 @@ def _read_manifest(app_id: str):
     return man
 
 
+_LIVE_RESULT_PHASES = frozenset(("starting", "ready", "running", "degraded"))
+
+
+def _invalidate_result_app(app_id: str, identity: dict = None, hub=None) -> bool:
+    hub = hub or _result_hub_instance
+    if hub is None or not hasattr(hub, "invalidate_app_manifest"):
+        return False
+    return bool(hub.invalidate_app_manifest(app_id, identity=identity))
+
+
+def _invalidate_result_if_inactive(app_id: str) -> bool:
+    current = state.get_app(app_id) or {}
+    if current.get("observed_state") in _LIVE_RESULT_PHASES:
+        return False
+    return _invalidate_result_app(app_id)
+
+
+def _current_live_result_identity(app_id: str, identity: dict) -> Optional[dict]:
+    """Second-read one exact live process identity after peer authentication."""
+    current = state.get_app(app_id) or {}
+    try:
+        pid = int((identity or {}).get("pid") or -1)
+        matches = (
+            current.get("observed_state") in _LIVE_RESULT_PHASES
+            and int(current.get("pid") or -1) == pid
+            and pid > 1
+            and str(current.get("instance_id") or "")
+                == str((identity or {}).get("instance_id") or "")
+            and int(current.get("generation", -1))
+                == int((identity or {}).get("generation", -2))
+        )
+    except (TypeError, ValueError):
+        matches = False
+    if not matches:
+        return None
+    return {
+        "app_id": app_id,
+        "instance_id": str(current.get("instance_id")),
+        "generation": int(current.get("generation")),
+        "pid": int(current.get("pid")),
+    }
+
+
 def _refresh_result_manifest(app_id: str, manifest: dict = None,
                              identity: dict = None) -> bool:
     """Refresh Result Hub's generation-bound render cache off the data path."""
@@ -401,11 +444,53 @@ def _refresh_result_manifest(app_id: str, manifest: dict = None,
         return False
     resolved = dict(identity or state.get_app(app_id) or {})
     resolved.setdefault("app_id", app_id)
-    if not resolved.get("instance_id") or resolved.get("generation") is None:
-        hub.invalidate_app_manifest(app_id)
+    current = _current_live_result_identity(app_id, resolved)
+    if current is None:
+        persisted = state.get_app(app_id) or {}
+        if persisted.get("observed_state") not in _LIVE_RESULT_PHASES:
+            # A waiting/stopped/failed new generation supersedes every older
+            # display generation even though it has not minted a publisher.
+            _invalidate_result_app(app_id)
+        else:
+            # A stale caller racing a newer live generation may revoke only its
+            # own exact tuple; it must never erase the winner.
+            _invalidate_result_app(
+                app_id, resolved if resolved.get("instance_id") else None)
         return False
     trusted_manifest = manifest if isinstance(manifest, dict) else _read_manifest(app_id)
-    return hub.refresh_app_manifest(resolved, trusted_manifest)
+    # The coordinator persists the route actually minted for this generation
+    # after resolving resource profiles.  Never infer it again from a manifest
+    # claim (authorization) or from an application payload (untrusted data).
+    stream_contract = _generation_frame_stream_contract(app_id, current)
+    refreshed = hub.refresh_app_manifest(
+        current, trusted_manifest, stream_contract=stream_contract)
+    # A stop can win after the first state read and before Hub refresh.  Re-read
+    # after publication; exact CAS revocation clears the old generation without
+    # ever deleting a newer generation that won the race instead.
+    if not refreshed or _current_live_result_identity(app_id, current) is None:
+        _invalidate_result_app(app_id, current)
+        return False
+    return True
+
+
+def _generation_frame_stream_contract(app_id: str, identity: dict) -> dict:
+    """Read the route persisted for exactly this controlled generation."""
+    current = state.get_app(app_id) or {}
+    try:
+        matches = (
+            current.get("observed_state") in _LIVE_RESULT_PHASES
+            and int(current.get("pid") or -1)
+                == int((identity or {}).get("pid") or -2)
+            and
+            str(current.get("instance_id") or "")
+            == str((identity or {}).get("instance_id") or "")
+            and int(current.get("generation", -1))
+            == int((identity or {}).get("generation", -2))
+        )
+    except (TypeError, ValueError):
+        matches = False
+    return supervisor.normalise_managed_frame_stream_contract(
+        current.get("frame_stream_contract") if matches else None)
 
 
 def _resolve_result_identity(coord, hub, peer_pid, claimed_app,
@@ -417,34 +502,161 @@ def _resolve_result_identity(coord, hub, peer_pid, claimed_app,
     """
     identity = coord.resolve_identity(
         peer_pid, claimed_app, instance_id, generation)
-    if identity is not None:
-        manifest = _read_manifest(claimed_app)
-        if not hub.refresh_app_manifest(identity, manifest):
-            hub.invalidate_app_manifest(claimed_app)
-    return identity
+    if identity is None:
+        return None
+    current = _current_live_result_identity(claimed_app, identity)
+    if current is None:
+        return None
+    manifest = _read_manifest(claimed_app)
+    stream_contract = _generation_frame_stream_contract(claimed_app, current)
+    if not hub.refresh_app_manifest(
+            current, manifest, stream_contract=stream_contract):
+        _invalidate_result_app(claimed_app, current, hub=hub)
+        return None
+    if _current_live_result_identity(claimed_app, current) is None:
+        _invalidate_result_app(claimed_app, current, hub=hub)
+        return None
+    return current
 
 
 ICON_ENDPOINT = "/api/appMgr/icon"
 
 
-def _icon_file_cached(app_id: str):
-    """paths.icon_file() memoised on the app dir's stat key.
+def _icon_candidates(manifest: dict) -> tuple[bool, list[dict]]:
+    """Return ``(declared, candidates)`` with v2 declaration authoritative."""
+    if (isinstance(manifest, dict)
+            and manifest.get("manifest_version") == appmanifest.MANIFEST_VERSION
+            and "icon" in manifest):
+        try:
+            icon = appmanifest.validate_icon_declaration(manifest["icon"])
+        except appmanifest.ManifestValidationError:
+            # Installed metadata was modified/corrupted.  Never fall back to an
+            # attacker-dropped legacy filename when a v2 declaration exists.
+            return True, []
+        return True, [{
+            "relative_path": icon["path"],
+            "media_type": icon["media_type"],
+            "strict_media": True,
+        }]
+    return False, [{
+        "relative_path": "icon" + ext,
+        "media_type": paths.ICON_CONTENT_TYPES[ext],
+        "strict_media": False,
+    } for ext in paths.ICON_EXTS]
 
-    The uncached call stats up to 4 candidate extensions per app per list; the
-    icon itself is written once at install time and never changes in between.
+
+def _open_icon_nofollow(app_id: str, relative_path: str):
+    """Open one installed icon without following any path component."""
+    if not paths.valid_app_id(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    try:
+        relative_path = appmanifest.validate_package_member_path(
+            relative_path, "icon.path")
+    except appmanifest.ManifestValidationError as exc:
+        raise FileNotFoundError("installed icon path is unsafe") from exc
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise OSError(errno.ENOTSUP, "safe no-follow icon open is unsupported")
+    common = nofollow | getattr(os, "O_CLOEXEC", 0)
+    current_fd = os.open(paths.app_dir(app_id), os.O_RDONLY | directory | common)
+    try:
+        parts = relative_path.split("/")
+        for component in parts[:-1]:
+            next_fd = os.open(
+                component, os.O_RDONLY | directory | common,
+                dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        file_fd = os.open(
+            parts[-1], os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | common,
+            dir_fd=current_fd)
+        try:
+            info = os.fstat(file_fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise FileNotFoundError("installed icon is not a regular file")
+            if info.st_size > paths.MAX_ICON_BYTES:
+                raise FileNotFoundError(
+                    f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+            return file_fd, info
+        except BaseException:
+            os.close(file_fd)
+            raise
+    finally:
+        os.close(current_fd)
+
+
+def _read_icon_fd(file_fd: int, file_info, media_type: str, *,
+                  strict_media: bool) -> tuple[bytes, str]:
+    with os.fdopen(file_fd, "rb", closefd=True) as source:
+        data = source.read(paths.MAX_ICON_BYTES + 1)
+    if len(data) > paths.MAX_ICON_BYTES:
+        raise FileNotFoundError(
+            f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+    if strict_media and not appmanifest.icon_bytes_match_media_type(
+            data[:16], media_type):
+        raise FileNotFoundError(
+            f"installed icon bytes do not match {media_type}")
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def _icon_info_cached(app_id: str, manifest: dict = None):
+    """Return safely validated icon metadata, caching its content digest.
+
+    A secure descriptor is opened on every lookup, so replacing a declared file
+    with a symlink/special file can never reuse an earlier cache entry.  Full
+    hashing is skipped only for a settled, identical inode/mtime/size tuple.
     """
     if not paths.valid_app_id(app_id):
         return None
-    key = _stat_key(paths.app_dir(app_id))
-    if key is None:
+    manifest = manifest if isinstance(manifest, dict) else _read_manifest(app_id)
+    declared, candidates = _icon_candidates(manifest or {})
+    root_key = _stat_key(paths.app_dir(app_id))
+    if root_key is None:
         _icon_cache.pop(app_id, None)
         return None
+    declaration_key = (
+        "declared" if declared else "legacy",
+        tuple((item["relative_path"], item["media_type"])
+              for item in candidates),
+    )
     hit = _icon_cache.get(app_id)
-    if hit is not None and hit[0] == key and _settled(key):
-        return hit[1]
-    p = paths.icon_file(app_id)
-    _icon_cache[app_id] = (key, p)
-    return p
+    for candidate in candidates:
+        try:
+            file_fd, file_info = _open_icon_nofollow(
+                app_id, candidate["relative_path"])
+        except (OSError, ValueError):
+            continue
+        file_key = (file_info.st_mtime_ns, file_info.st_size,
+                    file_info.st_ino, file_info.st_dev)
+        source_key = (root_key, declaration_key,
+                      candidate["relative_path"], file_key)
+        if (hit is not None and hit[0] == source_key
+                and _settled(root_key) and _settled(file_key)):
+            os.close(file_fd)
+            return hit[1]
+        try:
+            _data, digest = _read_icon_fd(
+                file_fd, file_info, candidate["media_type"],
+                strict_media=candidate["strict_media"])
+        except (OSError, ValueError):
+            continue
+        info = dict(candidate)
+        info.update({
+            "path": os.path.join(
+                paths.app_dir(app_id), *candidate["relative_path"].split("/")),
+            "sha256": digest,
+        })
+        _icon_cache[app_id] = (source_key, info)
+        return info
+    _icon_cache[app_id] = ((root_key, declaration_key, None, None), None)
+    return None
+
+
+def _icon_file_cached(app_id: str, manifest: dict = None):
+    """Compatibility wrapper returning the selected icon's absolute path."""
+    info = _icon_info_cached(app_id, manifest)
+    return info["path"] if info is not None else None
 
 
 def _icon_url(app_id: str, manifest: dict = None):
@@ -453,12 +665,17 @@ def _icon_url(app_id: str, manifest: dict = None):
     The `v=<version>` suffix is a cache-buster: the response carries a long
     max-age, so without it an upgraded app would keep showing the old artwork.
     """
-    if _icon_file_cached(app_id) is None:
+    info = _icon_info_cached(app_id, manifest)
+    if info is None:
         return None
     ver = str((manifest or {}).get("version") or "")
     q = "id=" + quote(app_id, safe="")
     if ver:
         q += "&v=" + quote(ver, safe="")
+    # A force reinstall may legitimately replace artwork without changing the
+    # semantic app version.  Bind browser cache identity to actual validated
+    # bytes, not version alone.
+    q += "&h=" + info["sha256"][:16]
     return f"{ICON_ENDPOINT}?{q}"
 
 
@@ -472,18 +689,20 @@ def do_icon(app_id: str):
     """
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
-    p = paths.icon_file(app_id)
-    if p is None:
+    manifest = _read_manifest(app_id)
+    info = _icon_info_cached(app_id, manifest)
+    if info is None:
         raise FileNotFoundError(f"app {app_id!r} has no bundled icon")
-    ext = os.path.splitext(p)[1].lower()
-    ctype = paths.ICON_CONTENT_TYPES.get(ext, "application/octet-stream")
-    with open(p, "rb") as f:
-        data = f.read(paths.MAX_ICON_BYTES + 1)
-    if len(data) > paths.MAX_ICON_BYTES:
-        # Belt-and-braces: the installer caps this at unpack time, but an icon
-        # dropped in by hand must not turn the endpoint into a memory hog.
-        raise ValueError(f"icon too large: > {paths.MAX_ICON_BYTES}")
-    return data, ctype
+    try:
+        file_fd, file_info = _open_icon_nofollow(
+            app_id, info["relative_path"])
+        data, _digest = _read_icon_fd(
+            file_fd, file_info, info["media_type"],
+            strict_media=info["strict_media"])
+    except (OSError, ValueError) as exc:
+        raise FileNotFoundError(
+            f"app {app_id!r} has no safe bundled icon") from exc
+    return data, info["media_type"]
 
 
 def do_assets(paths_param: str) -> dict:
@@ -600,6 +819,10 @@ def do_list() -> dict:
                 # always passed them; installed apps used to drop them silently,
                 # so a third-party app could ship Chinese copy that never showed.
                 "image": man.get("image"),
+                # Formal v2 package-local icon declaration.  icon_url remains
+                # the browser-facing transport and also serves legacy packages;
+                # this raw block lets API clients inspect the signed contract.
+                "icon": man.get("icon"),
                 "description": man.get("description"),
                 "scene": man.get("scene"),
                 "author": man.get("author"),
@@ -618,7 +841,9 @@ def do_list() -> dict:
                 # shape-driven fallback). Passed through RAW -- appmgr never
                 # interprets a layout / `as` primitive, it only carries the block
                 # so the overlay can read it without fetching the package.
-                "render": man.get("render"),
+                "render": (appvisualization.effective_render(man)
+                           if isinstance(man.get("render"), dict)
+                           else man.get("render")),
                 "installed": True,
                 "running": pid is not None,
                 "pid": pid,
@@ -821,20 +1046,58 @@ def do_putmodel(target_path: str, filename: str, data: bytes,
 
 
 def _rollback_upgrade(app_id: str, restore_active: bool,
-                      restore_managed: bool = False) -> Optional[str]:
+                      restore_managed: bool = False, *,
+                      config_snapshot: dict = None,
+                      lifecycle_snapshot: dict = None,
+                      restart_previous: bool = True) -> Optional[str]:
     """Undo a failed upgrade: stop the broken new version, swap the retained
     `<id>.prev` back into place, and restart the old app (健壮#15). Returns the
     id if the previous version is running again, else None. Caller holds the
     busy-gate."""
+    # A new version can authenticate its result publisher after spawn but then
+    # fail the READY gate.  Fence that failed generation before restoring the
+    # retained version so no new-version snapshot survives (or races) the old
+    # process coming back.
+    _invalidate_result_app(app_id)
+    failed_state = state.get_app(app_id) or {}
+    # Keep the leader identity independently of its run record.  stop() is
+    # allowed to remove that record after signalling, so re-reading it alone
+    # cannot prove that a stuck old generation actually exited.
+    failed_running = supervisor.is_running(app_id)
+    failed_record = supervisor.has_run_record(app_id)
     try:
-        supervisor.stop(app_id)
+        if (failed_state.get("instance_id") and (
+                failed_running is not None or failed_record
+                or failed_state.get("allocations")
+                or failed_state.get("teardown_pending"))):
+            _coordinator().stop(app_id, desired=state.DESIRED_STOPPED)
+        else:
+            supervisor.stop(app_id)
     except Exception:
-        pass
+        return None
+    if (supervisor.owned_pid_is_running(app_id, failed_running)
+            or supervisor.is_running(app_id) is not None
+            or supervisor.has_run_record(app_id)):
+        raise supervisor.SupervisorError(
+            "failed upgrade process fence remains active after stop: %s" %
+            app_id)
     if not installer.restore_prev(app_id):
         state.clear_active_if(app_id)
         return None
+    # restore_prev() swapped manifest inodes.  Drop all presentation caches now
+    # so the rollback launch and Result Hub refresh use the retained version's
+    # metadata rather than the failed upgrade's metadata.
+    cache_clear()
     try:
+        if config_snapshot is not None:
+            appconfig.restore_upgrade_config(config_snapshot)
+        if lifecycle_snapshot is not None:
+            state.restore_app_snapshot(lifecycle_snapshot)
         man = _read_manifest(app_id) or {}
+        if not restart_previous:
+            _refresh_result_manifest(app_id, man)
+            return app_id
+        restored_identity = None
         if restore_managed:
             managed = _coordinator().start(
                 app_id, manifest=man, operation="upgrade_rollback",
@@ -842,13 +1105,22 @@ def _rollback_upgrade(app_id: str, restore_active: bool,
             if managed.get("pid") is None:
                 raise supervisor.SupervisorError(
                     "rollback app is not runnable: %s" % managed.get("reason"))
+            restored_identity = managed
         else:
             proof = _prepare_external_start("upgrade_rollback", app_id)
             _coordinated_legacy_start(app_id, "upgrade_rollback", proof)
-        if restore_active:
+            # The legacy wrapper intentionally returns only the PID, but its
+            # coordinator launch has committed the same exact identity and
+            # actual frame-source contract to durable state.
+            restored_identity = state.get_app(app_id)
+        if restore_active and lifecycle_snapshot is None:
             state.set_active(app_id, man.get("version"))
+        _refresh_result_manifest(app_id, man, restored_identity)
         return app_id
     except Exception:
+        # A failed rollback start may itself have connected to the Gateway
+        # before failing READY.  Leave no presentation generation behind.
+        _invalidate_result_app(app_id)
         state.clear_active_if(app_id)
         return None
 
@@ -856,6 +1128,9 @@ def _rollback_upgrade(app_id: str, restore_active: bool,
 def do_install(pkg_path: str, signature: str = None, *,
                allow_unsigned: bool = False,
                expected_preflight: dict = None,
+               running_upgrade_confirmed: bool = False,
+               force_reinstall_confirmed: bool = False,
+               _enforce_v1_confirmations: bool = False,
                _busy_timeout: float = 0.0) -> dict:
     """Install (or UPGRADE) an app as a transaction (健壮#15).
 
@@ -874,71 +1149,291 @@ def do_install(pkg_path: str, signature: str = None, *,
             _assert_v1_preflight_binding(expected_preflight, info)
         app_id = info["id"]
         pre_installed = os.path.isdir(paths.app_dir(app_id))
-        was_running = pre_installed and supervisor.is_running(app_id) is not None
-        was_active = state.get_active() == app_id
-        prior_state = state.get_app(app_id)
-        was_managed = bool(prior_state and
-                           prior_state.get("launch_mode") == "managed")
+        initial_state = state.get_app(app_id) or {}
+        if (initial_state.get("observed_state") == "stopping"
+                or initial_state.get("teardown_pending")):
+            raise BusyError(
+                "application teardown is incomplete; retry stop before install: %s" %
+                app_id)
 
-        # ★Stop the old process BEFORE the dir swap★ so it cannot linger on the
-        # soon-to-be-.prev copy as an orphan double.
-        if was_running:
-            if was_managed:
-                _coordinator().stop(app_id, desired=state.DESIRED_RUNNING)
-            else:
-                _stop_external(app_id)
-
-        app_id, manifest = installer.install(
+        candidate = installer.prepare(
             pkg_path, signature, allow_unsigned=allow_unsigned)
-        # Drop caches so the freshly swapped manifest/icon are re-read now.
-        cache_clear()
-        if (_result_hub_instance is not None
-                and hasattr(_result_hub_instance, "invalidate_app_manifest")):
-            _result_hub_instance.invalidate_app_manifest(app_id)
-        # Prune any stored config keys the NEW schema no longer accepts, so the
-        # restarted app never reads a removed/type-changed/out-of-range value
-        # (健壮#20). Best-effort -- a revalidation hiccup must not fail the install.
         try:
-            appconfig.revalidate_user_config(manifest, app_id)
-        except Exception:
-            pass
+            # Rebind V1 approval to the inode authenticated by prepare(), not
+            # merely the earlier inspection of the package path.
+            info = candidate.info
+            if expected_preflight is not None:
+                _assert_v1_preflight_binding(expected_preflight, info)
+            sig = info.get("signature") or {}
+            unsigned_install = bool(
+                allow_unsigned and not sig.get("verified"))
+            fresh_context = _install_context(
+                info, unsigned_install=unsigned_install)
 
-        restarted = False
-        if was_running:
+            prior_lifecycle = state.snapshot_app(app_id)
+            prior_state = prior_lifecycle.get("record") or {}
+            if (prior_state.get("observed_state") == "stopping"
+                    or prior_state.get("teardown_pending")):
+                raise BusyError(
+                    "application teardown is incomplete; retry stop before install: %s" %
+                    app_id)
+            running_pid = supervisor.is_running(app_id)
+            if (_enforce_v1_confirmations and running_pid is not None
+                    and running_upgrade_confirmed is not True):
+                raise BusyError(
+                    "running application upgrade requires explicit confirmation")
+            if (_enforce_v1_confirmations
+                    and fresh_context["mode"] == "reinstall"
+                    and force_reinstall_confirmed is not True):
+                raise BusyError(
+                    "reinstalling the exact release requires explicit confirmation")
+
+            config_snapshot = appconfig.snapshot_upgrade_config(app_id)
+            previous_observed = prior_state.get("observed_state")
+            was_active = prior_lifecycle.get("active_app") == app_id
+            was_managed = prior_state.get("launch_mode") == "managed"
+            desired_before = prior_state.get("desired_state")
+            if desired_before not in state.DESIRED_STATES:
+                desired_before = (state.DESIRED_RUNNING if running_pid is not None
+                                  else state.DESIRED_STOPPED)
+            live_state = previous_observed in (
+                "preparing_env", "starting", "ready", "running", "degraded")
+            restart_previous = bool(
+                running_pid is not None
+                or (desired_before == state.DESIRED_RUNNING and live_state))
+            if not pre_installed:
+                # A stale lifecycle record does not turn a first install into
+                # an implicit start.  It is fenced/cleaned below, then the new
+                # app retains the established install-stopped contract.
+                restart_previous = False
+            has_run_record = supervisor.has_run_record(app_id)
+            lifecycle_fence = bool(
+                live_state or prior_state.get("allocations")
+                or prior_state.get("instance_id"))
+            must_stop = bool(
+                running_pid is not None or has_run_record or lifecycle_fence)
+
+            installer.begin_install_transaction(
+                candidate, config_snapshot=config_snapshot,
+                lifecycle_snapshot=prior_lifecycle)
+
+            if must_stop:
+                try:
+                    if (prior_state.get("instance_id")
+                            or prior_state.get("allocations") or live_state):
+                        _coordinator().stop(
+                            app_id, desired=(
+                                state.DESIRED_STOPPED if unsigned_install
+                                else desired_before))
+                    else:
+                        supervisor.stop(app_id)
+                except Exception as exc:
+                    # No code/config mutation has happened.  Retain the stop
+                    # failure's teardown fence rather than overwriting it with
+                    # the earlier lifecycle snapshot.
+                    state.transition(
+                        app_id, "stopping", teardown_pending=True,
+                        reason="install quiescence failed: %s" % exc)
+                    installer.clear_install_transaction(candidate)
+                    raise BusyError(
+                        "application could not be quiesced for install: %s" % exc) from exc
+                finally:
+                    _invalidate_result_if_inactive(app_id)
+            if (supervisor.owned_pid_is_running(app_id, running_pid)
+                    or supervisor.is_running(app_id) is not None
+                    or supervisor.has_run_record(app_id)):
+                state.transition(
+                    app_id, "stopping", teardown_pending=True,
+                    reason="install process fence remained active after stop")
+                installer.clear_install_transaction(candidate)
+                raise BusyError(
+                    "application process fence is still active after stop: %s" % app_id)
+            stopped_state = state.get_app(app_id) or {}
+            if (stopped_state.get("observed_state") == "stopping"
+                    or stopped_state.get("teardown_pending")):
+                installer.clear_install_transaction(candidate)
+                raise BusyError(
+                    "application teardown is incomplete after stop: %s" % app_id)
+            installer.mark_install_transaction(candidate, "stopped")
+
             try:
-                if was_managed:
-                    managed = _coordinator().start(
-                        app_id, manifest=manifest, operation="upgrade_restart",
-                        launch=_managed_launch(
-                            app_id, "upgrade_restart", manifest))
-                    if managed.get("pid") is None:
-                        raise supervisor.SupervisorError(
-                            "upgraded app is not runnable: %s" %
-                            managed.get("reason"))
-                else:
-                    proof = _prepare_external_start("upgrade_restart", app_id)
-                    _coordinated_legacy_start(
-                        app_id, "upgrade_restart", proof)
-            except Exception as e:
-                restored = _rollback_upgrade(app_id, was_active, was_managed)
+                app_id, manifest = installer.commit_prepared(candidate)
+            except BaseException as install_exc:
+                recovery_error = None
+                try:
+                    # Do not trust commit_prepared's own rollback merely
+                    # because it raised: its error may explicitly say that the
+                    # internal code/env reversal also failed.  Reconcile and
+                    # verify the journal-bound previous pair before restoring
+                    # old desired state or launching anything.
+                    transaction = installer.load_install_transaction()
+                    if transaction is None:
+                        raise installer.InstallError(
+                            "install rollback journal disappeared")
+                    installer.rollback_install_transaction_files(transaction)
+                    appconfig.restore_upgrade_config(config_snapshot)
+                    state.restore_app_snapshot(prior_lifecycle)
+                    if restart_previous:
+                        old_manifest = _read_manifest(app_id) or {}
+                        if was_managed:
+                            result = _coordinator().start(
+                                app_id, manifest=old_manifest,
+                                operation="upgrade_publish_rollback",
+                                launch=_managed_launch(
+                                    app_id, "upgrade_publish_rollback",
+                                    old_manifest))
+                            if result.get("pid") is None:
+                                raise supervisor.SupervisorError(
+                                    "previous app is not runnable: %s" %
+                                    result.get("reason"))
+                        else:
+                            proof = _prepare_external_start(
+                                "upgrade_publish_rollback", app_id)
+                            _coordinated_legacy_start(
+                                app_id, "upgrade_publish_rollback", proof)
+                        _refresh_result_manifest(
+                            app_id, old_manifest, state.get_app(app_id))
+                except BaseException as exc:
+                    recovery_error = exc
+                    try:
+                        state.transition(
+                            app_id, "stopping", teardown_pending=True,
+                            reason="install rollback is incomplete: %s" % exc)
+                    except Exception:
+                        pass
+                if recovery_error is None:
+                    installer.clear_install_transaction(candidate)
                 _audit("install_failed", id=app_id,
-                       version=manifest.get("version"), error=str(e),
+                       version=candidate.manifest.get("version"),
+                       error=str(install_exc), restored=recovery_error is None,
+                       recovery_error=(str(recovery_error)
+                                       if recovery_error is not None else None))
+                if recovery_error is not None:
+                    raise installer.InstallError(
+                        "install publish failed (%s); previous release recovery "
+                        "also failed: %s" % (install_exc, recovery_error)) from recovery_error
+                raise
+
+            cache_clear()
+            if (_result_hub_instance is not None
+                    and hasattr(_result_hub_instance,
+                                "invalidate_app_manifest")):
+                _result_hub_instance.invalidate_app_manifest(app_id)
+
+            desired_after = (state.DESIRED_STOPPED
+                             if unsigned_install or not pre_installed
+                             else desired_before)
+            launch_mode = ("managed" if not pre_installed else
+                           prior_state.get("launch_mode") or (
+                               "legacy" if was_active else "managed"))
+            try:
+                # A config/schema failure is part of the install transaction;
+                # never leave its partial quarantine rewrite attached to the
+                # retained/new code generation.
+                appconfig.revalidate_user_config(manifest, app_id)
+                state.reset_for_installed_release(
+                    app_id, manifest.get("version"), desired=desired_after,
+                    launch_mode=launch_mode,
+                    previous_observed=previous_observed)
+                installer.mark_install_transaction(candidate, "configured")
+
+                restarted = False
+                if restart_previous and not unsigned_install:
+                    installer.mark_install_transaction(candidate, "restarting")
+                    if was_managed:
+                        managed = _coordinator().start(
+                            app_id, manifest=manifest,
+                            operation="upgrade_restart",
+                            launch=_managed_launch(
+                                app_id, "upgrade_restart", manifest),
+                            reset_restart_history=True)
+                        if managed.get("pid") is None:
+                            raise supervisor.SupervisorError(
+                                "upgraded app is not runnable: %s" %
+                                managed.get("reason"))
+                    else:
+                        proof = _prepare_external_start(
+                            "upgrade_restart", app_id)
+                        _coordinated_legacy_start(
+                            app_id, "upgrade_restart", proof,
+                            reset_restart_history=True)
+                    restarted = True
+                    if was_active:
+                        state.set_active(app_id, manifest.get("version"))
+                    installer.mark_install_transaction(candidate, "ready")
+                installer.mark_install_transaction(candidate, "committed")
+            except Exception as exc:
+                if pre_installed:
+                    try:
+                        restored = _rollback_upgrade(
+                            app_id, was_active, was_managed,
+                            config_snapshot=config_snapshot,
+                            lifecycle_snapshot=prior_lifecycle,
+                            restart_previous=restart_previous)
+                    except Exception:
+                        restored = None
+                else:
+                    restored = None
+                    try:
+                        # Capture the just-published generation before stop()
+                        # can erase its run record.  A successful-looking stop
+                        # is not sufficient if that owned leader remains live:
+                        # deleting the new code/environment underneath it would
+                        # leave an executing, untracked generation.
+                        failed_running = supervisor.is_running(app_id)
+                        supervisor.stop(app_id)
+                        if (supervisor.owned_pid_is_running(
+                                app_id, failed_running)
+                                or supervisor.is_running(app_id) is not None
+                                or supervisor.has_run_record(app_id)):
+                            raise supervisor.SupervisorError(
+                                "new install process fence remains active")
+                        transaction = installer.load_install_transaction()
+                        if transaction is None:
+                            raise installer.InstallError(
+                                "new install rollback journal disappeared")
+                        installer.rollback_install_transaction_files(transaction)
+                        appconfig.restore_upgrade_config(config_snapshot)
+                        state.restore_app_snapshot(prior_lifecycle)
+                        restored = app_id
+                    except Exception:
+                        restored = None
+                if restored is not None:
+                    installer.clear_install_transaction(candidate)
+                else:
+                    try:
+                        state.transition(
+                            app_id, "stopping", teardown_pending=True,
+                            reason="install rollback is incomplete after: %s" % exc)
+                    except Exception:
+                        pass
+                _audit("install_failed", id=app_id,
+                       version=manifest.get("version"), error=str(exc),
                        restored=restored)
                 cache_clear()
                 raise
-            restarted = True
-            if was_active:
-                man = _read_manifest(app_id) or {}
-                state.set_active(app_id, man.get("version"))
 
-        sig = info.get("signature") or {}
-        _audit("install", id=app_id, version=manifest.get("version"),
-               pkg=os.path.realpath(pkg_path), upgrade=pre_installed,
-               restarted=restarted,
-               signed=sig.get("signed"), sig_verified=sig.get("verified"))
-        _refresh_result_manifest(app_id, manifest)
-        return {"id": app_id, "version": manifest.get("version"),
-                "installed": True, "restarted": restarted, "signature": sig}
+            installer.clear_install_transaction(candidate)
+            if unsigned_install or not pre_installed:
+                state.clear_active_if(app_id)
+            _audit("install", id=app_id, version=manifest.get("version"),
+                   pkg=os.path.realpath(pkg_path), upgrade=pre_installed,
+                   restarted=restarted,
+                   signed=sig.get("signed"), sig_verified=sig.get("verified"),
+                   source=(expected_preflight or {}).get("source"),
+                   channel=(expected_preflight or {}).get("channel"),
+                   requires_manual_start=unsigned_install)
+            _refresh_result_manifest(app_id, manifest)
+            return {"id": app_id, "version": manifest.get("version"),
+                    "installed": True, "restarted": restarted,
+                    "auto_started": restarted,
+                    "requires_manual_start": unsigned_install,
+                    "signature": sig}
+        finally:
+            # A retained journal is deliberate when rollback itself failed; it
+            # is the boot-time recovery authority.  Candidate cleanup never
+            # removes published live code/environment.
+            installer.discard_prepared(candidate)
 
 
 def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
@@ -966,9 +1461,12 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         rec = state.get_app(app_id)
         if supervisor.is_running(app_id) is not None:
             if rec and rec.get("launch_mode") == "managed":
-                _coordinator().stop(app_id)
+                try:
+                    _coordinator().stop(app_id)
+                finally:
+                    _invalidate_result_if_inactive(app_id)
             else:
-                supervisor.stop(app_id)
+                _stop_external(app_id)
             stopped = True
         was_active = (state.get_active() == app_id)
         if was_active:
@@ -1049,7 +1547,8 @@ def _start_external_authorized(app_id: str, proof=None, **start_kwargs) -> int:
     return supervisor.start(app_id, npu_managed=True, **start_kwargs)
 
 
-def _coordinated_legacy_start(app_id: str, operation: str, proof=None) -> int:
+def _coordinated_legacy_start(app_id: str, operation: str, proof=None, *,
+                              reset_restart_history: bool = False) -> int:
     """Run an activate/switch-compatible app through v2 identity + gateway.
 
     The operation remains exclusive at the API layer, including its legacy NPU
@@ -1063,7 +1562,8 @@ def _coordinated_legacy_start(app_id: str, operation: str, proof=None) -> int:
 
     result = _coordinator().start(
         app_id, manifest=manifest, operation=operation, launch=launch,
-        launch_mode="legacy")
+        launch_mode="legacy",
+        reset_restart_history=reset_restart_history)
     if result.get("pid") is None:
         raise supervisor.SupervisorError(
             "%s could not start %s: %s" %
@@ -1075,9 +1575,12 @@ def _coordinated_legacy_start(app_id: str, operation: str, proof=None) -> int:
 def _stop_external(app_id: str) -> dict:
     """Stop through the coordinator when an instance record exists."""
     rec = state.get_app(app_id)
-    if rec and rec.get("instance_id"):
-        return _coordinator().stop(app_id)
-    return supervisor.stop(app_id)
+    try:
+        if rec and rec.get("instance_id"):
+            return _coordinator().stop(app_id)
+        return supervisor.stop(app_id)
+    finally:
+        _invalidate_result_if_inactive(app_id)
 
 
 def _restore_active(prev: str, failed_id: str) -> Optional[str]:
@@ -1131,10 +1634,14 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _read_manifest(app_id) or {}
-        result = _coordinator().start(
-            app_id, manifest=manifest, operation="start",
-            launch=_managed_launch(app_id, "start", manifest),
-            reset_restart_history=True)
+        try:
+            result = _coordinator().start(
+                app_id, manifest=manifest, operation="start",
+                launch=_managed_launch(app_id, "start", manifest),
+                reset_restart_history=True)
+        except Exception:
+            _invalidate_result_if_inactive(app_id)
+            raise
         _refresh_result_manifest(app_id, manifest, result)
         _audit("start", id=app_id, pid=result.get("pid"),
                instance=result.get("instance_id"),
@@ -1171,9 +1678,13 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _read_manifest(app_id) or {}
-        result = _coordinator().restart(
-            app_id, manifest=manifest,
-            launch=_managed_launch(app_id, "restart", manifest))
+        try:
+            result = _coordinator().restart(
+                app_id, manifest=manifest,
+                launch=_managed_launch(app_id, "restart", manifest))
+        except Exception:
+            _invalidate_result_if_inactive(app_id)
+            raise
         _refresh_result_manifest(app_id, manifest, result)
         _audit("restart", id=app_id, pid=result.get("pid"),
                instance=result.get("instance_id"),
@@ -1310,11 +1821,17 @@ def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
             return {"stopped": None, "note": "no active app"}
         rec = state.get_app(target)
         if rec is None or rec.get("instance_id"):
-            res = _coordinator().stop(target)
+            try:
+                res = _coordinator().stop(target)
+            finally:
+                _invalidate_result_if_inactive(target)
             state.clear_active_if(target)
             _audit("stop", id=target, result=res)
             return res
-        res = supervisor.stop(target)
+        try:
+            res = supervisor.stop(target)
+        finally:
+            _invalidate_result_if_inactive(target)
         state.clear_active_if(target)
         if rec:
             state.set_desired(target, state.DESIRED_STOPPED)
@@ -1348,6 +1865,90 @@ def _apply_mode(manifest: dict, keys) -> str:
     return "live"
 
 
+_MISSING_CONFIG_VALUE = object()
+
+
+def _config_values_equal(left, right) -> bool:
+    """Type-aware deep equality for JSON-shaped configuration values.
+
+    Python considers ``True == 1``; configuration does not.  Conversely an
+    integer and an equivalent finite float are the same JSON numeric value for
+    a ``number`` control, so a browser round-trip must not cause a reload.
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if (isinstance(left, (int, float)) and isinstance(right, (int, float))):
+        return left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return (left.keys() == right.keys()
+                and all(_config_values_equal(left[key], right[key])
+                        for key in left))
+    if isinstance(left, (list, tuple)):
+        return (len(left) == len(right)
+                and all(_config_values_equal(a, b)
+                        for a, b in zip(left, right)))
+    return left == right
+
+
+def _config_delta(manifest: dict, app_id: str, clean: dict):
+    """Return ``(persist, changed_keys)`` for one sparse validated request.
+
+    ``changed_keys`` compares the requested values with the *effective* values
+    (defaults plus overlay), not merely with the keys present in the request.
+    This is the defensive counterpart to a dirty-field frontend: an older UI
+    may still POST the complete form, but unchanged restart-class fields must
+    not restart the app.
+
+    ``None`` remains the reset marker.  It is persisted as a delete operation
+    when an overlay exists even if that overlay redundantly equals the default;
+    such housekeeping is a runtime no-op and therefore never sends SIGHUP or
+    restarts the process.
+    """
+    overlay = appconfig.load_user_config(app_id)
+    effective = appconfig.effective_values_from_overlay(manifest, overlay)
+    desired_overlay = dict(overlay)
+    for key, requested in clean.items():
+        if requested is None:
+            desired_overlay.pop(key, None)
+        else:
+            desired_overlay[key] = requested
+    desired_effective = appconfig.effective_values_from_overlay(
+        manifest, desired_overlay)
+    persist = {}
+    changed = []
+    for key, requested in clean.items():
+        current = effective.get(key, _MISSING_CONFIG_VALUE)
+        desired = desired_effective.get(key, _MISSING_CONFIG_VALUE)
+        if requested is None:
+            if key in overlay:
+                persist[key] = None
+        if (current is _MISSING_CONFIG_VALUE) != (desired is _MISSING_CONFIG_VALUE) \
+                or (current is not _MISSING_CONFIG_VALUE
+                    and not _config_values_equal(current, desired)):
+            changed.append(key)
+            if requested is not None:
+                persist[key] = requested
+            elif key not in persist:
+                # A legacy config loader can expose a value without a canonical
+                # overlay file. Keep the reset operation so migration removes it.
+                persist[key] = None
+    # The pre-selector contract inferred mapping-vs-template from whether the
+    # effective mapping was empty. On the first edit made after this upgrade,
+    # pin the selector currently shown to the user so changing one payload does
+    # not silently flip the other payload into (or out of) effect. This is a
+    # storage migration only; it is not an additional runtime changed key.
+    if (changed and {"dTemplate", "output_mapping"} & set(clean)
+            and "template_mode" in appconfig.schema_specs(manifest)
+            and "template_mode" not in overlay):
+        selected = clean.get("template_mode",
+                             effective.get("template_mode", "template"))
+        if selected in ("mapping", "template"):
+            persist["template_mode"] = selected
+    return persist, changed
+
+
 def do_set_config(app_id: str, incoming: dict, *,
                   _busy_timeout: float = 0.0) -> dict:
     if app_id == builtin.BUILTIN_ID:
@@ -1363,14 +1964,19 @@ def do_set_config(app_id: str, incoming: dict, *,
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
         raise ValueError(f"app not installed: {app_id}")
-    man = _read_manifest(app_id) or {}
-    clean, errors = appconfig.validate_config(man, incoming)
-    if errors:
-        raise ValueError("; ".join(errors))
-    mode = _apply_mode(man, clean.keys())
     with busy_gate(wait_timeout=_busy_timeout):
+        # Read and validate under the same mutation fence as the effective-value
+        # comparison. An install/rollback must not swap the schema between
+        # validation and persistence.
+        man = _read_manifest(app_id) or {}
+        clean, errors = appconfig.validate_config(man, incoming)
+        if errors:
+            raise ValueError("; ".join(errors))
+        persist, changed_keys = _config_delta(man, app_id, clean)
+        mode = _apply_mode(man, changed_keys) if changed_keys else "none"
         # Persist first (survives even if a restart hiccups), then apply.
-        appconfig.write_user_config(app_id, clean)
+        if persist:
+            appconfig.write_user_config(app_id, persist)
         restarted = False
         reloaded = False
         running = supervisor.is_running(app_id) is not None
@@ -1380,16 +1986,20 @@ def do_set_config(app_id: str, incoming: dict, *,
             # written and will be picked up on the next start -- nothing to do.
             if running:
                 reloaded = supervisor.reload(app_id)
-        else:
+        elif mode == "restart":
             # RESTART change: bounce the app so it reloads structural params
             # (model / input_size / backend). Only the active, running app is
             # bounced -- unchanged from prior behaviour.
             if running:
                 rec = state.get_app(app_id)
                 if rec and rec.get("launch_mode") == "managed":
-                    _coordinator().restart(
-                        app_id, manifest=man,
-                        launch=_managed_launch(app_id, "config_restart", man))
+                    try:
+                        _coordinator().restart(
+                            app_id, manifest=man,
+                            launch=_managed_launch(app_id, "config_restart", man))
+                    except Exception:
+                        _invalidate_result_if_inactive(app_id)
+                        raise
                     restarted = True
                 elif state.get_active() == app_id:
                     _stop_external(app_id)
@@ -1397,14 +2007,19 @@ def do_set_config(app_id: str, incoming: dict, *,
                     _coordinated_legacy_start(
                         app_id, "config_restart", proof)
                     restarted = True
-        _audit("config", id=app_id, keys=sorted(clean.keys()),
-               applied=mode, restarted=restarted, reloaded=reloaded)
+        _audit("config", id=app_id, keys=sorted(changed_keys),
+               submitted_keys=sorted(clean.keys()), applied=mode,
+               restarted=restarted, reloaded=reloaded,
+               noop=not changed_keys)
         # Config writes can restart into a new generation; refresh from the
         # installed manifest/state once here rather than consulting it for each
         # result.  Live-only output/template changes retain the same identity.
-        _refresh_result_manifest(app_id, man)
-        return {"id": app_id, "saved": True, "applied": mode,
-                "restarted": restarted, "reloaded": reloaded, "config": clean}
+        if changed_keys:
+            _refresh_result_manifest(app_id, man)
+        return {"id": app_id, "saved": bool(persist), "applied": mode,
+                "restarted": restarted, "reloaded": reloaded,
+                "noop": not changed_keys, "changed_keys": sorted(changed_keys),
+                "config": clean}
 
 
 def _read_first_line(path: str) -> str:
@@ -1504,6 +2119,7 @@ def do_resources() -> dict:
     """Resource journal plus a protocol-level inferenced health snapshot."""
     coord = _coordinator()
     snapshot = coord.resources.snapshot()
+    snapshot["runtime_admission"] = coord.resources.runtime_status()
     grouped = {}
     for allocation in snapshot.get("allocations") or []:
         if allocation.get("state") not in ("reserved", "bound"):
@@ -1602,9 +2218,14 @@ def do_set_mqtt(incoming: dict) -> dict:
             rec = state.get_app(app_id)
             if rec and rec.get("launch_mode") == "managed":
                 manifest = _read_manifest(app_id) or {}
-                _coordinator().restart(
-                    app_id, manifest=manifest,
-                    launch=_managed_launch(app_id, "mqtt_restart", manifest))
+                try:
+                    restarted_result = _coordinator().restart(
+                        app_id, manifest=manifest,
+                        launch=_managed_launch(app_id, "mqtt_restart", manifest))
+                except Exception:
+                    _invalidate_result_if_inactive(app_id)
+                    raise
+                _refresh_result_manifest(app_id, manifest, restarted_result)
                 restarted_apps.append(app_id)
             elif app_id == active:
                 _stop_external(app_id)
@@ -1626,6 +2247,21 @@ def do_set_mqtt(incoming: dict) -> dict:
 # Web-native /api/app-center/v1 facade.  This deliberately does not occupy the
 # firmware's existing /api/v1 namespace, which proxies SenseCraft cloud APIs.
 # --------------------------------------------------------------------------- #
+V1_LOCAL_UPLOAD_SOURCE = "local-web"
+V1_LOCAL_UPLOAD_CHANNEL = "app-center-v1-same-origin"
+V1_DIRECT_UPLOAD_SOURCE = "api-client"
+V1_DIRECT_UPLOAD_CHANNEL = "app-center-v1-direct"
+V1_TRUSTED_EDGE_HEADER = "X-ReCamera-App-Center-Route"
+V1_TRUSTED_EDGE_VALUE = "authenticated-local-web-v1"
+UNSIGNED_CONFIRMATION_FIELD = "unsigned_risk_confirmed"
+UNSIGNED_WARNING_CODE = "unsigned-root-code"
+UNSIGNED_WARNING_MESSAGE = (
+    "UNSIGNED PACKAGE: publisher authenticity is not verified. Application "
+    "code runs with root privileges. Installation leaves the application "
+    "stopped; starting it requires a separate explicit action."
+)
+
+
 def do_v1_policy() -> dict:
     """Return the live, non-secret package admission policy for Web clients."""
     return {
@@ -1650,9 +2286,20 @@ def do_v1_policy() -> dict:
         "signature": {
             "algorithm": appsigning.SIGNATURE_ALG,
             "encoding": "base64-der",
-            "required": bool(paths.REQUIRE_SIGNATURE),
-            "developer_mode_allowed": _developer_mode_allowed(),
+            # v1 direct/future-cloud channels are always signed-only. The one
+            # local Web exception is described explicitly below and therefore
+            # does not inherit the historic global migration switch.
+            "required": True,
             "invalid_signatures_rejected": True,
+            "local_web_unsigned": {
+                "allowed": True,
+                "source": V1_LOCAL_UPLOAD_SOURCE,
+                "channel": V1_LOCAL_UPLOAD_CHANNEL,
+                "requires_explicit_confirmation": True,
+                "confirmation_field": UNSIGNED_CONFIRMATION_FIELD,
+                "auto_start": False,
+                "warning_code": UNSIGNED_WARNING_CODE,
+            },
             "owner_keys": {
                 "management_enabled": True,
                 "format": "pem",
@@ -1745,6 +2392,13 @@ def do_v1_apps() -> dict:
         item = dict(raw)
         manifest = (builtin.manifest() if app_id == builtin.BUILTIN_ID
                     else (_read_manifest(app_id) or {}))
+        if (app_id != builtin.BUILTIN_ID and manifest
+                and isinstance(manifest.get("render"), dict)):
+            # Do not mutate the stat-keyed manifest cache.  This read-only
+            # projection keeps the Web capability list consistent with the
+            # Result Hub's trusted legacy-box compatibility decision.
+            manifest = dict(manifest)
+            manifest["render"] = appvisualization.effective_render(manifest)
         status = _v1_status(raw)
         active_operation = operations.active_for(app_id)
         if active_operation:
@@ -1788,7 +2442,7 @@ def do_v1_apps() -> dict:
     }
 
 
-def _signature_view(status: dict, *, developer_mode_allowed: bool) -> dict:
+def _signature_view(status: dict, *, unsigned_install_allowed: bool) -> dict:
     signed = bool((status or {}).get("signed"))
     verified = bool((status or {}).get("verified"))
     return {
@@ -1799,44 +2453,117 @@ def _signature_view(status: dict, *, developer_mode_allowed: bool) -> dict:
         "detail": (status or {}).get("detail"),
         "signer_kind": (status or {}).get("signer_kind"),
         "key_fingerprint": (status or {}).get("key_fingerprint"),
-        "developer_mode_allowed": bool(developer_mode_allowed and not signed),
+        "unsigned_install_allowed": bool(
+            unsigned_install_allowed and not signed),
     }
 
 
-def _developer_mode_allowed() -> bool:
-    # REQUIRE_SIGNATURE=0 is the historic device-owner developer switch.  The
-    # dedicated v1 flag is clearer for new firmware, but retaining the old one
-    # prevents a developer image from becoming stricter merely by moving from
-    # /api/appMgr/install to the Web App Center flow.
-    return bool(paths.DEVELOPER_MODE_ALLOWED or not paths.REQUIRE_SIGNATURE)
+def _install_context(info: dict, *, unsigned_install: bool = False) -> dict:
+    """Describe same-id install effects without granting later mutation.
+
+    Upload preflight exposes this projection for confirmation UX.  ``do_install``
+    recomputes it while holding the mutation gate, because process state and the
+    installed release may change between upload and finalization.
+    """
+    manifest = (info or {}).get("manifest") or {}
+    app_id = (info or {}).get("id") or manifest.get("id")
+    if not isinstance(app_id, str) or not paths.valid_app_id(app_id):
+        raise installer.InstallError("package has invalid application id")
+    installed = os.path.isdir(paths.app_dir(app_id))
+    installed_manifest = (_read_manifest(app_id) or {}) if installed else {}
+    installed_release = installer.installed_release_id(app_id) if installed else None
+    target_release = ((info.get("release_lock") or {}).get("release_id")
+                      or (info.get("preflight") or {}).get("release_id"))
+    exact_release = bool(
+        installed and isinstance(installed_release, str)
+        and isinstance(target_release, str)
+        and installed_release == target_release)
+    record = state.get_app(app_id) or {}
+    running = bool(installed and supervisor.is_running(app_id) is not None)
+    observed = record.get("observed_state") or "stopped"
+    current_status = _v1_status({
+        "running": running,
+        "observed_state": observed,
+    })
+    has_record = bool(installed and supervisor.has_run_record(app_id))
+    lifecycle_fence = bool(
+        record.get("teardown_pending")
+        or record.get("instance_id")
+        or observed in ("preparing_env", "starting", "ready", "running",
+                        "stopping", "degraded")
+        or record.get("allocations"))
+    will_stop = bool(installed and (running or has_record or lifecycle_fence))
+    desired_running = record.get("desired_state") == state.DESIRED_RUNNING
+    will_restart = bool(
+        will_stop and not unsigned_install
+        and (running or (desired_running and observed in (
+            "preparing_env", "starting", "ready", "running", "degraded"))))
+    confirmation_required = []
+    if running:
+        confirmation_required.append("running_upgrade_confirmed")
+    if exact_release:
+        confirmation_required.append("force_reinstall_confirmed")
+    return {
+        "mode": ("new" if not installed else
+                 "reinstall" if exact_release else "upgrade"),
+        "installed_version": installed_manifest.get("version") if installed else None,
+        "target_version": manifest.get("version"),
+        "installed_release_id": installed_release,
+        "target_release_id": target_release,
+        "current_status": current_status,
+        "will_stop": will_stop,
+        "will_restart": will_restart,
+        "requires_manual_start": bool(unsigned_install),
+        "confirmation_required": confirmation_required,
+    }
 
 
-def do_v1_upload(stream, content_length: int, content_type: str) -> dict:
+def _is_local_web_upload(source: str, channel: str) -> bool:
+    return (source == V1_LOCAL_UPLOAD_SOURCE
+            and channel == V1_LOCAL_UPLOAD_CHANNEL)
+
+
+def do_v1_upload(stream, content_length: int, content_type: str, *,
+                 source: str = V1_DIRECT_UPLOAD_SOURCE,
+                 channel: str = V1_DIRECT_UPLOAD_CHANNEL) -> dict:
     """Receive a package without buffering it, then perform non-mutating preflight."""
-    upload = appuploads.receive(stream, content_length, content_type)
+    local_web = _is_local_web_upload(source, channel)
+    upload = appuploads.receive(
+        stream, content_length, content_type, source=source, channel=channel)
     upload_id = upload["upload_id"]
     try:
-        # Inspection never executes package code.  It may parse an unsigned
-        # package so the UI can explain why production install is disabled;
-        # finalize independently enforces the device developer-mode policy.
+        # Only the authenticated, same-origin Web route may inspect an unsigned
+        # package. Invalid/forged signatures still fail inside verify_package().
+        # Direct/API and future cloud channels retain the signed-only policy.
         info = installer.inspect(
-            upload["package_path"], upload.get("signature"), allow_unsigned=True)
+            upload["package_path"], upload.get("signature"),
+            allow_unsigned=local_web)
+        if (not local_web
+                and not (info.get("signature") or {}).get("verified")):
+            # ``installer.inspect(..., allow_unsigned=False)`` follows the
+            # historic global switch. The Web-native provenance contract is
+            # stricter: no non-local v1 source inherits that escape hatch.
+            raise installer.InstallError(
+                "unsigned package is not allowed on direct/cloud upload channels")
         manifest = info["manifest"]
         version = manifest.get("manifest_version", 1)
-        developer_allowed = bool(
-            _developer_mode_allowed()
-            and not (info.get("signature") or {}).get("signed"))
+        unsigned_allowed = bool(
+            local_web and not (info.get("signature") or {}).get("signed"))
         signature = _signature_view(
             info.get("signature") or {},
-            developer_mode_allowed=developer_allowed)
-        conflicts = []
+            unsigned_install_allowed=unsigned_allowed)
         resource_error = None
         try:
-            plan = appresources.plan_manifest(
-                manifest,
-                appconfig.effective_values(manifest, manifest.get("id", "")))
-            conflicts = _coordinator().resources.conflicts(
-                plan, ignore_app_id=manifest.get("id"))
+            # Validate the declared/static plan only. Live occupancy and
+            # dependency availability are start-time admission concerns owned
+            # by Coordinator.start(), not package installation concerns.
+            # A package preflight must not read or migrate the installed
+            # version's config overlay.  That overlay may contain values which
+            # the new schema intentionally removed; install revalidates it
+            # atomically before any later start.  Defaults prove the new
+            # package has a valid static plan, while the exact effective plan
+            # is recomputed and admitted at start time.
+            appresources.plan_manifest(manifest)
         except (ValueError, appresources.ResourceError) as exc:
             resource_error = str(exc)
         checks = [
@@ -1850,12 +2577,32 @@ def do_v1_upload(stream, content_length: int, content_type: str) -> dict:
              "passed": True, "message": "declared platform is compatible"},
             {"id": "resources", "label": "Resource declaration",
              "passed": resource_error is None,
-             "message": resource_error or "resource declaration is schedulable"},
+             "message": resource_error or (
+                 "resource declaration is valid; live admission is deferred "
+                 "until start")},
             {"id": "signature", "label": "Publisher signature",
-             "passed": signature["status"] == "verified" or developer_allowed,
+             "passed": signature["status"] == "verified" or unsigned_allowed,
              "message": (signature.get("detail") or signature["status"])},
         ]
+        unsigned = signature["status"] == "unsigned"
+        warnings = ([{
+            "code": UNSIGNED_WARNING_CODE,
+            "severity": "critical",
+            "message": UNSIGNED_WARNING_MESSAGE,
+        }] if unsigned else [])
+        unsigned_confirmation = {
+            "required": bool(unsigned),
+            "fields": ([UNSIGNED_CONFIRMATION_FIELD]
+                       if unsigned else []),
+            "confirmation_field": UNSIGNED_CONFIRMATION_FIELD,
+            "expected": True,
+            "auto_start": False,
+        }
+        install_context = _install_context(
+            info, unsigned_install=unsigned_allowed)
         preflight = {
+            "source": source,
+            "channel": channel,
             "manifest": manifest,
             "manifest_version": version,
             "release_id": (info.get("preflight") or {}).get("release_id"),
@@ -1867,16 +2614,29 @@ def do_v1_upload(stream, content_length: int, content_type: str) -> dict:
             "instances": manifest.get("instances") or {"max": 1},
             "health": manifest.get("health") or {},
             "signature": signature,
-            "conflicts": conflicts,
+            # Compatibility field for existing Web clients. Installation no
+            # longer asks the live resource manager and therefore never uses a
+            # current reservation as a package rejection reason.
+            "conflicts": [],
+            "start_admission": {
+                "enforced_on": "start",
+                "live_resources": "deferred",
+                "dependencies": "deferred",
+                "message": (
+                    "Live resource occupancy and dependency availability are "
+                    "checked when the application starts"),
+            },
             "checks": checks,
-            "developer_mode_allowed": developer_allowed,
+            "warnings": warnings,
+            "unsigned_confirmation": unsigned_confirmation,
+            "install_context": install_context,
         }
         appuploads.update(
             upload_id, status="preflighted", app_id=manifest.get("id"),
             manifest_version=version, preflight=preflight)
         _audit("v1_upload", upload_id=upload_id, id=manifest.get("id"),
                filename=upload.get("filename"), size=upload.get("size"),
-               signature=signature["status"])
+               signature=signature["status"], source=source, channel=channel)
         return {"upload_id": upload_id, "preflight": preflight}
     except Exception as exc:
         try:
@@ -1930,17 +2690,63 @@ def _assert_v1_preflight_binding(expected: dict, inspected: dict) -> None:
             "package signer identity changed after preflight")
 
 
+def _v1_finalize_fingerprint(body: dict) -> str:
+    """Hash the security-relevant, semantically normalized finalize request."""
+    payload = {
+        "permissions": body.get("permissions"),
+        "permissions_confirmed": body.get("permissions_confirmed") is True,
+        UNSIGNED_CONFIRMATION_FIELD: (
+            body.get(UNSIGNED_CONFIRMATION_FIELD) is True),
+        "running_upgrade_confirmed": (
+            body.get("running_upgrade_confirmed") is True),
+        "force_reinstall_confirmed": (
+            body.get("force_reinstall_confirmed") is True),
+    }
+    try:
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("finalize request is not valid JSON data") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def do_v1_install(body: dict) -> dict:
+    if "source" in body or "channel" in body:
+        raise ValueError("upload source/channel are server-assigned")
     upload_id = body.get("upload_id")
     if not isinstance(upload_id, str) or not upload_id:
         raise ValueError("missing/invalid 'upload_id'")
-    developer_mode = body.get("developer_mode", False)
-    if not isinstance(developer_mode, bool):
+    # Tolerate the old Web client's boolean field during rollout, but it is no
+    # longer a policy gate. Local unsigned install has one explicit risk
+    # confirmation, independent of the legacy global developer-mode switch.
+    if "developer_mode" in body and not isinstance(body["developer_mode"], bool):
         raise ValueError("'developer_mode' must be a boolean")
+    for confirmation_field in (
+            "running_upgrade_confirmed", "force_reinstall_confirmed"):
+        if (confirmation_field in body
+                and not isinstance(body[confirmation_field], bool)):
+            raise ValueError("'%s' must be a boolean" % confirmation_field)
     if body.get("permissions_confirmed") is not True:
         raise ValueError("permissions must be explicitly confirmed")
+    request_fingerprint = _v1_finalize_fingerprint(body)
 
     with _upload_finalize_lock:
+        manager = _operation_manager()
+        existing = manager.for_upload(upload_id)
+        if existing is not None:
+            existing_app_id = existing.get("app_id")
+            if (existing.get("type") != "install"
+                    or not isinstance(existing_app_id, str)
+                    or not paths.valid_app_id(existing_app_id)):
+                raise appoperations.OperationBusyError(
+                    "upload_id is already bound to a different operation")
+            if existing.get("request_fingerprint") != request_fingerprint:
+                raise appoperations.OperationBusyError(
+                    "upload_id finalize request does not match the original "
+                    "operation")
+            return {"operation": existing, "idempotent_replay": True}
+
         upload = appuploads.verify(upload_id)
         if upload.get("status") in ("install_queued", "installing", "installed"):
             raise ValueError("upload has already been finalized")
@@ -1948,27 +2754,74 @@ def do_v1_install(body: dict) -> dict:
         if not isinstance(preflight, dict):
             raise ValueError("upload has no successful preflight")
         manifest = preflight.get("manifest") or {}
+        upload_source = upload.get("source")
+        upload_channel = upload.get("channel")
+        if (("source" in preflight or "channel" in preflight)
+                and (preflight.get("source") != upload_source
+                     or preflight.get("channel") != upload_channel)):
+            raise ValueError("upload source/channel changed after preflight")
         if manifest.get("manifest_version") != 2:
             raise ValueError(
                 "/api/app-center/v1/apps requires manifest_version=2")
+        install_context = preflight.get("install_context")
+        allowed_confirmations = {
+            "running_upgrade_confirmed", "force_reinstall_confirmed"}
+        if (not isinstance(install_context, dict)
+                or install_context.get("mode") not in (
+                    "new", "upgrade", "reinstall")
+                or install_context.get("target_version") != manifest.get("version")
+                or install_context.get("target_release_id") !=
+                    preflight.get("release_id")):
+            raise ValueError("upload has invalid install context")
+        required_confirmations = install_context.get("confirmation_required")
+        if (not isinstance(required_confirmations, list)
+                or any(not isinstance(field, str)
+                       for field in required_confirmations)
+                or len(set(required_confirmations)) != len(required_confirmations)
+                or any(field not in allowed_confirmations
+                       for field in required_confirmations)):
+            raise ValueError("upload has invalid install confirmation context")
+        for confirmation_field in required_confirmations:
+            if body.get(confirmation_field) is not True:
+                raise ValueError(
+                    "%s must be explicitly confirmed" % confirmation_field)
         expected_permissions = manifest.get("permissions") or {}
         if not _same_json(body.get("permissions"), expected_permissions):
             raise ValueError("confirmed permissions do not match package manifest")
+        resource_check = next(
+            (item for item in preflight.get("checks") or []
+             if isinstance(item, dict) and item.get("id") == "resources"),
+            None)
+        if resource_check is not None and resource_check.get("passed") is not True:
+            raise ValueError(
+                "resource declaration failed static preflight: %s" %
+                (resource_check.get("message") or "invalid declaration"))
 
         signature = preflight.get("signature") or {}
         signature_status = signature.get("status")
         if signature_status == "verified":
             allow_unsigned = False
         elif signature_status == "unsigned":
-            if not developer_mode:
-                raise ValueError("unsigned package requires explicit developer_mode")
-            if not _developer_mode_allowed():
-                raise ValueError("developer mode is disabled on this device")
+            if not _is_local_web_upload(upload_source, upload_channel):
+                raise ValueError(
+                    "unsigned package is allowed only from the authenticated "
+                    "same-origin local Web upload route")
+            if body.get(UNSIGNED_CONFIRMATION_FIELD) is not True:
+                raise ValueError(
+                    "unsigned package risk must be explicitly confirmed")
             allow_unsigned = True
         else:
             raise ValueError("package signature is invalid")
 
         app_id = manifest.get("id")
+        if allow_unsigned:
+            _audit(
+                "v1_unsigned_risk_confirmed",
+                upload_id=upload_id,
+                id=app_id,
+                source=upload_source,
+                channel=upload_channel,
+            )
         appuploads.update(upload_id, status="install_queued")
 
         def install_job():
@@ -1978,6 +2831,11 @@ def do_v1_install(body: dict) -> dict:
                     upload["package_path"], upload.get("signature"),
                     allow_unsigned=allow_unsigned,
                     expected_preflight=preflight,
+                    running_upgrade_confirmed=(
+                        body.get("running_upgrade_confirmed") is True),
+                    force_reinstall_confirmed=(
+                        body.get("force_reinstall_confirmed") is True),
+                    _enforce_v1_confirmations=True,
                     _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC)
             except Exception as exc:
                 try:
@@ -1997,14 +2855,35 @@ def do_v1_install(body: dict) -> dict:
                 # Operations retain the terminal result/error.  Uploaded package
                 # bytes are single-use and must not accumulate after either path.
                 if not appuploads.remove(upload_id):
+                    appuploads.mark_orphaned(upload_id)
                     _audit("v1_upload_cleanup_failed", upload_id=upload_id,
                            terminal="install")
 
         try:
-            operation = _operation_manager().submit(
-                "install", app_id, install_job)
-        except Exception:
-            appuploads.update(upload_id, status="preflighted")
+            operation = manager.submit(
+                "install", app_id, install_job, upload_id=upload_id,
+                request_fingerprint=request_fingerprint)
+        except Exception as submit_error:
+            # OperationManager retains a terminal upload binding if queue
+            # admission became uncertain. Such bytes are no longer reusable;
+            # otherwise restore preflight so ordinary app/queue contention can
+            # be retried with the same upload.
+            if manager.for_upload(upload_id) is not None:
+                if not appuploads.remove(upload_id):
+                    appuploads.mark_orphaned(upload_id)
+                    _audit(
+                        "v1_upload_cleanup_failed", upload_id=upload_id,
+                        terminal="submit_failed", error=str(submit_error))
+            else:
+                try:
+                    appuploads.update(upload_id, status="preflighted")
+                except Exception as rollback_error:
+                    if not appuploads.remove(upload_id):
+                        appuploads.mark_orphaned(upload_id)
+                    _audit(
+                        "v1_upload_submit_rollback_failed",
+                        upload_id=upload_id, error=str(rollback_error),
+                        submit_error=str(submit_error))
             raise
         # Do not write the operation id back after submit: the worker may finish
         # (and remove this single-use upload) before submit returns.  The
@@ -2325,9 +3204,18 @@ class _Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == ICON_ENDPOINT:
-            app_id = (parse_qs(parsed.query).get("id") or [None])[0]
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            app_id = (query.get("id") or [None])[0]
             if not app_id:
                 return self._send(400, {"error": "missing 'id'"})
+            requested_hash = query.get("h")
+            if requested_hash is not None:
+                if (len(requested_hash) != 1
+                        or re.fullmatch(r"[0-9a-f]{16}", requested_hash[0]) is None):
+                    return self._send(400, {
+                        "error": "'h' must be exactly 16 lowercase hexadecimal characters",
+                    })
+                requested_hash = requested_hash[0]
             try:
                 data, ctype = do_icon(app_id)
             except ValueError as e:
@@ -2336,8 +3224,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": str(e)})
             except OSError as e:
                 return self._send(500, {"error": repr(e)})
-            # Immutable per (id, version): the URL carries `v=<version>`, so a
-            # long max-age is safe and an upgrade busts it by changing the URL.
+            if (requested_hash is not None
+                    and hashlib.sha256(data).hexdigest()[:16] != requested_hash):
+                # Never serve replacement bytes under an older content-addressed
+                # URL: that would let an intermediary cache the new icon under
+                # the stale key.  Requests without h remain legacy-compatible.
+                return self._send(412, {"error": "icon content hash does not match"})
+            # The URL carries the validated icon's content digest, so a long
+            # max-age remains safe even for a same-version force reinstall.
             return self._send_bytes(200, data, ctype,
                                     cache="public, max-age=86400")
         if path == "/api/appMgr/assets":
@@ -2404,8 +3298,43 @@ class _Handler(BaseHTTPRequestHandler):
                     length = int(self.headers.get("Content-Length", 0) or 0)
                 except (TypeError, ValueError) as exc:
                     raise appuploads.MultipartError("invalid Content-Length") from exc
-                result = do_v1_upload(
-                    self.rfile, length, self.headers.get("Content-Type", ""))
+                # nginx overwrites V1_TRUSTED_EDGE_HEADER only after its JWT
+                # auth_request succeeds. Requiring that stamp, a validated
+                # browser Origin and a loopback proxy peer keeps provenance
+                # server-assigned. The React client legitimately sends a
+                # Bearer header in addition to the JWT cookie; nginx's
+                # post-auth overwrite stamp, not header absence, is the trust
+                # signal. Multipart/JSON fields can never opt another route in.
+                try:
+                    peer_is_loopback = ipaddress.ip_address(
+                        self.client_address[0]).is_loopback
+                except ValueError:
+                    peer_is_loopback = False
+                local_web = bool(
+                    peer_is_loopback
+                    and self.headers.get(V1_TRUSTED_EDGE_HEADER)
+                    == V1_TRUSTED_EDGE_VALUE
+                    and self.headers.get("Origin") is not None)
+                previous_timeout = self.connection.gettimeout()
+                try:
+                    self.connection.settimeout(max(
+                        0.001, float(paths.UPLOAD_SOCKET_TIMEOUT_SEC)))
+                    try:
+                        result = do_v1_upload(
+                            self.rfile, length,
+                            self.headers.get("Content-Type", ""),
+                            source=(V1_LOCAL_UPLOAD_SOURCE if local_web
+                                    else V1_DIRECT_UPLOAD_SOURCE),
+                            channel=(V1_LOCAL_UPLOAD_CHANNEL if local_web
+                                     else V1_DIRECT_UPLOAD_CHANNEL))
+                    except TimeoutError as exc:
+                        raise appuploads.MultipartError(
+                            "multipart upload socket timed out") from exc
+                finally:
+                    try:
+                        self.connection.settimeout(previous_timeout)
+                    except OSError:
+                        self.close_connection = True
                 return self._send(201, result)
             except Exception as exc:
                 # A rejected streaming body may not have reached its terminal
@@ -2611,9 +3540,105 @@ def _acquire_single_instance() -> bool:
         return False
 
 
-def _boot_restore() -> None:
-    """Reconcile and restore every desired-running app, independently."""
+def _reconcile_startup_state() -> dict:
+    """Canonicalise durable lifecycle state under the startup lock order.
+
+    ``serve`` already owns appmgr.lock before entering here.  Taking busy.lock
+    next matches every ordinary lifecycle mutation (busy.lock -> state lock),
+    so a concurrently invoked CLI cannot be lost between reconciliation's read
+    and atomic replace.  Invalid state is deliberately left untouched and the
+    daemon continues with state.load()'s existing fail-safe empty view.
+    """
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        result = state.reconcile_persisted()
+    if result.get("changed"):
+        print("[appmgr] reconciled persisted state: revision %s -> %s" %
+              (result.get("previous_revision"), result.get("revision")),
+              flush=True)
+        _audit("state_reconciled",
+               previous_revision=result.get("previous_revision"),
+               revision=result.get("revision"))
+    elif result.get("status") == "invalid":
+        print("[appmgr] warning: persisted state is invalid; left untouched",
+              flush=True)
+        _audit("state_reconcile_skipped", reason="invalid persisted state")
+    return result
+
+
+def _reconcile_install_transaction() -> Optional[dict]:
+    """Finish or roll back a power-interrupted code/env install transaction."""
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        transaction = installer.load_install_transaction()
+        if transaction is None:
+            return None
+        app_id = transaction["app_id"]
+        phase = transaction["phase"]
+        if phase in ("ready", "committed"):
+            installer.validate_committed_transaction_files(transaction)
+            installer.clear_install_transaction(
+                transaction_id=transaction["transaction_id"])
+            cache_clear()
+            return {"app_id": app_id, "phase": phase, "action": "committed"}
+
+        rec = state.get_app(app_id) or {}
+        running_pid = supervisor.is_running(app_id)
+        has_record = supervisor.has_run_record(app_id)
+        lifecycle_fence = bool(
+            rec.get("teardown_pending") or rec.get("allocations")
+            or rec.get("instance_id")
+            or rec.get("observed_state") in (
+                "preparing_env", "starting", "ready", "running",
+                "stopping", "degraded"))
+        if running_pid is not None or has_record or lifecycle_fence:
+            if (rec.get("instance_id") or rec.get("allocations")
+                    or lifecycle_fence):
+                _coordinator().stop(app_id, desired=state.DESIRED_STOPPED)
+            else:
+                supervisor.stop(app_id)
+        if (supervisor.owned_pid_is_running(app_id, running_pid)
+                or supervisor.is_running(app_id) is not None
+                or supervisor.has_run_record(app_id)):
+            raise BusyError(
+                "interrupted install process fence remains active: %s" % app_id)
+        current = state.get_app(app_id) or {}
+        if (current.get("teardown_pending")
+                or current.get("observed_state") == "stopping"):
+            raise BusyError(
+                "interrupted install teardown remains incomplete: %s" % app_id)
+
+        installer.rollback_install_transaction_files(transaction)
+        appconfig.restore_upgrade_config(transaction.get("config_snapshot"))
+        state.restore_app_snapshot(transaction.get("lifecycle_snapshot"))
+        installer.clear_install_transaction(
+            transaction_id=transaction["transaction_id"])
+        cache_clear()
+        return {"app_id": app_id, "phase": phase, "action": "rolled_back"}
+
+
+def _boot_restore_locked() -> None:
+    """Restore desired apps while the caller owns the mutation gate."""
     coord = _coordinator()
+    # Complete any fail-closed teardown before deciding which allocations are
+    # stale.  Across a reboot, persisted PID/PGID numbers are deliberately
+    # cleanup-only; coordinator.stop retires that cross-boot identity, releases
+    # its exact generation, and preserves the original desired intent so the
+    # normal restore loop below can launch it again.  A same-boot residual group
+    # still alive fails closed here and keeps its identity/resources fenced.
+    for app_id, rec in state.app_states().items():
+        if (rec.get("observed_state") != "stopping"
+                and not rec.get("teardown_pending")):
+            continue
+        desired = rec.get("desired_state")
+        if desired not in state.DESIRED_STATES:
+            desired = state.DESIRED_STOPPED
+        try:
+            coord.stop(app_id, desired=desired)
+            _audit("boot_teardown_recovered", id=app_id, desired=desired)
+        except Exception as exc:
+            _audit("boot_teardown_pending", id=app_id, error=repr(exc))
+            print("[appmgr] boot teardown retry for %s remains pending: %r" %
+                  (app_id, exc), flush=True)
+
     try:
         stale = coord.reconcile_allocations()
         if stale:
@@ -2669,6 +3694,29 @@ def _boot_restore() -> None:
                   flush=True)
 
 
+def _boot_restore() -> None:
+    """Reconcile and restore every desired-running app, independently.
+
+    ``serve`` owns the single-daemon lock, but a short-lived CLI process may
+    still mutate lifecycle/resource state during daemon startup.  Hold the
+    same cross-process busy gate across stale-allocation reconciliation and
+    every restore/adopt transaction so two ResourceManager instances cannot
+    both admit from the same journal snapshot.  A CLI that already owns the
+    gate is allowed to finish; boot then retries from a fresh state/resource
+    snapshot instead of serving with stale allocations or dropping a restore.
+    """
+    while True:
+        try:
+            with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+                _boot_restore_locked()
+            return
+        except BusyError:
+            _audit("boot_restore_waiting", reason="mutation gate busy")
+            print("[appmgr] boot-restore waiting: mutation gate busy",
+                  flush=True)
+            time.sleep(max(0.01, float(paths.V1_OPERATION_BUSY_RETRY_SEC)))
+
+
 def _reconcile_once() -> list:
     """Advance desired lifecycle state once; safe to call from host tests."""
     try:
@@ -2691,19 +3739,32 @@ def _reconcile_once() -> list:
     coord = _coordinator()
     for app_id in state.desired_apps():
         rec = state.get_app(app_id) or {}
-        if rec.get("launch_mode") != "managed":
-            continue
-        if not os.path.isdir(paths.app_dir(app_id)):
-            state.transition(app_id, "failed", pid=None, pgid=None,
-                             allocations=[],
-                             reason="desired app is not installed")
+        # Public legacy activate/switch applications are not auto-restarted,
+        # but they still need crash observation: exact inference revocation,
+        # resource release, stream-contract clearing and Result Hub tombstone.
+        # AppCoordinator.reconcile_one performs that observation and returns
+        # ``legacy-unmanaged`` before any restart-policy branch.
+        if rec.get("launch_mode") not in ("managed", "legacy"):
             continue
         try:
             with busy_gate():
                 # Re-read after taking the mutation gate: an explicit stop may
                 # have won the race while this tick was enumerating desired ids.
+                # The install-dir check and its app-wide Hub invalidation also
+                # belong behind this gate: reinstall+start may otherwise win
+                # between a stale missing-dir read and our failed transition,
+                # letting this tick erase the newly running generation.
                 current = state.get_app(app_id) or {}
-                if current.get("desired_state") != state.DESIRED_RUNNING:
+                if (current.get("desired_state") != state.DESIRED_RUNNING
+                        or current.get("launch_mode") not in
+                        ("managed", "legacy")):
+                    continue
+                if not os.path.isdir(paths.app_dir(app_id)):
+                    state.transition(
+                        app_id, "failed", pid=None, pgid=None, allocations=[],
+                        frame_stream_contract={"id": "", "kind": "none"},
+                        reason="desired app is not installed")
+                    _invalidate_result_app(app_id)
                     continue
                 manifest = _read_manifest(app_id) or {}
                 before = current.get("observed_state")
@@ -2715,6 +3776,8 @@ def _reconcile_once() -> list:
                 results.append(result)
                 after = result.get("observed_state")
                 action = result.get("action")
+                if after not in _LIVE_RESULT_PHASES:
+                    _invalidate_result_if_inactive(app_id)
                 if (after != before or action in
                         ("restarted", "restart_failed", "crash_loop")):
                     _audit("reconcile", id=app_id, before=before,
@@ -2726,6 +3789,7 @@ def _reconcile_once() -> list:
         except BusyError:
             continue
         except Exception as exc:
+            _invalidate_result_if_inactive(app_id)
             _audit("reconcile_failed", id=app_id, error=str(exc))
             results.append({"id": app_id, "action": "error",
                             "reason": str(exc)})
@@ -2767,8 +3831,16 @@ def serve(host: str = None, port: int = None) -> None:
     port = port or paths.HTTP_PORT
     if not _acquire_single_instance():
         raise SystemExit("appmgr already running (single-instance lock held)")
+    # Lock order is appmgr.lock -> busy.lock -> state._LOCK.  Persist old raw
+    # records before creating the coordinator or inspecting desired boot state;
+    # ordinary load()/GET paths remain side-effect free.
+    _reconcile_startup_state()
     try:
-        expired_uploads = appuploads.gc_expired(include_active=True)
+        recovered_uploads = appuploads.recover_startup()
+        if (recovered_uploads.get("removed")
+                or recovered_uploads.get("interrupted")):
+            _audit("upload_recovery", **recovered_uploads)
+        expired_uploads = appuploads.gc_expired()
         if expired_uploads:
             _audit("upload_gc", removed=expired_uploads)
     except Exception as exc:
@@ -2781,6 +3853,23 @@ def serve(host: str = None, port: int = None) -> None:
     # log line) happens in normal context from do_list/do_metrics/stop.
     if not supervisor.install_sigchld():
         print("[appmgr] warning: could not install SIGCHLD handler", flush=True)
+    # Resolve the durable cross-layer transaction before the generic directory
+    # sweep or desired-state boot restore.  An unfinished generation must never
+    # be launched merely because its code rename happened to reach disk first.
+    try:
+        install_recovery = _reconcile_install_transaction()
+        if install_recovery is not None:
+            print("[appmgr] reconciled install transaction: %s" %
+                  install_recovery, flush=True)
+            _audit("install_transaction_reconciled", **install_recovery)
+    except Exception as exc:
+        print("[appmgr] install transaction recovery failed: %r" % exc,
+              flush=True)
+        _audit("install_transaction_reconcile_failed", error=repr(exc))
+        # Fail closed: boot restoration against an unresolved code/env pair
+        # could launch the wrong generation and overwrite its only rollback
+        # handles.  The journal remains for the next service retry.
+        raise
     # Recover any install a crash interrupted mid dir-swap BEFORE we look at what
     # is installed / boot-restore the active app (健壮#16): a `<id>.prev` with no
     # live `<id>` dir means the app silently vanished and must be swapped back.

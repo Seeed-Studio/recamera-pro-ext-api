@@ -1058,8 +1058,11 @@ class App:
         # returns and run_app emits APPMGR_READY.
         self.prepare_runtime()
         if verbose:
+            actual_source = (type(rt["src"]).__name__
+                             if self.needs_frames else "none")
             print(f"[app:{self.id}] models={[h.path for h in self.models]} "
-                  f"source={source if self.needs_frames else 'none'} "
+                  f"source={actual_source} "
+                  f"requested_source={source if self.needs_frames else 'none'} "
                   f"url={url if self.needs_frames else '-'} "
                   f"input={self._pre_size} "
                   f"sink={type(sink).__name__}", flush=True)
@@ -1413,13 +1416,17 @@ class App:
         return block
 
     def emit(self, events=None, ts: Optional[float] = None, *,
-             results=None, extra: Optional[Dict[str, Any]] = None) -> None:
+             results=None, geometry=None,
+             extra: Optional[Dict[str, Any]] = None) -> None:
         """Publish one frame's output through the manifest-configured sinks.
 
         `events` are the app-level events; `results` (optional) are the raw
         per-frame detections/records that the /appcenter overlay and the
-        manifest `output` field mappings read as `results[]`. `ts` defaults to
-        the current frame's pts.
+        manifest `output` field mappings read as `results[]`. ``geometry`` is a
+        list (or :class:`kit.geometry.GeometryBuilder`) of validated canonical
+        drawing primitives.  Their coordinate space is not trusted from the
+        payload: managed Result Hub ingress injects it from the installed
+        manifest. `ts` defaults to the current frame's pts.
 
         During the warm-up frame this is a no-op (same as pre-migration).
         """
@@ -1429,6 +1436,13 @@ class App:
         t0 = time.monotonic()
         try:
             frame = self._cur_frame
+            geometry_items = None
+            if geometry is not None:
+                from kit.geometry import GeometryBuilder
+                if isinstance(geometry, GeometryBuilder):
+                    geometry_items = geometry.build()
+                else:
+                    geometry_items = GeometryBuilder().extend(geometry).build()
             payload = {
                 "results": list(results) if results is not None else [],
                 "events": list(events) if events is not None else [],
@@ -1440,6 +1454,12 @@ class App:
                                 if self._t_frame0 else 0.0),
                 "stream_id": "camera-0",
             }
+            # Preserve the legacy wire shape for every existing application.
+            # Only an explicit use of the new API opts the envelope into the
+            # top-level geometry contract; ``geometry=[]`` remains available
+            # when a producer deliberately wants to publish an empty set.
+            if geometry_items is not None:
+                payload["geometry"] = geometry_items
             # ★Self-describing stream★ (§3): the EFFECTIVE render declaration
             # rides along every frame, so a third-party consumer on :8124 draws
             # the overlay correctly without ever fetching the manifest. Absent

@@ -8,6 +8,7 @@ exclusive compatibility resource and is never presented as multi-owner NPU.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import socket
@@ -27,12 +28,14 @@ class ResourceError(RuntimeError):
 
 
 class ResourceBusy(ResourceError):
-    def __init__(self, resource: str, owners: Iterable[str]):
+    def __init__(self, resource: str, owners: Iterable[str], *, detail: str = ""):
         self.resource = resource
         self.owners = sorted(set(str(x) for x in owners if x))
         owner_text = ", ".join(self.owners) or "unknown"
-        super().__init__("resource %s is busy (owners: %s)" %
-                         (resource, owner_text))
+        message = "resource %s is busy (owners: %s)" % (resource, owner_text)
+        if detail:
+            message += ": " + str(detail)
+        super().__init__(message)
 
 
 class DependencyUnavailable(ResourceError):
@@ -142,6 +145,113 @@ def _mode(value, default: str = "shared") -> str:
     return str(value or default).strip().lower().replace("_", "-")
 
 
+def _env_capacity(name: str, default: int, *, allow_zero: bool = False) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(0 if allow_zero else 1, value)
+
+
+def _append_limit_requests(requests: List[Request], resource_spec: dict) -> None:
+    """Turn declared app budgets into start-time soft reservations.
+
+    These reservations deliberately live beside camera/NPU claims: installing a
+    package never owns them, while ``ResourceManager.reserve`` atomically checks
+    and records them for one exact running generation.  Memory is uncapped by
+    declared-budget sum unless an operator explicitly configures an aggregate
+    cap: the live start probe already observes usage by running apps, so summing
+    their manifest maxima as well would reject workloads the device can still
+    carry.  ``memory_mb`` remains the prospective new generation's envelope
+    when the live MemAvailable/headroom check runs. Storage keeps a reservation
+    cap because current free space cannot account for data a running app may
+    still write up to its declared envelope.
+
+    CPU is exposed in the journal for diagnostics but is not numerically capped
+    by default.  A manifest maximum is not a reliable prediction of steady CPU
+    use, so deployments that have calibrated their application set may opt into
+    a platform cap with ``APPMGR_MANAGED_CPU_CAP_PERCENT``.
+    """
+    limits = (resource_spec.get("limits")
+              if isinstance(resource_spec, dict) else None)
+    if not isinstance(limits, dict):
+        return
+    memory_mb = limits.get("memory_mb")
+    if (isinstance(memory_mb, int) and not isinstance(memory_mb, bool)
+            and memory_mb > 0):
+        requests.append(Request(
+            "memory.managed-mb", "shared", memory_mb,
+            _env_capacity("APPMGR_MANAGED_MEMORY_CAP_MB", 0,
+                          allow_zero=True),
+        ))
+    storage_mb = limits.get("storage_mb")
+    if (isinstance(storage_mb, int) and not isinstance(storage_mb, bool)
+            and storage_mb > 0):
+        requests.append(Request(
+            "storage.appdata-mb", "shared", storage_mb,
+            _env_capacity("APPMGR_MANAGED_STORAGE_CAP_MB", 8192,
+                          allow_zero=True),
+        ))
+    cpu_percent = limits.get("cpu_percent")
+    if isinstance(cpu_percent, int) and not isinstance(cpu_percent, bool) \
+            and cpu_percent > 0:
+        requests.append(Request(
+            "cpu.managed-percent", "shared", cpu_percent,
+            _env_capacity("APPMGR_MANAGED_CPU_CAP_PERCENT", 0, allow_zero=True),
+        ))
+
+
+def _existing_path(path: str) -> str:
+    current = os.path.abspath(path)
+    while not os.path.exists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            return "/"
+        current = parent
+    return current
+
+
+def runtime_capacity_probe() -> dict:
+    """Best-effort live inputs for start admission; absence is not fabricated.
+
+    The resource journal supplies deterministic aggregate reservations.  These
+    readings add the other half of safe admission: memory/storage already used
+    by the platform and current thermal state.  Tests can inject a deterministic
+    probe through ``ResourceManager(runtime_probe=...)``.
+    """
+    mem_available_mb = None
+    try:
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    mem_available_mb = int(line.split()[1]) // 1024
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+
+    storage_free_mb = None
+    try:
+        stat = os.statvfs(_existing_path(paths.APPDATA_DIR))
+        storage_free_mb = int(stat.f_bavail * stat.f_frsize // (1024 * 1024))
+    except (OSError, ValueError, AttributeError):
+        pass
+
+    temperatures = []
+    for filename in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
+        try:
+            with open(filename) as handle:
+                value = float(handle.readline().strip()) / 1000.0
+            if -50.0 <= value <= 250.0:
+                temperatures.append(value)
+        except (OSError, TypeError, ValueError):
+            continue
+    return {
+        "mem_available_mb": mem_available_mb,
+        "storage_free_mb": storage_free_mb,
+        "temperature_c": max(temperatures) if temperatures else None,
+    }
+
+
 def _manifest_defaults(manifest: dict) -> dict:
     values = {}
     schema = manifest.get("config_schema") or {}
@@ -245,7 +355,10 @@ def plan_manifest(manifest: dict, config: Optional[dict] = None) -> Plan:
                     raise ResourceError(
                         "npu.rknn must use scheduled service or exclusive legacy mode")
             elif name == "camera.frames":
-                capacity = _int(os.environ.get("APPMGR_FRAME_MANAGED_CAP", "3"), 3)
+                # frame_export advertises and enforces FE_MAX_CONNS=4. Keep the
+                # default scheduler ceiling aligned with that real endpoint
+                # capacity instead of reserving an undocumented spare slot.
+                capacity = _int(os.environ.get("APPMGR_FRAME_MANAGED_CAP", "4"), 4)
                 requests.append(Request("camera.frame:camera-0",
                                         "exclusive" if mode == "exclusive" else "shared",
                                         amount, capacity))
@@ -272,6 +385,7 @@ def plan_manifest(manifest: dict, config: Optional[dict] = None) -> Plan:
             elif name == "probe.read":
                 capacity = _int(os.environ.get("APPMGR_PROBE_CAP", "4"), 4)
                 requests.append(Request("probe.read", "shared", amount, capacity))
+        _append_limit_requests(requests, resources)
         # result.publish is explicit in v2.  Do not invent an output channel the
         # permission/validator did not grant.
         return Plan(tuple(requests), npu_mode=npu_mode,
@@ -302,7 +416,7 @@ def plan_manifest(manifest: dict, config: Optional[dict] = None) -> Plan:
         spec = camera if isinstance(camera, dict) else {}
         stream = str(spec.get("stream", "camera-0"))
         amount = _int(spec.get("subscribers", 1))
-        capacity = _int(os.environ.get("APPMGR_FRAME_MANAGED_CAP", "3"), 3)
+        capacity = _int(os.environ.get("APPMGR_FRAME_MANAGED_CAP", "4"), 4)
         requests.append(Request("camera.frame:%s" % stream, "shared",
                                 amount, capacity))
 
@@ -351,6 +465,7 @@ def plan_manifest(manifest: dict, config: Optional[dict] = None) -> Plan:
             requests.append(Request("port:%s:%s:%d" % (proto, bind, port),
                                     "exclusive", 1, 1))
 
+    _append_limit_requests(requests, resources)
     return Plan(tuple(requests), npu_mode=npu_mode,
                 result_gateway=use_gateway,
                 inference_service=inference_service)
@@ -359,9 +474,10 @@ def plan_manifest(manifest: dict, config: Optional[dict] = None) -> Plan:
 class ResourceManager:
     """Persist reservations and enforce share/exclusive/capacity conflicts."""
 
-    def __init__(self, state_path: Optional[str] = None):
+    def __init__(self, state_path: Optional[str] = None, *, runtime_probe=None):
         self._state_path = state_path
         self._lock = threading.RLock()
+        self._runtime_probe = runtime_probe or runtime_capacity_probe
 
     @property
     def state_path(self) -> str:
@@ -413,6 +529,15 @@ class ResourceManager:
                        or (npu_group and a.get("resource") in
                            ("npu.scheduler", "npu.direct")))
                    and a.get("state") in ("reserved", "bound")]
+        # A capacity is a ceiling for the aggregate *including the first
+        # claimant*.  Returning early for an empty journal used to let one app
+        # reserve (for example) 2048 MiB against a 1024 MiB platform cap.
+        if request.capacity and request.amount > request.capacity:
+            raise ResourceBusy(
+                request.resource, [],
+                detail="request %d exceeds capacity %d" %
+                       (request.amount, request.capacity),
+            )
         if not current:
             return
         owners = [a.get("app_id") for a in current]
@@ -421,7 +546,114 @@ class ResourceManager:
             raise ResourceBusy(request.resource, owners)
         used = sum(_int(a.get("amount", 1)) for a in current)
         if request.capacity and used + request.amount > request.capacity:
-            raise ResourceBusy(request.resource, owners)
+            raise ResourceBusy(
+                request.resource, owners,
+                detail=("shared capacity %d would be exceeded "
+                        "(%d reserved + %d requested)") %
+                       (request.capacity, used, request.amount),
+            )
+
+    def _check_runtime(self, plan: Plan, allocations: List[dict]) -> None:
+        """Fail closed at *start*, never while inspecting/installing a package."""
+        try:
+            sample = self._runtime_probe() or {}
+        except Exception as exc:
+            raise ResourceBusy(
+                "runtime.telemetry", [],
+                detail="capacity probe failed: %s" % exc,
+            ) from exc
+        if not isinstance(sample, dict):
+            raise ResourceBusy("runtime.telemetry", [],
+                               detail="capacity probe returned invalid data")
+
+        temperature = sample.get("temperature_c")
+        try:
+            temperature = float(temperature) if temperature is not None else None
+        except (TypeError, ValueError):
+            temperature = None
+        try:
+            max_start_temp = float(os.environ.get(
+                "APPMGR_START_MAX_TEMP_C", "78.0"))
+        except (TypeError, ValueError):
+            max_start_temp = 78.0
+        if temperature is not None and temperature >= max_start_temp:
+            thermal_owners = sorted({
+                str(item.get("app_id")) for item in allocations
+                if item.get("app_id") and item.get("state") in ("reserved", "bound")
+            })
+            raise ResourceBusy(
+                "thermal.start", thermal_owners,
+                detail="%.1fC is at/above %.1fC start threshold" %
+                       (temperature, max_start_temp),
+            )
+
+        requested_memory = sum(
+            item.amount for item in plan.requests
+            if item.resource == "memory.managed-mb"
+        )
+        available_memory = sample.get("mem_available_mb")
+        try:
+            available_memory = (int(available_memory)
+                                if available_memory is not None else None)
+        except (TypeError, ValueError, OverflowError):
+            available_memory = None
+        memory_owners = sorted({
+            str(item.get("app_id")) for item in allocations
+            if item.get("resource") == "memory.managed-mb"
+            and item.get("app_id")
+            and item.get("state") in ("reserved", "bound")
+        })
+        if requested_memory and (available_memory is None
+                                 or available_memory < 0):
+            raise ResourceBusy(
+                "memory.telemetry", memory_owners,
+                detail="MemAvailable is unavailable; start admission cannot "
+                       "prove sufficient live memory",
+            )
+        memory_headroom = _env_capacity(
+            "APPMGR_SYSTEM_MEMORY_HEADROOM_MB", 256, allow_zero=True)
+        if (requested_memory
+                and available_memory < requested_memory + memory_headroom):
+            raise ResourceBusy(
+                "memory.available-mb", memory_owners,
+                detail=("needs %d MiB plus %d MiB system headroom; "
+                        "only %d MiB available") %
+                       (requested_memory, memory_headroom, available_memory),
+            )
+
+        requested_storage = sum(
+            item.amount for item in plan.requests
+            if item.resource == "storage.appdata-mb"
+        )
+        available_storage = sample.get("storage_free_mb")
+        try:
+            available_storage = (int(available_storage)
+                                 if available_storage is not None else None)
+        except (TypeError, ValueError, OverflowError):
+            available_storage = None
+        storage_owners = sorted({
+            str(item.get("app_id")) for item in allocations
+            if item.get("resource") == "storage.appdata-mb"
+            and item.get("app_id")
+            and item.get("state") in ("reserved", "bound")
+        })
+        if requested_storage and (available_storage is None
+                                  or available_storage < 0):
+            raise ResourceBusy(
+                "storage.telemetry", storage_owners,
+                detail="app-data free space is unavailable; start admission "
+                       "cannot prove sufficient live storage",
+            )
+        storage_headroom = _env_capacity(
+            "APPMGR_STORAGE_HEADROOM_MB", 128, allow_zero=True)
+        if (requested_storage
+                and available_storage < requested_storage + storage_headroom):
+            raise ResourceBusy(
+                "storage.available-mb", storage_owners,
+                detail=("needs %d MiB plus %d MiB system headroom; "
+                        "only %d MiB available") %
+                       (requested_storage, storage_headroom, available_storage),
+            )
 
     def reserve(self, app_id: str, instance_id: str, generation: int,
                 plan: Plan) -> List[dict]:
@@ -436,6 +668,7 @@ class ResourceManager:
                 return [dict(a) for a in existing]
             for request in plan.requests:
                 self._check(request, allocations)
+            self._check_runtime(plan, allocations)
             now = time.time()
             made = []
             for request in plan.requests:
@@ -497,6 +730,80 @@ class ResourceManager:
         with self._lock:
             return [dict(a) for a in self._load()["allocations"]
                     if a.get("instance_id") == instance_id]
+
+    def runtime_status(self) -> dict:
+        """Expose the same admission inputs/policy used by ``reserve``.
+
+        This is intentionally diagnostic only: callers must never treat a GET
+        response as an admission lease.  ``reserve`` samples again while holding
+        the resource journal lock immediately before it creates allocations.
+        """
+        try:
+            sample = dict(self._runtime_probe() or {})
+            error = None
+        except Exception as exc:
+            sample = {}
+            error = str(exc)
+        try:
+            max_start_temp = float(os.environ.get(
+                "APPMGR_START_MAX_TEMP_C", "78.0"))
+        except (TypeError, ValueError):
+            max_start_temp = 78.0
+        try:
+            runtime_hard_temp = float(os.environ.get(
+                "APPMGR_RUNTIME_HARD_TEMP_C", "85.0"))
+        except (TypeError, ValueError):
+            runtime_hard_temp = 85.0
+        return {
+            "sample": sample,
+            "error": error,
+            "policy": {
+                "start_max_temp_c": max_start_temp,
+                "runtime_hard_temp_c": runtime_hard_temp,
+                "system_memory_headroom_mb": _env_capacity(
+                    "APPMGR_SYSTEM_MEMORY_HEADROOM_MB", 256, allow_zero=True),
+                "storage_headroom_mb": _env_capacity(
+                    "APPMGR_STORAGE_HEADROOM_MB", 128, allow_zero=True),
+                "managed_memory_cap_mb": _env_capacity(
+                    "APPMGR_MANAGED_MEMORY_CAP_MB", 0, allow_zero=True),
+                "managed_storage_cap_mb": _env_capacity(
+                    "APPMGR_MANAGED_STORAGE_CAP_MB", 8192, allow_zero=True),
+                "managed_cpu_cap_percent": _env_capacity(
+                    "APPMGR_MANAGED_CPU_CAP_PERCENT", 0, allow_zero=True),
+            },
+        }
+
+    def runtime_guard(self) -> Optional[dict]:
+        """Return a hard runtime safety violation, if one is observable.
+
+        Start admission uses a lower threshold and naturally retries through
+        ``waiting_resource``.  This second, higher threshold is a containment
+        fence for a workload that heats up after a successful launch.  It is
+        intentionally limited to thermal safety: choosing which process to
+        evict for ordinary memory pressure requires an explicit priority/QoS
+        policy and must not be guessed from manifest maxima.
+        """
+        try:
+            sample = self._runtime_probe() or {}
+        except Exception:
+            return None
+        if not isinstance(sample, dict):
+            return None
+        try:
+            temperature = float(sample.get("temperature_c"))
+            hard_limit = float(os.environ.get(
+                "APPMGR_RUNTIME_HARD_TEMP_C", "85.0"))
+        except (TypeError, ValueError):
+            return None
+        if temperature < hard_limit:
+            return None
+        return {
+            "resource": "thermal.runtime",
+            "temperature_c": temperature,
+            "limit_c": hard_limit,
+            "message": "%.1fC is at/above %.1fC runtime safety threshold" %
+                       (temperature, hard_limit),
+        }
 
     def conflicts(self, plan: Plan, *, ignore_app_id: Optional[str] = None) -> List[dict]:
         """Return current admission conflicts without creating reservations.

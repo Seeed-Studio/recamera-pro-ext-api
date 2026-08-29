@@ -12,6 +12,7 @@ limitation where all root-run applications collapse to ``uid:0``.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -32,6 +33,96 @@ DEFAULT_TTL_SEC = 1.5
 
 class VisualizationError(ValueError):
     """The requested device visualisation policy is invalid."""
+
+
+def supports_detection_stream_osd(manifest: Any) -> bool:
+    """Return a trusted manifest's effective detection-box OSD capability.
+
+    Current manifests opt in explicitly through ``render.stream_osd``.  Early
+    manifest-v2 packages predated that additive field, however, and some of
+    them already made the same box contract unambiguous for the browser.  Keep
+    explicit capability requires strict output/render contracts, a direct field
+    named ``box``, and one consistent pixel/normalised xyxy space across every
+    non-derived ``results[].box`` alias.  A package predating ``stream_osd`` is
+    projected as compatible only when it additionally declares a browser
+    ``render.boxes`` policy and exactly one such runtime box field.
+
+    Payload data, application id/version and numeric value ranges are never
+    used to infer this capability.  If ``stream_osd`` is present, even as an
+    explicit empty/negative declaration, it always overrides legacy inference.
+    """
+    if not isinstance(manifest, dict) or manifest.get("manifest_version") != 2:
+        return False
+    render = manifest.get("render")
+    if (not isinstance(render, dict)
+            or isinstance(render.get("schema_version"), bool)
+            or render.get("schema_version") != 1):
+        return False
+    output = manifest.get("output")
+    if (not isinstance(output, dict)
+            or output.get("contract_version") != 2):
+        return False
+    fields = output.get("fields")
+    if not isinstance(fields, list):
+        return False
+    boxes = [
+        field for field in fields
+        if isinstance(field, dict)
+        and field.get("from") == "results[].box"
+        and field.get("derived") is not True
+    ]
+    coordinates = [field.get("coord") for field in boxes]
+    coordinated_boxes = (
+        bool(coordinates)
+        and all(isinstance(coord, str) for coord in coordinates)
+        and len(set(coordinates)) == 1
+        and coordinates[0] in ("pixel_xyxy", "normalized_xyxy")
+    )
+    if "stream_osd" in render:
+        stream_osd = render.get("stream_osd")
+        return (
+            coordinated_boxes
+            and any(field.get("name") == "box" for field in boxes)
+            and isinstance(stream_osd, dict)
+            and stream_osd.get("supported") == ["boxes"]
+            and stream_osd.get("default") is False
+        )
+    # Only the compatibility projection for packages predating stream_osd
+    # needs a browser boxes renderer as corroborating intent.  An explicit,
+    # valid stream_osd declaration is independently authoritative and may be
+    # used by an application that deliberately has no browser box renderer.
+    return (len(boxes) == 1 and coordinated_boxes
+            and isinstance(render.get("boxes"), dict))
+
+
+def effective_render(manifest: Any) -> dict:
+    """Copy the trusted render declaration and add only the strict legacy shim.
+
+    The installed manifest remains byte-identical.  This projection is used by
+    the Result Hub and Web API so both data-plane enforcement and presentation
+    make the same decision during an OTA that preserves older app packages.
+    """
+    render = manifest.get("render") if isinstance(manifest, dict) else None
+    projected = copy.deepcopy(render) if isinstance(render, dict) else {}
+    supported = supports_detection_stream_osd(manifest)
+    if "stream_osd" in projected:
+        advertised = projected.get("stream_osd")
+        advertised_boxes = (
+            isinstance(advertised, dict)
+            and isinstance(advertised.get("supported"), list)
+            and "boxes" in advertised["supported"]
+        )
+        # Do not forward a positive OSD declaration that escaped an older,
+        # loose manifest validator.  Explicit negative declarations remain
+        # visible and continue to override the compatibility projection.
+        if advertised_boxes and not supported:
+            projected.pop("stream_osd", None)
+    elif supported:
+        projected["stream_osd"] = {
+            "supported": ["boxes"],
+            "default": False,
+        }
+    return projected
 
 
 def _config_path() -> str:
@@ -87,6 +178,9 @@ def validate(incoming: Any, *, current: Optional[dict] = None) -> dict:
             raise VisualizationError(
                 "osd.sources supports at most %d applications" % MAX_OSD_SOURCES)
         out["osd"]["sources"] = clean
+    if out["osd"]["enabled"] and not out["osd"]["sources"]:
+        raise VisualizationError(
+            "osd.sources must contain at least one application when enabled")
     return out
 
 
@@ -110,6 +204,11 @@ def load() -> dict:
                     :MAX_OSD_SOURCES]
     except (OSError, ValueError):
         pass
+    # Older front ends could persist the contradictory state
+    # ``enabled=true,sources=[]``.  Treat it as disabled on read so an OTA does
+    # not claim that burn-in is active while the bridge can only send a clear.
+    if out["osd"]["enabled"] and not out["osd"]["sources"]:
+        out["osd"]["enabled"] = False
     return out
 
 

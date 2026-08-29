@@ -115,6 +115,25 @@ def test_manifest_package_exclude_globs(tmp_path):
         assert pruned not in mem, pruned
 
 
+def test_shipped_sample_icons_survive_package_excludes():
+    """Every sample's declared icon is selected by the real packager walk."""
+    repo_root = os.path.dirname(os.path.dirname(_HERE))
+    apps_root = os.path.join(repo_root, "apps")
+    manifests = sorted(
+        os.path.join(apps_root, name, "manifest.json")
+        for name in os.listdir(apps_root)
+        if os.path.isfile(os.path.join(apps_root, name, "manifest.json"))
+    )
+    assert len(manifests) >= 9, manifests
+    for manifest_path in manifests:
+        with open(manifest_path, encoding="utf-8") as source:
+            manifest = json.load(source)
+        app_root = os.path.dirname(manifest_path)
+        exclude = (manifest.get("package") or {}).get("exclude") or ()
+        icon_path = manifest["icon"]["path"]
+        assert icon_path in _members(app_root, exclude), manifest["id"]
+
+
 def test_build_is_deterministic(tmp_path):
     """Same input bytes -> identical package bytes (catalog checksum stability)."""
     root = _make_app(str(tmp_path / "app"), files={

@@ -204,8 +204,16 @@ def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch
         "algorithm": "ecdsa-sha256",
         "encoding": "base64-der",
         "required": True,
-        "developer_mode_allowed": False,
         "invalid_signatures_rejected": True,
+        "local_web_unsigned": {
+            "allowed": True,
+            "source": "local-web",
+            "channel": "app-center-v1-same-origin",
+            "requires_explicit_confirmation": True,
+            "confirmation_field": "unsigned_risk_confirmed",
+            "auto_start": False,
+            "warning_code": "unsigned-root-code",
+        },
         "owner_keys": {
             "management_enabled": True,
             "format": "pem",
@@ -216,19 +224,42 @@ def test_v1_policy_reports_live_package_and_signature_limits(layout, monkeypatch
         },
     }
 
-    # The historic REQUIRE_SIGNATURE=0 switch remains a developer policy input
-    # and the endpoint must report the effective behavior, not only the newer
-    # dedicated flag.
+    # The historic global switch remains available only to legacy tooling. The
+    # v1 direct/cloud baseline stays signed-only and the local exception is
+    # reported separately without exposing a developer-mode policy field.
     monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", False)
     relaxed = server.do_v1_policy()
-    assert relaxed["signature"]["required"] is False
-    assert relaxed["signature"]["developer_mode_allowed"] is True
+    assert relaxed["signature"]["required"] is True
+    assert "developer_mode_allowed" not in relaxed["signature"]
 
     monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
     monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", True)
     explicit_developer = server.do_v1_policy()
     assert explicit_developer["signature"]["required"] is True
-    assert explicit_developer["signature"]["developer_mode_allowed"] is True
+    assert "developer_mode_allowed" not in explicit_developer["signature"]
+
+
+def test_resources_api_exposes_start_admission_telemetry(layout, monkeypatch):
+    coordinator = server._coordinator()
+    runtime = {
+        "sample": {
+            "mem_available_mb": 768,
+            "storage_free_mb": 4096,
+            "temperature_c": 61.5,
+        },
+        "error": None,
+        "policy": {"start_max_temp_c": 78.0},
+    }
+    monkeypatch.setattr(
+        coordinator.resources, "runtime_status", lambda: runtime)
+    monkeypatch.setattr(
+        coordinator, "inference_status",
+        lambda: {"available": True, "socket": "/tmp/inferenced.sock"})
+
+    result = server.do_resources()
+
+    assert result["runtime_admission"] == runtime
+    assert result["inference_service"]["available"] is True
 
 
 def test_v1_trust_mutations_require_confirmation_gate_audit_and_event(
@@ -523,14 +554,25 @@ def test_cancel_cannot_race_preflight_to_install_queued_transition(
         },
         "release_id": "demo-r1",
         "signature": {"status": "verified"},
+        "install_context": {
+            "mode": "new",
+            "target_version": None,
+            "target_release_id": "demo-r1",
+            "confirmation_required": [],
+        },
     })
 
     submit_entered = threading.Event()
     release_submit = threading.Event()
 
     class HeldSubmitManager:
-        def submit(self, operation_type, app_id, callback):
+        def for_upload(self, _upload_id):
+            return None
+
+        def submit(self, operation_type, app_id, callback, **correlation):
             assert (operation_type, app_id) == ("install", "demo")
+            assert correlation["upload_id"] == record["upload_id"]
+            assert len(correlation["request_fingerprint"]) == 64
             submit_entered.set()
             assert release_submit.wait(timeout=2)
             return {"id": "held-op", "type": operation_type, "app_id": app_id}
@@ -633,6 +675,137 @@ def test_rejected_preflight_removes_uploaded_bytes(layout, monkeypatch):
     assert os.listdir(paths.uploads_dir()) == []
 
 
+def test_unsigned_preflight_is_local_only_deferred_and_risk_confirmed(
+        layout, monkeypatch):
+    permissions = {
+        "sdk": [],
+        "filesystem": {"read": [], "write": []},
+        "network": {"listen": [], "outbound": []},
+        "devices": [],
+    }
+    manifest = {
+        "manifest_version": 2,
+        "id": "unsigned-demo",
+        "name": "Unsigned Demo",
+        "version": "1.0.0",
+        "entry": "app.py",
+        "permissions": permissions,
+        "resources": {"claims": []},
+        "instances": {"max": 1},
+        "config_schema": {"groups": []},
+        "python": {"wheels": []},
+    }
+    inspected = {
+        "id": "unsigned-demo",
+        "manifest": manifest,
+        "signature": {
+            "signed": False,
+            "verified": False,
+            "alg": "ecdsa-sha256",
+            "detail": "package is unsigned",
+        },
+        "preflight": {"release_id": "unsigned-demo-r1"},
+    }
+    allow_unsigned_calls = []
+
+    def inspect(*_args, allow_unsigned=False, **_kwargs):
+        allow_unsigned_calls.append(allow_unsigned)
+        if not allow_unsigned and paths.REQUIRE_SIGNATURE:
+            raise server.installer.InstallError("package signature is required")
+        return inspected
+
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
+    monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", False)
+    monkeypatch.setattr(server.installer, "inspect", inspect)
+    body, content_type = _multipart(b"unsigned-package")
+
+    # Direct/API callers remain signed-only even if they try the same v1 API.
+    with pytest.raises(
+            server.installer.InstallError, match="signature is required"):
+        server.do_v1_upload(io.BytesIO(body), len(body), content_type)
+    assert allow_unsigned_calls == [False]
+    assert os.listdir(paths.uploads_dir()) == []
+
+    # The v1 provenance rule remains strict even if a legacy migration image
+    # disables the installer's global signature switch.
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", False)
+    with pytest.raises(server.installer.InstallError, match="direct/cloud"):
+        server.do_v1_upload(io.BytesIO(body), len(body), content_type)
+    assert allow_unsigned_calls == [False, False]
+    assert os.listdir(paths.uploads_dir()) == []
+
+    # Live resource state must not be consulted by package preflight.
+    monkeypatch.setattr(
+        server, "_coordinator",
+        lambda: pytest.fail("preflight must not query live resource occupancy"))
+    monkeypatch.setattr(
+        server.appconfig, "effective_values",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preflight must not read/migrate a stale installed config overlay"))
+    uploaded = server.do_v1_upload(
+        io.BytesIO(body), len(body), content_type,
+        source=server.V1_LOCAL_UPLOAD_SOURCE,
+        channel=server.V1_LOCAL_UPLOAD_CHANNEL)
+    preflight = uploaded["preflight"]
+    assert allow_unsigned_calls == [False, False, True]
+    assert preflight["source"] == server.V1_LOCAL_UPLOAD_SOURCE
+    assert preflight["channel"] == server.V1_LOCAL_UPLOAD_CHANNEL
+    assert preflight["signature"]["status"] == "unsigned"
+    assert preflight["signature"]["unsigned_install_allowed"] is True
+    assert "developer_mode_allowed" not in preflight
+    assert "developer_mode_allowed" not in preflight["signature"]
+    assert preflight["conflicts"] == []
+    assert preflight["start_admission"]["enforced_on"] == "start"
+    assert preflight["start_admission"]["live_resources"] == "deferred"
+    assert preflight["start_admission"]["dependencies"] == "deferred"
+    assert preflight["warnings"][0]["code"] == "unsigned-root-code"
+    assert preflight["warnings"][0]["severity"] == "critical"
+    assert preflight["unsigned_confirmation"] == {
+        "required": True,
+        "fields": ["unsigned_risk_confirmed"],
+        "confirmation_field": "unsigned_risk_confirmed",
+        "expected": True,
+        "auto_start": False,
+    }
+    stored = uploads.load(uploaded["upload_id"])
+    assert stored["source"] == server.V1_LOCAL_UPLOAD_SOURCE
+    assert stored["channel"] == server.V1_LOCAL_UPLOAD_CHANNEL
+
+    base_finalize = {
+        "upload_id": uploaded["upload_id"],
+        "permissions_confirmed": True,
+        "permissions": permissions,
+        "developer_mode": True,
+    }
+    with pytest.raises(ValueError, match="risk must be explicitly confirmed"):
+        server.do_v1_install(base_finalize)
+    with pytest.raises(ValueError, match="server-assigned"):
+        server.do_v1_install({
+            **base_finalize,
+            "unsigned_risk_confirmed": True,
+            "source": server.V1_LOCAL_UPLOAD_SOURCE,
+            "channel": server.V1_LOCAL_UPLOAD_CHANNEL,
+        })
+
+
+def test_bad_signature_is_rejected_even_on_local_unsigned_route(
+        layout, monkeypatch):
+    def reject_bad_signature(*_args, allow_unsigned=False, **_kwargs):
+        assert allow_unsigned is True
+        raise server.installer.InstallError("package signature verification failed")
+
+    monkeypatch.setattr(server.installer, "inspect", reject_bad_signature)
+    body, content_type = _multipart(
+        b"signed-content", signature=b"Zm9yZ2VkLXNpZ25hdHVyZQ==")
+    with pytest.raises(
+            server.installer.InstallError, match="signature verification failed"):
+        server.do_v1_upload(
+            io.BytesIO(body), len(body), content_type,
+            source=server.V1_LOCAL_UPLOAD_SOURCE,
+            channel=server.V1_LOCAL_UPLOAD_CHANNEL)
+    assert os.listdir(paths.uploads_dir()) == []
+
+
 def test_failed_install_operation_removes_single_use_upload(layout, monkeypatch):
     permissions = {
         "sdk": [],
@@ -652,7 +825,10 @@ def test_failed_install_operation_removes_single_use_upload(layout, monkeypatch)
         "preflight": {"release_id": "demo-r1"},
     })
     body, content_type = _multipart(b"install-will-fail")
-    uploaded = server.do_v1_upload(io.BytesIO(body), len(body), content_type)
+    uploaded = server.do_v1_upload(
+        io.BytesIO(body), len(body), content_type,
+        source=server.V1_LOCAL_UPLOAD_SOURCE,
+        channel=server.V1_LOCAL_UPLOAD_CHANNEL)
 
     def fail_install(*args, **kwargs):
         raise RuntimeError("staging failed")
@@ -662,7 +838,7 @@ def test_failed_install_operation_removes_single_use_upload(layout, monkeypatch)
         "upload_id": uploaded["upload_id"],
         "permissions_confirmed": True,
         "permissions": permissions,
-        "developer_mode": True,
+        "unsigned_risk_confirmed": True,
     })["operation"]
 
     deadline = time.monotonic() + 3
@@ -923,13 +1099,40 @@ def test_v1_install_waits_for_transient_busy_gate(layout, monkeypatch):
     monkeypatch.setattr(
         server.installer, "inspect", lambda *args, **kwargs: inspected)
 
+    candidate = server.installer.PreparedInstall(
+        app_id="demo", manifest=manifest, info=inspected,
+        dest=paths.app_dir("demo"), staging=None)
+
+    def prepare(*args, **kwargs):
+        return candidate
+
+    def commit_prepared(prepared):
+        assert prepared is candidate
+        installs.append(prepared)
+        return "demo", manifest
+
+    monkeypatch.setattr(server.installer, "prepare", prepare)
+    monkeypatch.setattr(
+        server.installer, "begin_install_transaction", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server.installer, "mark_install_transaction", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server.installer, "clear_install_transaction", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server.installer, "discard_prepared", lambda *_args: None)
+    monkeypatch.setattr(server.installer, "commit_prepared", commit_prepared)
+
     def install(*args, **kwargs):
         installs.append((args, kwargs))
         return "demo", manifest
 
+    # The transaction-native path must not regress to the legacy convenience
+    # wrapper merely because the async worker waited for the busy gate.
     monkeypatch.setattr(server.installer, "install", install)
     body, content_type = _multipart(b"package")
-    uploaded = server.do_v1_upload(io.BytesIO(body), len(body), content_type)
+    uploaded = server.do_v1_upload(
+        io.BytesIO(body), len(body), content_type,
+        source=server.V1_LOCAL_UPLOAD_SOURCE,
+        channel=server.V1_LOCAL_UPLOAD_CHANNEL)
     contended = _observe_operation_worker_lock_contention(monkeypatch)
 
     with server.busy_gate():
@@ -937,14 +1140,14 @@ def test_v1_install_waits_for_transient_busy_gate(layout, monkeypatch):
             "upload_id": uploaded["upload_id"],
             "permissions_confirmed": True,
             "permissions": permissions,
-            "developer_mode": True,
+            "unsigned_risk_confirmed": True,
         })["operation"]
         assert contended.wait(1.0), "worker never reached the held mutation gate"
         assert installs == []
 
     terminal = _wait_operation(queued["id"])
     assert terminal["status"] == "succeeded"
-    assert len(installs) == 1
+    assert installs == [candidate]
 
 
 def test_v1_delete_waits_for_transient_busy_gate(layout, monkeypatch):
@@ -1146,6 +1349,11 @@ def test_v1_config_busy_timeout_never_enters_business_body(layout, monkeypatch):
             }},
         }, manifest_file)
     effects = []
+    real_read_manifest = server._read_manifest
+    monkeypatch.setattr(
+        server, "_read_manifest",
+        lambda app_id: effects.append(("read_manifest", app_id))
+        or real_read_manifest(app_id))
     monkeypatch.setattr(
         server.appconfig, "write_user_config",
         lambda *args: effects.append(("write", args)))
@@ -1370,8 +1578,10 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
 def test_visualization_http_policy_is_persisted_and_manifest_gated(
         layout, monkeypatch):
     compatible = os.path.join(paths.APPS_DIR, "compatible")
+    legacy_compatible = os.path.join(paths.APPS_DIR, "legacy-compatible")
     incompatible = os.path.join(paths.APPS_DIR, "incompatible")
     os.mkdir(compatible)
+    os.mkdir(legacy_compatible)
     os.mkdir(incompatible)
     with open(os.path.join(compatible, "manifest.json"), "w") as stream:
         json.dump({
@@ -1379,8 +1589,23 @@ def test_visualization_http_policy_is_persisted_and_manifest_gated(
             "id": "compatible",
             "render": {
                 "schema_version": 1,
+                "boxes": {"line_width": 2},
                 "stream_osd": {"supported": ["boxes"], "default": False},
             },
+            "output": {"contract_version": 2, "fields": [{
+                "name": "box", "from": "results[].box",
+                "coord": "pixel_xyxy",
+            }]},
+        }, stream)
+    with open(os.path.join(legacy_compatible, "manifest.json"), "w") as stream:
+        json.dump({
+            "manifest_version": 2,
+            "id": "legacy-compatible",
+            "render": {"schema_version": 1,
+                       "boxes": {"line_width": 2}},
+            "output": {"contract_version": 2, "fields": [{
+                "from": "results[].box", "coord": "normalized_xyxy",
+            }]},
         }, stream)
     with open(os.path.join(incompatible, "manifest.json"), "w") as stream:
         json.dump({
@@ -1429,6 +1654,29 @@ def test_visualization_http_policy_is_persisted_and_manifest_gated(
         assert bridge.reloaded == [{
             "osd": {"enabled": True, "sources": ["compatible"]},
         }]
+        assert visualization.load() == bridge.reloaded[-1]
+
+        status, apps = _json_request(
+            httpd, "GET", "/api/app-center/v1/apps", {})
+        assert status == 200
+        legacy = next(item for item in apps["apps"]
+                      if item["id"] == "legacy-compatible")
+        assert legacy["manifest"]["render"]["stream_osd"] == {
+            "supported": ["boxes"], "default": False,
+        }
+
+        status, error = _json_request(
+            httpd, "PUT", "/api/app-center/v1/visualization",
+            {"osd": {"enabled": True, "sources": []}})
+        assert status == 400
+        assert "at least one" in error["error"]
+        assert visualization.load() == bridge.reloaded[-1]
+
+        status, result = _json_request(
+            httpd, "PUT", "/api/app-center/v1/visualization",
+            {"osd": {"enabled": True, "sources": ["legacy-compatible"]}})
+        assert status == 200
+        assert result["osd"]["sources"] == ["legacy-compatible"]
         assert visualization.load() == bridge.reloaded[-1]
 
         status, error = _json_request(
@@ -1646,7 +1894,50 @@ def test_legacy_json_body_is_bounded_and_strict(layout):
         thread.join(timeout=2)
 
 
+def test_http_v1_same_origin_without_trusted_edge_stamp_is_signed_only(
+        layout, monkeypatch):
+    calls = []
+
+    def inspect(*_args, allow_unsigned=False, **_kwargs):
+        calls.append(allow_unsigned)
+        raise server.installer.InstallError("package signature is required")
+
+    monkeypatch.setattr(server.installer, "inspect", inspect)
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    connection = http.client.HTTPConnection(
+        "127.0.0.1", httpd.server_port, timeout=5)
+    try:
+        body, content_type = _multipart(b"unsigned-direct-request")
+        connection.request(
+            "POST", "/api/app-center/v1/uploads", body=body,
+            headers={
+                "Content-Type": content_type,
+                "Host": "camera.local",
+                "Origin": "https://camera.local",
+                "X-Forwarded-Proto": "https",
+                "Authorization": "Bearer real-react-token",
+                # Deliberately no post-auth nginx route stamp.
+            })
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+        assert response.status == 400
+        assert "signature is required" in payload["error"]
+        assert calls == [False]
+        assert os.listdir(paths.uploads_dir()) == []
+    finally:
+        connection.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
 def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
+    audits = []
+    monkeypatch.setattr(
+        server, "_audit",
+        lambda action, **fields: audits.append((action, fields)))
     permissions = {
         "sdk": ["frame.read"],
         "filesystem": {"read": ["app"], "write": ["appdata"]},
@@ -1679,9 +1970,16 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
     installs = []
 
     def install(package, signature=None, *, allow_unsigned=False,
-                expected_preflight=None, _busy_timeout=0.0):
+                expected_preflight=None,
+                running_upgrade_confirmed=False,
+                force_reinstall_confirmed=False,
+                _enforce_v1_confirmations=False,
+                _busy_timeout=0.0):
         installs.append((package, signature, allow_unsigned,
-                         expected_preflight, _busy_timeout))
+                         expected_preflight, _busy_timeout,
+                         running_upgrade_confirmed,
+                         force_reinstall_confirmed,
+                         _enforce_v1_confirmations))
         return {"id": "demo", "installed": True}
 
     monkeypatch.setattr(server.installer, "inspect", inspect)
@@ -1692,23 +1990,60 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
     connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
     try:
         body, content_type = _multipart(b"not-buffered-as-json")
+        browser_headers = {
+            "Content-Type": content_type,
+            "Host": "camera.local",
+            "Origin": "https://camera.local",
+            "X-Forwarded-Proto": "https",
+            "Authorization": "Bearer real-react-token",
+            server.V1_TRUSTED_EDGE_HEADER: server.V1_TRUSTED_EDGE_VALUE,
+        }
         connection.request("POST", "/api/app-center/v1/uploads", body=body,
-                           headers={"Content-Type": content_type})
+                           headers=browser_headers)
         response = connection.getresponse()
         uploaded = json.loads(response.read())
         assert response.status == 201
         assert uploaded["preflight"]["manifest"]["id"] == "demo"
         assert uploaded["preflight"]["signature"]["status"] == "unsigned"
-        assert uploaded["preflight"]["developer_mode_allowed"] is True
+        assert uploaded["preflight"]["signature"][
+            "unsigned_install_allowed"] is True
+        assert "developer_mode_allowed" not in uploaded["preflight"]
+        assert "developer_mode_allowed" not in uploaded["preflight"]["signature"]
+        assert uploaded["preflight"]["source"] == "local-web"
+        assert uploaded["preflight"]["channel"] == \
+            "app-center-v1-same-origin"
+        assert uploaded["preflight"]["warnings"] == [{
+            "code": "unsigned-root-code",
+            "severity": "critical",
+            "message": server.UNSIGNED_WARNING_MESSAGE,
+        }]
+        assert uploaded["preflight"]["unsigned_confirmation"] == {
+            "required": True,
+            "fields": ["unsigned_risk_confirmed"],
+            "confirmation_field": "unsigned_risk_confirmed",
+            "expected": True,
+            "auto_start": False,
+        }
+        assert uploaded["preflight"]["conflicts"] == []
+        assert uploaded["preflight"]["start_admission"] == {
+            "enforced_on": "start",
+            "live_resources": "deferred",
+            "dependencies": "deferred",
+            "message": (
+                "Live resource occupancy and dependency availability are "
+                "checked when the application starts"),
+        }
 
         request = json.dumps({
             "upload_id": uploaded["upload_id"],
             "permissions_confirmed": True,
             "permissions": permissions,
-            "developer_mode": True,
+            "unsigned_risk_confirmed": True,
         })
+        finalize_headers = dict(browser_headers)
+        finalize_headers["Content-Type"] = "application/json"
         connection.request("POST", "/api/app-center/v1/apps", body=request,
-                           headers={"Content-Type": "application/json"})
+                           headers=finalize_headers)
         response = connection.getresponse()
         queued = json.loads(response.read())
         assert response.status == 202
@@ -1728,6 +2063,13 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
         assert installs and installs[0][2] is True
         assert installs[0][3]["release_id"] == "demo-1"
         assert installs[0][4] == paths.V1_OPERATION_BUSY_TIMEOUT_SEC
+        assert installs[0][5:] == (False, False, True)
+        confirmation = next(
+            fields for action, fields in audits
+            if action == "v1_unsigned_risk_confirmed")
+        assert confirmation["id"] == "demo"
+        assert confirmation["source"] == server.V1_LOCAL_UPLOAD_SOURCE
+        assert confirmation["channel"] == server.V1_LOCAL_UPLOAD_CHANNEL
         assert not os.path.exists(os.path.join(
             paths.uploads_dir(), uploaded["upload_id"]))
     finally:

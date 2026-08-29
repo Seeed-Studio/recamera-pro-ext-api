@@ -42,6 +42,7 @@ with zipfile.ZipFile(kit_wheels[0]) as wheel:
     names = set(wheel.namelist())
     assert "kit/__init__.py" in names
     assert "kit/app.py" in names
+    assert "kit/geometry.py" in names
     assert "kit/runtime/postprocess/detect.py" in names
     assert "kit/workflow/runtime.py" in names
     assert not any("/__pycache__/" in name or name.endswith(".pyc") for name in names)
@@ -76,6 +77,7 @@ from pathlib import Path
 
 import kit
 import kit.config
+import kit.geometry
 import kit.workflow
 import recamera_ext
 from recamera_ext import (
@@ -93,6 +95,7 @@ assert version("recamera-ext") == "1.4.0"
 assert version("recamera-pro-kit") == "0.1.0"
 assert FrameSource and ProbeSource and ResultSink
 assert InferenceLease and InferenceState and InferenceStatus
+assert kit.GeometryBuilder().point(1, 2).build()[0]["type"] == "point"
 print("package smoke OK:", recamera_ext.__file__, kit.__file__)
 PY
 )

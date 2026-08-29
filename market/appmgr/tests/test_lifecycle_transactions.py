@@ -453,6 +453,42 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.assertEqual(self._installed_version(), "2.0.0")
         self.assertEqual(("start", self.APP), self.calls[-1])
 
+    def test_local_unsigned_upgrade_is_installed_stopped(self):
+        """A Web-approved unsigned upgrade never inherits a running state."""
+        server.do_install(self._pkg("1.0.0"))
+        state.set_active(self.APP, "1.0.0")
+        self.running[self.APP] = 999
+        self.calls.clear()
+
+        result = server.do_install(
+            self._pkg("2.0.0"), allow_unsigned=True,
+            expected_preflight={
+                "manifest": {
+                    "id": self.APP,
+                    "version": "2.0.0",
+                    "name": self.APP,
+                    "entry": "app.py",
+                },
+                "release_id": None,
+                "signature": {
+                    "status": "unsigned",
+                    "signer_kind": None,
+                    "key_fingerprint": None,
+                },
+                "source": server.V1_LOCAL_UPLOAD_SOURCE,
+                "channel": server.V1_LOCAL_UPLOAD_CHANNEL,
+            })
+
+        self.assertEqual(self.calls, [("stop", self.APP)])
+        self.assertFalse(result["restarted"])
+        self.assertFalse(result["auto_started"])
+        self.assertTrue(result["requires_manual_start"])
+        self.assertEqual(self._installed_version(), "2.0.0")
+        self.assertNotIn(self.APP, self.running)
+        self.assertIsNone(state.get_active())
+        self.assertEqual(
+            state.get_app(self.APP)["desired_state"], state.DESIRED_STOPPED)
+
 
 # --------------------------------------------------------------------------- #
 # minor5 -- reconcile an install interrupted mid dir-swap

@@ -76,6 +76,8 @@ _EXPORTS = {
     "Track": "ai",
     "publish_result_batch": "ai",
     "to_legacy_payload": "ai",
+    "GeometryBuilder": "geometry",
+    "GeometryError": "geometry",
 }
 
 __all__ = list(_EXPORTS)

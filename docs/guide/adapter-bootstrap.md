@@ -86,8 +86,16 @@ caps = {
 - 每个适配器工厂只在 capability 为 `AVAILABLE` 时自动选 Official；单纯存在
   socket inode 只得到 `UNKNOWN`，继续使用 workaround，避免 stale socket、权限
   错误或协议版本不匹配把应用导向不可用路径。
-- 当前还没有 native capability handshake，已确认使用匹配补丁固件的部署必须
-  显式设置 `RECAMERA_ADAPTER_PREFER=official`；`workaround` 仍可强制回退。
+- 当前还没有 native capability handshake。appmgr 先按有效配置解析
+  `resources.claims/profiles` 并完成资源准入，再为实际获得 `camera.frames`
+  路由的当前 instance/generation 设置专用
+  `RECAMERA_FRAME_SOURCE=official`，只把帧源切到 `/run/recamera/frame.sock`；
+  结果仍走受管 Gateway/Result Hub，不会随帧源切换到 OSD ingress。手工运行可将该
+  变量设为 `official|workaround|auto`；未设置或 `auto` 才沿用全局
+  `RECAMERA_ADAPTER_PREFER`/能力探测策略，非法值会直接报配置错误。
+  appmgr 还会从受管子进程环境中清除继承的 `RECAMERA_ADAPTER_PREFER` 和
+  `RECAMERA_RESULT_OSD`，防止服务环境中的手工调试开关绕过受认证 Gateway；这不
+  改变手工启动应用时的显式 opt-in 语义。
 - 将来版本化握手落地后，固件才能把状态升级为 `AVAILABLE` 并安全自动迁移。
   平滑切换的机械边界仍收敛在**注册表协商 + SDK adapter 实现**，应用代码不变。
 

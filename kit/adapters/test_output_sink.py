@@ -30,6 +30,7 @@ from kit.adapters.output_sink import (  # noqa: E402
     UartChannel,
     WsChannel,
     assemble_output_sink,
+    build_formatter,
     build_namespace,
     generate_mapping_templates,
     resolve_output_config,
@@ -93,9 +94,12 @@ def test_envelope_seq_time_frame():
 def test_extra_payload_fields_preserved():
     rec = RecordChannel()
     sink = ConfigurableSink(app_id="a", channels=[rec], formatter=RawJsonFormatter())
-    sink.emit(_frame_payload(inference_time_ms=5.0, stream_id="camera-0"), 1.0)
+    geometry = [{"type": "point", "points": [[1, 2]]}]
+    sink.emit(_frame_payload(inference_time_ms=5.0, stream_id="camera-0",
+                             geometry=geometry), 1.0)
     env = json.loads(rec.msgs[0].body)
     assert env["inference_time_ms"] == 5.0 and env["stream_id"] == "camera-0"
+    assert env["geometry"] == geometry
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +116,7 @@ def test_namespace_projection():
             {"box": [0, 0, 1, 1], "track_id": 7},               # tracking
         ],
         "events": [{"kind": "fall", "track_id": 7}, {"kind": "metrics", "fps": 30}],
+        "geometry": [{"type": "point", "points": [[1, 2]]}],
         "summary": {"state": "alarm"}, "metrics": {"fps": 30},
         "stream_id": "main", "inference_time_ms": 12.5, "pipeline_ms": 20.0,
     }
@@ -125,6 +130,7 @@ def test_namespace_projection():
     assert [e["kind"] for e in ns["events"].fall] == ["fall"]
     assert len(ns["events"].all) == 2
     assert list(ns["events"]) == env["events"]   # top-level events iterates raw
+    assert ns["geometry"] == env["geometry"]
     assert ns["summary"]["state"] == "alarm" and ns["metrics"]["fps"] == 30
     assert ns["stream_id"] == "main"
     assert ns["inference_time_ms"] == 12.5 and ns["pipeline_ms"] == 20.0
@@ -775,6 +781,31 @@ def test_resolve_output_config_merges_manifest_and_user():
     assert cfg["channels"] == ["mqtt"]        # user overrides manifest default
     assert cfg["mode"] == "raw"               # numeric iMode 2 -> raw
     assert cfg["templates"]["detection"] == "{{ detection.count }}"
+
+
+def test_custom_format_source_is_explicit_not_mapping_first_ambiguity():
+    mapping = [{"source": "detection.count", "target": "mapped",
+                "topic": "mapped"}]
+    common = {
+        "mapping": mapping,
+        "dTemplate": {"sDetection": "{{ (detection.count + 10) | tojson }}"},
+        "templates": {},
+    }
+    envelope = _frame_payload(results=[{"box": [0, 0, 1, 1]}])
+
+    mapping_formatter = build_formatter(
+        "custom", {**common, "template_mode": "mapping"}, app_id="a",
+        node="n", base_topic="base", entities=[], device_name="A")
+    mapping_messages = mapping_formatter.format(envelope, channel="ws")
+    assert mapping_messages[0].topic == "mapped"
+    assert json.loads(mapping_messages[0].body) == {"mapped": 1}
+
+    template_formatter = build_formatter(
+        "custom", {**common, "template_mode": "template"}, app_id="a",
+        node="n", base_topic="base", entities=[], device_name="A")
+    template_messages = template_formatter.format(envelope, channel="ws")
+    assert template_messages[0].topic == "base/a/detection"
+    assert template_messages[0].body == b"11"
 
 
 def test_malformed_filters_never_crash():

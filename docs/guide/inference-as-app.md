@@ -30,12 +30,13 @@
 
 `POST /api/appMgr/config {id, config:{...}}` 写入时（`server.py:do_set_config:288`）：
 
-1. `write_user_config` 把新值 **merge** 进 app 的 `config.json`（覆盖层，不整篇替换——只改传入的 key，其余保留）。
-2. 按变更项的 `apply` 分流：
+1. appmgr 先把已校验的 incoming 与“manifest defaults + 用户 overlay”得到的当前 effective values 做类型感知的深比较；只保留**真实变化**的 key。旧版前端即使误传整张表，也不会因为其中未变化的 restart 字段而重启应用。
+2. `write_user_config` 把真实新值 **merge** 进 app 的 `config.json`（覆盖层，不整篇替换——只改传入的 key，其余保留）。传 `null` 删除该 key 的用户 overlay，恢复 manifest default。
+3. 按真实变更项的 `apply` 分流：
    - **全部变更项都是 `live`** → 给 app 进程发 `kill -HUP`（SIGHUP），不重启。
    - **任一变更项是 `restart`** → `stop` + `start` 该 app（active 且在跑时）。
 
-响应里 `restarted` 字段标明走了哪条。
+响应统一返回 `changed_keys`、`applied`、`restarted`、`reloaded` 与 `noop`。没有 effective change 时 `applied:"none"`、`noop:true`，既不 SIGHUP 也不重启。
 
 ### 1.3 kit 侧热重读（SIGHUP → 自动重绑 + `on_params_changed`）
 
@@ -92,6 +93,19 @@
 - **`AppContext`**：维护 `active` 态；切换应用（含 builtin）走 `activate`，list/config 随 active 刷新。
 - 原"AI 推理"页替换成**"推理应用"**：单选激活（内建 + 自建同列）+ 动态配置面板，保留模型仓库与输出监控。
 
-## 5. 一句话
+## 5. `inferenced` 模型连接的空闲语义
+
+`scheduled` NPU 应用完成 Hello 且通过 appmgr 的 `instance + generation` 授权后，
+模型连接允许长期无请求，直到进程关闭 fd（EOF/HUP）或 daemon 停机。级联流水线可能让
+某个模型合法空闲数分钟，例如 PPOCR 没检测到文字时 recognizer 不会收到 `infer`；不能把
+这种空闲误判为掉线并卸载模型。每次后续操作仍重新校验 appmgr 授权，排队后的 `infer`
+进入 RKNN 前还会再次校验，因此长连接不会把一次授权变成永久 bearer credential。
+
+DoS 边界保持有界：Hello 前的静默 socket 最多保留 5 秒，`control_only` 的 status/ping
+连接仍受 `client_idle_timeout` 限制；已认证模型连接始终计入 `max_clients`。阻塞接收期间
+不持有 service/driver 锁，daemon `close()` 会对全部连接执行 `shutdown()`，立即唤醒阻塞
+线程并按已有 EOF/HUP 路径释放该客户端的模型别名。
+
+## 6. 一句话
 
 内建推理与自建应用统一成一套 app 模型：`list` 同列、`activate` 单活互斥、`config_schema`+`SchemaForm` 一套动态面板。配置改动按 `apply` 分流——`live` 走 SIGHUP 热重读（kit 自动重绑参数 + `on_params_changed`，不重启不抢相机），`restart` 才重启进程。内建的 driver（`builtin.py`）把 entry.cgi 的 `/model/inference`+`/model/info` 反组装成同构 config，前端无需为内建单独写页面。

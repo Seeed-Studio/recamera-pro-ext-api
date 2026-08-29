@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 3, "channel": "stable"},
+  "release": {"sequence": 4, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64", "python": "==3.11.*",
@@ -53,8 +53,9 @@
   "id": "fall-detection",
   "name": "Fall Detection",
   "name_zh": "跌倒检测",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "image": "/appcenter/apps/fall-detection.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",

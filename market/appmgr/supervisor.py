@@ -39,6 +39,24 @@ class SupervisorError(Exception):
     pass
 
 
+class ProcessFenceError(SupervisorError):
+    """A trusted app leader/process group could not be proven terminated."""
+
+    process_fence_active = True
+
+    def __init__(self, app_id: str, pid: Optional[int], pgid: Optional[int], *,
+                 leader_alive: bool, group_alive: bool):
+        self.app_id = app_id
+        self.pid = pid
+        self.pgid = pgid
+        self.leader_alive = bool(leader_alive)
+        self.group_alive = bool(group_alive)
+        super().__init__(
+            "application process fence remains active after stop: %s "
+            "(pid=%s, pgid=%s, leader_alive=%s, group_alive=%s)" % (
+                app_id, pid, pgid, self.leader_alive, self.group_alive))
+
+
 # procfs root. Overridable so the unit tests can point the pid inspectors at a
 # fixture tree -- macOS (the dev box) has no /proc at all, and even on Linux you
 # cannot conjure a process in an arbitrary state on demand.
@@ -61,6 +79,12 @@ BOOT_ID_PATH = os.environ.get(
 # drive it low.
 READY_TIMEOUT = float(os.environ.get("APPMGR_READY_TIMEOUT", "30"))
 _READY_POLL = float(os.environ.get("APPMGR_READY_POLL", "0.05"))
+# SIGKILL delivery can precede disappearance of the final helper/zombie from
+# the process-group table.  Both startup cleanup and explicit stop allow this
+# short bounded settle period before declaring an uncontained process fence.
+PROCESS_FENCE_SETTLE_SEC = float(os.environ.get(
+    "APPMGR_PROCESS_FENCE_SETTLE_SEC", "0.8"))
+_PROCESS_FENCE_POLL_SEC = 0.05
 
 # ---- app child registry (健壮#17) ------------------------------------------- #
 # pid -> Popen for the app children THIS appmgr launched. SIGCHLD reaping consults
@@ -331,6 +355,31 @@ def is_running(app_id: str) -> Optional[int]:
         return pid if _is_ours(pid, app_id) else None
 
 
+def has_run_record(app_id: str) -> bool:
+    """Whether any persistent process identity file still exists.
+
+    This intentionally checks directory entries rather than parsed values.  A
+    malformed or partially committed record is still a teardown fence: an
+    installer must ask :func:`stop` to clear it before renaming the app
+    directory, otherwise the only persisted handle for a surviving process
+    group would move to ``<id>.prev`` and become invisible.
+    """
+    if not paths.valid_app_id(app_id):
+        raise SupervisorError(f"invalid app id {app_id!r}")
+    with _RUN_RECORD_LOCK:
+        return any(os.path.lexists(pathname) for pathname in (
+            paths.pidfile(app_id), paths.pgidfile(app_id), paths.bootfile(app_id)))
+
+
+def owned_pid_is_running(app_id: str, pid: Optional[int]) -> bool:
+    """Recheck a captured leader after its run record has been removed."""
+    if not paths.valid_app_id(app_id):
+        raise SupervisorError(f"invalid app id {app_id!r}")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return False
+    return _pid_running(pid) and _is_ours(pid, app_id)
+
+
 # ---- child reaping + last-exit bookkeeping ---------------------------------- #
 # appmgr IS the supervisor, so every app it launches is its direct child. Nobody
 # ever called waitpid() on them, so a crashed app stayed in the process table as
@@ -394,7 +443,8 @@ def reap_children() -> int:
             # orphaned runtime.  SIGKILL makes cleanup deterministic even when a
             # helper installed/ignored SIGTERM.
             contained = _killpg_id(pgid, signal.SIGKILL)
-        _reaped.append((pid, rc, time.time(), app_id, pgid, boot_id, contained))
+        _reaped.append((pid, rc, time.time(), app_id, pgid, boot_id,
+                        contained, boot_verified))
         _apps.pop(pid, None)
         n += 1
     return n
@@ -523,22 +573,36 @@ def last_exit(app_id: str) -> Optional[dict]:
 def drain_exits() -> List[dict]:
     """Turn queued waitpid results into visible state. Normal context only."""
     out = []
-    while _reaped:
+    # Bound this pass to the events present on entry.  A trusted process group
+    # that survived containment is requeued for a later retry; a while-loop
+    # would immediately pop/requeue it forever.  Concurrently appended events
+    # likewise remain for the next cheap drain pass.
+    pending = len(_reaped)
+    for _ in range(pending):
         try:
             event = _reaped.pop(0)
         except IndexError:             # concurrent drain
             break
-        # Seven fields are emitted by current reap_children; accept the historic
-        # three-field shape because tests and an in-process upgrade may still
-        # have queued one before this code was loaded.
+        # Eight fields are emitted by current reap_children; accept historic
+        # shapes because tests and an in-process upgrade may still have queued
+        # one before this code was loaded.
         pid, rc, ts = event[:3]
         app_id = event[3] if len(event) >= 4 else None
         pgid = event[4] if len(event) >= 5 else None
         boot_id = event[5] if len(event) >= 7 else None
         contained = bool(event[6]) if len(event) >= 7 else False
+        boot_verified = bool(event[7]) if len(event) >= 8 else False
         app_id = app_id or _app_for_pid(pid)
         if app_id is None:
             continue                   # not one of ours (stale queue entry)
+        # A successfully-issued SIGKILL is not proof of process-group death
+        # (for example, an uninterruptible D-state helper may remain).  Keep
+        # both the exit event and the committed run identity until a future
+        # retry observes the exact same-boot group as empty.
+        if (boot_verified and pgid is not None
+                and _pgid_alive(pgid)):
+            _reaped.append(event)
+            continue
         info = describe_returncode(rc, ts)
         info["pid"] = pid
         _write_exit(app_id, info)
@@ -603,6 +667,11 @@ def sweep_stale() -> List[str]:
             same_boot = _same_boot_record(app_id)
             if pgid is not None and not leader_running and same_boot:
                 _killpg_id(pgid, signal.SIGKILL)
+                # Signal delivery is not containment proof.  Preserve the
+                # complete same-boot retry identity while any helper (including
+                # an uninterruptible D-state process) still occupies the group.
+                if _pgid_alive(pgid):
+                    continue
             elif pgid is not None and not leader_running:
                 print("[appmgr] stale run for %s is not from the current boot; "
                       "clearing records without signalling pgid %d"
@@ -748,11 +817,48 @@ def _load_manifest(app_id: str) -> dict:
         return json.load(f)
 
 
+_NO_FRAME_STREAM = {"id": "", "kind": "none"}
+_NATIVE_MAIN_STREAM = {"id": "main", "kind": "frame.sock", "path": "/live/0"}
+_NATIVE_FRAME_SOCK = "/run/recamera/frame.sock"
+
+
+def normalise_managed_frame_stream_contract(value: dict) -> dict:
+    """Return a fresh, closed stream contract or the fail-closed ``none``.
+
+    The contract is persisted with an exact app instance/generation.  Treat it
+    as control-plane input even when it came from appmgr's state file: only the
+    one platform route currently implemented by the supervisor is accepted.
+    """
+    if isinstance(value, dict) and value == _NATIVE_MAIN_STREAM:
+        return dict(_NATIVE_MAIN_STREAM)
+    return dict(_NO_FRAME_STREAM)
+
+
+def managed_frame_stream_contract(resource_plan: dict) -> dict:
+    """Compile the actual admitted launch plan into its native frame route.
+
+    A manifest claim is authorization, not proof of the selected runtime
+    backend.  ``resources.plan_manifest`` has already resolved conditional
+    profiles against effective configuration before this helper is called.  A
+    canonical camera reservation in that plan opts this generation into
+    ``frame.sock``; missing or malformed plans fail closed.
+    """
+    requests = (resource_plan.get("requests")
+                if isinstance(resource_plan, dict) else None)
+    if isinstance(requests, list) and any(
+            isinstance(request, dict)
+            and request.get("resource") == "camera.frame:camera-0"
+            for request in requests):
+        return dict(_NATIVE_MAIN_STREAM)
+    return dict(_NO_FRAME_STREAM)
+
+
 def _build_env(app_id: str, manifest: dict, *, npu_managed: bool = False,
                npu_broker_required: bool = False,
                instance_id: Optional[str] = None,
                instance_generation: Optional[int] = None,
                result_gateway_sock: Optional[str] = None,
+               frame_stream_contract: Optional[dict] = None,
                npu_mode: Optional[str] = None,
                inference_service_sock: Optional[str] = None) -> dict:
     """Environment handed to an app process.
@@ -774,12 +880,28 @@ def _build_env(app_id: str, manifest: dict, *, npu_managed: bool = False,
     env.pop("RECAMERA_INFERENCE_SERVICE_SOCK", None)
     env.pop("RECAMERA_RESULT_GATEWAY_SOCK", None)
     env.pop("RECAMERA_RESULT_GATEWAY_REQUIRED", None)
+    env.pop("RECAMERA_FRAME_SOURCE", None)
+    env.pop("RECAMERA_FRAME_SOCK", None)
+    # These broad/manual adapter switches can also select ResultSink and route
+    # results directly to result-in.sock.  A managed child must instead keep
+    # the authenticated Gateway route minted below; inherit neither value from
+    # appmgr's service environment.  Manual processes retain the documented
+    # opt-in behaviour because this scrub is local to the child environment.
+    env.pop("RECAMERA_ADAPTER_PREFER", None)
+    env.pop("RECAMERA_RESULT_OSD", None)
     env.pop("RECAMERA_APP_INSTANCE", None)
     env.pop("RECAMERA_APP_GENERATION", None)
     # Always canonicalise the app id for extension clients.  Previously every
     # Python process without a hand-written override announced itself as
     # ``python`` to the NPU broker.
     env["RECAMERA_APP_ID"] = app_id
+    if normalise_managed_frame_stream_contract(
+            frame_stream_contract)["kind"] == "frame.sock":
+        # Dedicated frame-only opt-in: using the global adapter preference here
+        # would also switch the result sink to result-in.sock and bypass the
+        # managed Result Gateway / unified Result Hub.
+        env["RECAMERA_FRAME_SOURCE"] = "official"
+        env["RECAMERA_FRAME_SOCK"] = _NATIVE_FRAME_SOCK
     if npu_managed:
         env["RECAMERA_NPU_MANAGED"] = "appmgr-v1"
     if npu_broker_required:
@@ -905,7 +1027,8 @@ def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0,
 
     Kills the whole PGID (the app is a session leader; its ffmpeg children share
     the group), so a half-started app leaves no orphan frame source holding the
-    camera. Then reaps + records the exit and drops the complete run record."""
+    camera. It drops the complete run record only after the same final trusted
+    leader/PGID fence used by :func:`stop` proves the generation is gone."""
     pid = proc.pid
     pgid = (getattr(proc, "_appmgr_pgid", None)
             or _run_pgid(app_id, pid) or pid)
@@ -945,6 +1068,8 @@ def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0,
         fence_before_force_kill()
         _killpg_id(pgid, signal.SIGKILL)
     reap_children()
+    _assert_process_fence_cleared(
+        app_id, pid, pgid, leader_authenticated=True)
     drain_exits()
     _clear_ready(app_id)
     _clear_pidfile(app_id, pid)
@@ -956,9 +1081,11 @@ def _startup_failure(app_id: str, proc: "subprocess.Popen", timeout: float) -> s
     """Human-readable root cause for a failed start(), with the app's log tail."""
     rc = proc.poll()
     if rc is not None:
+        # Queue/contain the leader exit, but do not drain it here.  The caller
+        # still has to run _terminate_proc's final trusted group fence; draining
+        # first would erase the only retry identity when a helper survived.
         reap_children()
-        drain_exits()                          # persist last_exit for the UI
-        info = last_exit(app_id) or describe_returncode(rc)
+        info = describe_returncode(rc)
         base = (f"app {app_id!r} exited during startup "
                 f"(code={info.get('code')}, signal={info.get('signal')})")
     else:
@@ -975,6 +1102,7 @@ def start(app_id: str, *, wait_ready: bool = True,
           instance_id: Optional[str] = None,
           instance_generation: Optional[int] = None,
           result_gateway_sock: Optional[str] = None,
+          frame_stream_contract: Optional[dict] = None,
           npu_mode: Optional[str] = None,
           inference_service_sock: Optional[str] = None,
           on_spawn: Optional[Callable[[int], None]] = None,
@@ -1023,7 +1151,8 @@ def start(app_id: str, *, wait_ready: bool = True,
         app_id, manifest, npu_managed=npu_managed,
         npu_broker_required=npu_broker_required, instance_id=instance_id,
         instance_generation=instance_generation,
-        result_gateway_sock=result_gateway_sock, npu_mode=npu_mode,
+        result_gateway_sock=result_gateway_sock,
+        frame_stream_contract=frame_stream_contract, npu_mode=npu_mode,
         inference_service_sock=inference_service_sock)
     # READY handshake: clear any stale marker, then tell the app where to signal.
     ready_path = paths.readyfile(app_id)
@@ -1129,6 +1258,32 @@ def _pgid_alive(pgid: int) -> bool:
         return False
 
 
+def _assert_process_fence_cleared(app_id: str, pid: Optional[int],
+                                  pgid: Optional[int], *,
+                                  leader_authenticated: bool) -> None:
+    """Fail closed unless an authenticated launch fence is actually empty.
+
+    Both explicit stop and failed-start containment use this exact boundary.
+    Run records and queued exit events must remain intact until it succeeds so
+    a later retry still has the trusted same-boot process-group identity.
+    """
+    deadline = time.monotonic() + max(0.0, PROCESS_FENCE_SETTLE_SEC)
+    while True:
+        leader_alive = bool(
+            leader_authenticated and owned_pid_is_running(app_id, pid))
+        group_alive = bool(pgid is not None and _pgid_alive(pgid))
+        if not leader_alive and not group_alive:
+            return
+        if time.monotonic() >= deadline:
+            raise ProcessFenceError(
+                app_id, pid, pgid, leader_alive=leader_alive,
+                group_alive=group_alive)
+        # Reap direct leaders while waiting, but never drain their events here:
+        # the caller may still need the same-boot PGID for a retry.
+        reap_children()
+        time.sleep(_PROCESS_FENCE_POLL_SEC)
+
+
 def _owned_live_pgid(pid: int, app_id: str) -> Optional[int]:
     """Resolve a live app leader's group without trusting persisted numbers."""
     if not _pid_running(pid) or not _is_ours(pid, app_id):
@@ -1213,6 +1368,12 @@ def stop(app_id: str, grace: float = 5.0,
     # between those reads, and a prior appmgr instance would not be in _apps for
     # reap_children() to contain on our behalf.
     dead_now = not bool(pid and _pid_running(pid))
+    # This is the only process-group identity safe to use for the final fence:
+    # prefer the kernel-resolved group of a live owned leader.  Once the leader
+    # is gone, a persisted numeric PGID is trustworthy only when its boot ID
+    # matches the running kernel.
+    fence_pgid = (live_pgid if live_pgid is not None else
+                  (saved_pgid if dead_now and same_boot else None))
     if live_pgid is not None:
         result["pgid"] = live_pgid
         result["signalled"] = _killpg_id(live_pgid, signal.SIGTERM)
@@ -1243,8 +1404,23 @@ def stop(app_id: str, grace: float = 5.0,
         print("[appmgr] %s dead leader has an untrusted cross-boot/legacy "
               "pgid %d; clearing records without signalling"
               % (app_id, saved_pgid), flush=True)
-    # Collect the corpse and publish its exit status before we drop run.pid.
+    # Collect the leader corpse, but do not publish/drain its event yet:
+    # drain_exits() clears the committed run identity.  First establish that
+    # the exact leader/group authenticated above is truly gone.  In particular,
+    # SIGKILL can report success while a D-state helper remains in the group.
     reap_children()
+    try:
+        _assert_process_fence_cleared(
+            app_id, pid, fence_pgid, leader_authenticated=leader_ours)
+    except ProcessFenceError as exc:
+        result["fence_alive"] = {
+            "leader": exc.leader_alive,
+            "group": exc.group_alive,
+        }
+        raise
+
+    # Only a proven-empty authenticated fence may retire its exit event and
+    # durable identity records.
     drain_exits()
 
     # ★No global `pkill -x ffmpeg`★ (健壮#19 / P4). The app was launched with

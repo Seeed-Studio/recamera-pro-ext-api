@@ -43,6 +43,7 @@ Hub、模板或消费者失败不会改变 legacy 结果。
   },
   "results": [],
   "events": [],
+  "geometry": [],
   "metrics": {},
   "summary": {},
   "render": {},
@@ -51,8 +52,8 @@ Hub、模板或消费者失败不会改变 legacy 结果。
 ```
 
 `type` 的数据类型为 `frame | event | status | metrics`。连接控制还会收到
-`hello | snapshot`；formatted 订阅收到 `type=formatted`，其原始语义位于
-`extensions.raw_type`。
+`hello | snapshot | source_invalidated`；formatted 订阅收到 `type=formatted`，其原始
+语义位于 `extensions.raw_type`。
 
 身份字段由服务端赋值：
 
@@ -60,11 +61,20 @@ Hub、模板或消费者失败不会改变 legacy 结果。
   `app_id/instance/generation`；payload 中同名字段会被覆盖。应用 payload 自带的
   `render` 也会被丢弃；Hub 只在认证 hello 控制路径读取当前已安装 manifest v2，按
   精确的 app/instance/generation 缓存其 `render`，然后注入 raw、snapshot 与
-  formatted envelope。结果热路径不读取 manifest。
+  formatted envelope。受控启动路径同时把该 generation 实际选择的 frame backend
+  作为独立 stream contract 传给 Hub；结果热路径不读取 manifest，也不猜测 backend。
 - app 的 `time.wall_ms` 使用 gateway 接收时刻；payload 自报的未来/旧时间仅保存在
   `extensions.reported_timestamp(_ms)` 作诊断，不能跨 generation 抢占最新状态。切换
   generation 会清除该 app 的旧 frame/status/event、ingress 与客户端待发项，并在最终
-  缓存/广播前再次 CAS，阻止已经进入 normalize 的旧进程回填。
+  缓存/广播前再次 CAS，阻止已经进入 normalize 的旧进程回填。manifest/stream
+  contract 刷新也只允许 generation 单调前进；延迟到达的旧 generation 或同
+  generation 不同 instance 刷新是无副作用 no-op，不能把 Hub 的当前代际回退。
+  Hub 还保留有界的已撤销精确 tuple 集；invalidate 即使已删除当前映射，延迟旧 hello
+  也只能成功 no-op，不能在生命周期最终复核前短暂重新授权并泄漏 frame/event。
+  应用 stop、crash 或 generation 切换时，Hub 在同一发布 fence 内先清旧待发数据，再向
+  raw/ formatted 客户端发送携带旧 `instance/generation` 精确 tuple 的
+  `source_invalidated` tombstone。客户端必须立即清除该 tuple，并拒绝另一条 WS 上延迟
+  到达的同 tuple 数据；tombstone 不能按 app id 通配删除已经出现的新 generation。
 - builtin：只接受严格 system hello，并经可替换的系统 identity resolver；payload
   中的 `source_id` 不能改变 canonical `source`。
 
@@ -74,9 +84,14 @@ Hub、模板或消费者失败不会改变 legacy 结果。
   Hub 会按 result/event kind 给 `box/quad/keypoints` 及其 direct alias 注入 `spaces`；
   payload 自带 `space/spaces` 被丢弃，未声明、冲突或复杂/derived 路径均为 `unknown`。
   manifest 可声明 pixel 或 normalized。pixel 缺 `width/height` 时强制为 `unknown`。
-- 当前 `camera.frames` 平台合约对应 frame.sock VI pipe0/ch1 与浏览器 main preview
-  (`/live/0`)；canonical `stream.id=main`。payload 的 `camera-0` 仅记录在
-  `extensions.reported_stream_id`，不能选择主/子码流。
+- `camera.frames` 只是资源权限，不能证明运行进程实际消费了哪条流。appmgr 会先按有效
+  配置解析 `resources.profiles`；只有该 instance/generation 的实际资源准入与启动计划
+  选择受管 official `frame.sock`（VI pipe0/ch1）时，控制面才向 Hub 传入严格白名单的
+  `{id: main, kind: frame.sock, path: /live/0}`；此时
+  canonical `stream.id=main`，与浏览器 main preview `/live/0` 对齐。缺失、部分、未知或
+  带额外字段的 contract 一律降为 `{id: "", kind: "none"}`，且新 generation 不继承旧
+  generation 的映射。manifest 权限和 payload 的 `camera-0`/`main` 均不能选择流；后者
+  只记录在 `extensions.reported_stream_id` 供诊断。
 - builtin protobuf 坐标是归一化画面坐标：
   `stream.coordinate_space=normalized_xyxy`。
 - 每个 result 的 `spaces` 逐 shape 声明，例如：
@@ -94,6 +109,56 @@ Hub、模板或消费者失败不会改变 legacy 结果。
 
 单 shape 结果另带兼容字段 `space`。`box`、`quad`、polygon 与 points 不会被
 错误标成同一种表示。builtin 的 `{left,top,right,bottom}` box 对象保持原结构。
+
+### 通用 geometry primitives
+
+应用可在同一帧 payload 顶层发送 `geometry[]`。canonical v2 只定义四个基础图元；
+box/quad/keypoints/pose 由 Kit helper 转换到这些图元，原有
+`results[].box/quad/keypoints` 不变且可与它们共存：
+
+```json
+{
+  "geometry": [
+    {"type": "point", "points": [[320,180]], "id": "nose",
+     "label": "nose", "score": 0.96, "space": "pixel_points",
+     "style": {"color": "#00ff00", "point_radius": 4, "opacity": 0.9}},
+    {"type": "line", "points": [[100,100],[400,100]],
+     "space": "pixel_points", "style": {"color": "#ffff00", "line_width": 2}},
+    {"type": "polyline", "points": [[10,10],[20,30],[40,20]],
+     "space": "pixel_points"},
+    {"type": "polygon", "points": [[10,10],[80,10],[80,60],[10,60]],
+     "space": "pixel_points", "style": {"fill": true, "fill_color": "#0088ff80"}}
+  ]
+}
+```
+
+每个图元统一使用 `points:[[x,y],...]`：point 恰好 1 点、line 恰好 2 点、polyline
+至少 2 点、polygon 至少 3 点。可选字段只有有界 token `id`、128 字符以内 `label`、
+`score∈[0,1]` 及关闭集合的 style：`color/fill_color` 只接受
+`#RRGGBB/#RRGGBBAA`，`line_width∈[0.25,16]`、`point_radius∈[0.5,32]`、
+`fill:boolean`、`opacity∈[0,1]`。单帧硬上限 256 图元、单图元 256 点、合计 4096 点；
+manifest 可进一步收紧但不能放宽。
+
+应用发送的 `space` 会被删除。安装包必须同时声明数据坐标与可信渲染策略：
+
+```json
+{
+  "output": {"contract_version": 2, "fields": [{
+    "name": "geometry", "from": "geometry[]", "type": "geometry[]",
+    "coord": "pixel_points", "description": "Overlay primitives"
+  }]},
+  "render": {"schema_version": 1, "geometry": {
+    "types": ["point", "line", "polyline", "polygon"],
+    "max_items": 64, "max_points": 128,
+    "style": {"color": "#00ff00", "line_width": 2, "opacity": 0.9}
+  }}
+}
+```
+
+Hub 只从当前认证 generation 的已安装 manifest 编译上述 policy，注入每个图元的
+`space`、合并可信默认 style，并独立过滤非法/越界图元与未知 style；缺声明、声明冲突、
+normalized 坐标越出 `[0,1]` 时 fail closed。pixel 缺参考宽高时保留诊断图元但
+`space=unknown`，消费者不得绘制。payload 自带 `render`、stream 与身份仍全部不可信。
 
 ## 订阅
 
@@ -144,6 +209,7 @@ formatted 对**完整原始 batch**（results + events + summary + 性能字段�
   "stream": {},
   "results": [],
   "events": [],
+  "geometry": [],
   "metrics": {},
   "summary": {},
   "render": {},
@@ -160,12 +226,16 @@ formatted 对**完整原始 batch**（results + events + summary + 性能字段�
 }
 ```
 
-- app 使用已安装 manifest 与 appmgr effective config 中的 `iMode`、`dTemplate`、
-  `output_mapping`；配置仍由现有 App Center API 写入。
+- app 使用已安装 manifest 与 appmgr effective config 中的 `iMode`、
+  `template_mode`、`dTemplate`、`output_mapping`；`template_mode=mapping` 与
+  `template_mode=template` 是互斥选择，分别只读取字段映射或自由模板。旧配置缺少
+  selector 时保持原有 mapping-first 兼容行为；配置仍由现有 App Center API 写入。
 - builtin 只读 `/userdata/config/notify.json` 的 `dTemplate`，按 task 选择模板。
 - 两者都复用 Kit 的 `SandboxedEnvironment`、`StrictUndefined`、过滤器白名单、
   16 KiB 模板和 256 KiB 输出上限；不调用 notify 的普通 Jinja Environment。
 - 没有模板或渲染失败时，formatted 返回 compact raw JSON；raw 订阅及其他来源不受影响。
+- formatted 投影保留同一 batch 的 canonical `geometry[]` 与可信 `render`；启用消息模板
+  只改变 `payload/content_type/profile`，不能让视频叠加图元消失。
 - raw-only 时不读模板、不执行 Jinja。只有 formatted subscriber 才把 batch 投到独立的
   有界 formatter worker；结果按 batch 缓存，重放/多客户端不会重复执行 formatter。
   worker 队列优先 edge，格式化 I/O/渲染不占 generation fence 或 inference ingress。

@@ -246,6 +246,46 @@
     "description_zh": {"type": "string"},
     "author": {"type": "string"},
     "image": {"type": "string"},
+    "icon": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["path", "media_type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!\\.{1,2}(?:/|$))(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000-\\u001f]+$",
+          "not": {
+            "pattern": "(?:^|/)(?:[Kk][Ee][Yy][Ss]|\\.[Ss][Ss][Hh])(?:/|$)"
+          }
+        },
+        "media_type": {
+          "enum": ["image/png", "image/webp", "image/jpeg"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "media_type": {"const": "image/png"},
+            "path": {"pattern": "\\.png$"}
+          }
+        },
+        {
+          "properties": {
+            "media_type": {"const": "image/webp"},
+            "path": {"pattern": "\\.webp$"}
+          }
+        },
+        {
+          "properties": {
+            "media_type": {"const": "image/jpeg"},
+            "path": {"pattern": "\\.(?:jpg|jpeg)$"}
+          }
+        }
+      ]
+    },
     "scene": {"type": "string"},
     "scene_zh": {"type": "string"},
     "tags": {"type": "array", "items": {"type": "string"}},
@@ -284,7 +324,168 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "geometry"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      },
+      "then": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "contains": {
+                  "type": "object",
+                  "required": ["from"],
+                  "properties": {"from": {"const": "geometry[]"}}
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "contains": {
+                  "type": "object",
+                  "required": ["from"],
+                  "properties": {"from": {"const": "geometry[]"}}
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "geometry"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "stream_osd"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      },
+      "then": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "oneOf": [
+                  {
+                    "allOf": [
+                      {"contains": {"$ref": "#/$defs/directPixelNamedBoxField"}},
+                      {"not": {"contains": {"$ref": "#/$defs/nonPixelDirectBoxField"}}}
+                    ]
+                  },
+                  {
+                    "allOf": [
+                      {"contains": {"$ref": "#/$defs/directNormalizedNamedBoxField"}},
+                      {"not": {"contains": {"$ref": "#/$defs/nonNormalizedDirectBoxField"}}}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "directBoxField": {
+      "type": "object",
+      "required": ["from"],
+      "properties": {"from": {"const": "results[].box"}},
+      "not": {
+        "required": ["derived"],
+        "properties": {"derived": {"const": true}}
+      }
+    },
+    "directPixelNamedBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "required": ["name", "coord"],
+          "properties": {
+            "name": {"const": "box"},
+            "coord": {"const": "pixel_xyxy"}
+          }
+        }
+      ]
+    },
+    "directNormalizedNamedBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "required": ["name", "coord"],
+          "properties": {
+            "name": {"const": "box"},
+            "coord": {"const": "normalized_xyxy"}
+          }
+        }
+      ]
+    },
+    "nonPixelDirectBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "not": {
+            "required": ["coord"],
+            "properties": {"coord": {"const": "pixel_xyxy"}}
+          }
+        }
+      ]
+    },
+    "nonNormalizedDirectBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "not": {
+            "required": ["coord"],
+            "properties": {"coord": {"const": "normalized_xyxy"}}
+          }
+        }
+      ]
+    },
     "relativePath": {
       "type": "string",
       "minLength": 1,
@@ -319,6 +520,17 @@
         {
           "if": {"properties": {"type": {"pattern": "(bbox|quad|keypoint)"}}},
           "then": {"required": ["coord"]}
+        },
+        {
+          "if": {"properties": {"from": {"const": "geometry[]"}}},
+          "then": {
+            "required": ["coord"],
+            "properties": {
+              "type": {"const": "geometry[]"},
+              "coord": {"enum": ["pixel_points", "normalized_points"]},
+              "derived": {"const": false}
+            }
+          }
         }
       ]
     },
@@ -372,6 +584,59 @@
         "fields": {"type": "array", "items": {"$ref": "#/$defs/token"}}
       }
     },
+    "geometryStyleV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+        "line_width": {"type": "number", "minimum": 0.25, "maximum": 16},
+        "point_radius": {"type": "number", "minimum": 0.5, "maximum": 32},
+        "fill": {"type": "boolean"},
+        "fill_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+        "opacity": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "renderGeometryV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["types"],
+      "properties": {
+        "types": {
+          "type": "array", "minItems": 1, "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"enum": ["point", "line", "polyline", "polygon"]}
+        },
+        "max_items": {"type": "integer", "minimum": 1, "maximum": 256},
+        "max_points": {"type": "integer", "minimum": 1, "maximum": 256},
+        "style": {"$ref": "#/$defs/geometryStyleV1"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "types": {
+                "contains": {"enum": ["line", "polyline"]}
+              }
+            }
+          },
+          "then": {
+            "properties": {"max_points": {"minimum": 2}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "types": {"contains": {"const": "polygon"}}
+            }
+          },
+          "then": {
+            "properties": {"max_points": {"minimum": 3}}
+          }
+        }
+      ]
+    },
     "renderV1": {
       "type": "object",
       "additionalProperties": false,
@@ -413,6 +678,7 @@
             "skeleton": {"type": "array"}
           }
         },
+        "geometry": {"$ref": "#/$defs/renderGeometryV1"},
         "events": {
           "type": "object",
           "propertyNames": {"$ref": "#/$defs/token"},
@@ -499,7 +765,7 @@
             "required": ["key", "type", "apply"],
             "properties": {
               "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
-              "type": {"enum": ["boolean", "enum", "field_mapping", "integer", "line", "number", "output_filters", "string", "zone"]},
+              "type": {"enum": ["array", "boolean", "enum", "field_mapping", "integer", "line", "number", "object", "output_filters", "password", "select", "string", "zone"]},
               "apply": {"enum": ["live", "restart", "reschedule"]},
               "default": {},
               "min": {"type": "number"},
@@ -507,7 +773,29 @@
               "step": {"type": "number"},
               "maxPoints": {"type": "integer"},
               "directional": {"type": "boolean"},
-              "options": {"type": "array"},
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["value"],
+                      "properties": {
+                        "value": {
+                          "type": ["string", "number", "boolean"]
+                        },
+                        "label": {"type": "string"},
+                        "label_zh": {"type": "string"}
+                      }
+                    }
+                  ]
+                }
+              },
               "option_labels": {"type": "array"},
               "option_labels_zh": {"type": "array"},
               "title": {"type": "string"},

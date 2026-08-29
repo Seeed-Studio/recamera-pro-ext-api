@@ -128,6 +128,45 @@ class CrashContainmentTests(unittest.TestCase):
         self.assertFalse(os.path.exists(paths.pgidfile(app_id)))
         self.assertFalse(os.path.exists(paths.bootfile(app_id)))
 
+    def test_ready_failure_retains_identity_event_and_sweep_fence(self):
+        app_id = "startup-dstate-helper"
+        child_file = os.path.join(self.root, "startup-dstate-child.pid")
+        body = (
+            "import subprocess, sys\n"
+            "c = subprocess.Popen([sys.executable, '-c', "
+            "'import time; time.sleep(120)'])\n"
+            "open(%r, 'w').write(str(c.pid))\n"
+            "sys.exit(9)\n" % child_file)
+        self._mkapp(app_id, body)
+
+        # A real uninterruptible task is not safe to manufacture in a unit
+        # test.  Keep the real leader/child/PGID flow, but fault-inject the
+        # kernel liveness probe to model a helper surviving every SIGKILL.
+        with mock.patch.object(supervisor, "_pgid_alive", return_value=True), \
+                mock.patch.object(
+                    supervisor, "PROCESS_FENCE_SETTLE_SEC", 0.0):
+            with self.assertRaises(supervisor.ProcessFenceError) as cm:
+                supervisor.start(app_id)
+
+            leader = cm.exception.pid
+            self.groups.append(leader)
+            self._child_pid(child_file)
+            self.assertFalse(cm.exception.leader_alive)
+            self.assertTrue(cm.exception.group_alive)
+            self.assertTrue(os.path.exists(paths.pidfile(app_id)))
+            self.assertTrue(os.path.exists(paths.pgidfile(app_id)))
+            self.assertTrue(os.path.exists(paths.bootfile(app_id)))
+            self.assertTrue(any(event[0] == leader
+                                for event in supervisor._reaped))
+
+            # Neither read-side exit publication nor stale sweeping may erase
+            # the same-boot retry identity while the residual group persists.
+            self.assertEqual(supervisor.drain_exits(), [])
+            self.assertEqual(supervisor.sweep_stale(), [])
+            self.assertTrue(os.path.exists(paths.pidfile(app_id)))
+            self.assertTrue(os.path.exists(paths.pgidfile(app_id)))
+            self.assertTrue(os.path.exists(paths.bootfile(app_id)))
+
     def test_startup_timeout_fences_once_before_forced_kill(self):
         app_id = "startup-force-fence"
         child_file = os.path.join(self.root, "startup-force-child.pid")
@@ -304,7 +343,15 @@ class CrashContainmentTests(unittest.TestCase):
         with mock.patch("builtins.print") as emitted:
             self.assertEqual(supervisor.reap_children(), 1)
             emitted.assert_not_called()
-            exits = supervisor.drain_exits()
+            # SIGKILL delivery and disappearance from the process-group table
+            # are not atomic.  drain_exits() deliberately defers publication
+            # (and run-record removal) until the trusted group is proven empty.
+            exits = []
+            drain_deadline = time.monotonic() + 5
+            while not exits and time.monotonic() < drain_deadline:
+                exits = supervisor.drain_exits()
+                if not exits:
+                    time.sleep(0.02)
             self.assertTrue(emitted.called)
 
         mine = [e for e in exits if e.get("pid") == leader]
@@ -387,6 +434,59 @@ class CrashContainmentTests(unittest.TestCase):
                          "authorization fence must run once before SIGKILL")
         self.assertTrue(_wait_not_running(leader))
         self.assertTrue(_wait_not_running(child))
+
+    def test_stop_retains_identity_when_trusted_group_survives_sigkill(self):
+        app_id = "stuck-trusted-group"
+        leader = 464646
+        self._mkapp(app_id, "# synthetic owned process identity\n")
+        for path in (paths.pidfile(app_id), paths.pgidfile(app_id)):
+            with open(path, "w") as f:
+                f.write(str(leader))
+        with open(paths.bootfile(app_id), "w") as f:
+            f.write("boot-A")
+        with open(paths.readyfile(app_id), "w") as f:
+            f.write("ready")
+
+        event = (leader, -int(signal.SIGKILL), time.time(), app_id,
+                 leader, "boot-A", True, True)
+
+        def reap_stuck_leader():
+            if event not in supervisor._reaped:
+                supervisor._reaped.append(event)
+                return 1
+            return 0
+
+        with mock.patch.object(
+                supervisor, "_pid_running", return_value=True), \
+                mock.patch.object(supervisor, "_is_ours", return_value=True), \
+                mock.patch.object(
+                    supervisor.os, "getpgid", return_value=leader), \
+                mock.patch.object(
+                    supervisor, "_killpg_id", return_value=True) as killpg, \
+                mock.patch.object(
+                    supervisor, "_pgid_alive", return_value=True), \
+                mock.patch.object(
+                    supervisor, "PROCESS_FENCE_SETTLE_SEC", 0.0), \
+                mock.patch.object(supervisor.time, "sleep"), \
+                mock.patch.object(
+                    supervisor, "reap_children", side_effect=reap_stuck_leader):
+            with self.assertRaisesRegex(
+                    supervisor.SupervisorError,
+                    "process fence remains active"):
+                supervisor.stop(app_id, grace=0.0)
+
+            # A read-side drain after the failed stop must not erase the only
+            # retry identity while the trusted residual group is still alive.
+            self.assertEqual(supervisor.drain_exits(), [])
+
+        self.assertEqual(
+            [call.args[1] for call in killpg.call_args_list],
+            [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(supervisor._reaped, [event])
+        self.assertEqual(open(paths.pidfile(app_id)).read(), str(leader))
+        self.assertEqual(open(paths.pgidfile(app_id)).read(), str(leader))
+        self.assertEqual(open(paths.bootfile(app_id)).read(), "boot-A")
+        self.assertTrue(os.path.exists(paths.readyfile(app_id)))
 
     def test_cross_boot_dead_leader_record_does_not_signal_saved_group(self):
         """A /userdata PGID from boot A must not address a group on boot B."""

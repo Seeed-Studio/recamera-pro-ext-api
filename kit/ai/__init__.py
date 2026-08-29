@@ -25,6 +25,18 @@ from .publisher import (
     publish_result_batch,
     to_legacy_payload,
 )
+from ..geometry import (
+    GeometryBuilder,
+    GeometryError,
+    box as geometry_box,
+    keypoints as geometry_keypoints,
+    line as geometry_line,
+    point as geometry_point,
+    polygon as geometry_polygon,
+    polyline as geometry_polyline,
+    pose as geometry_pose,
+    quad as geometry_quad,
+)
 
 __all__ = [
     "AIResult",
@@ -33,6 +45,8 @@ __all__ = [
     "CoordinateSpace",
     "Detection",
     "Keypoint",
+    "GeometryBuilder",
+    "GeometryError",
     "LegacyResultSink",
     "ModelToPixel",
     "Pose",
@@ -43,4 +57,12 @@ __all__ = [
     "Track",
     "publish_result_batch",
     "to_legacy_payload",
+    "geometry_box",
+    "geometry_keypoints",
+    "geometry_line",
+    "geometry_point",
+    "geometry_polygon",
+    "geometry_polyline",
+    "geometry_pose",
+    "geometry_quad",
 ]

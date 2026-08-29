@@ -1,0 +1,84 @@
+{
+  "events": [],
+  "extensions": {
+    "coordinate_space": "normalized_xyxy",
+    "legacy_type": "results",
+    "reported_stream_id": "spoofed",
+    "stream_source": {
+      "id": "main",
+      "kind": "frame.sock",
+      "path": "/live/0"
+    }
+  },
+  "geometry": [
+    {
+      "id": "nose",
+      "label": "nose",
+      "points": [[0.25, 0.75]],
+      "score": 0.96,
+      "space": "normalized_points",
+      "style": {
+        "color": "#00ff00",
+        "line_width": 2.0,
+        "opacity": 0.8,
+        "point_radius": 5.0
+      },
+      "type": "point"
+    },
+    {
+      "points": [[0.1, 0.1], [0.9, 0.9]],
+      "space": "normalized_points",
+      "style": {"line_width": 2.0, "opacity": 0.8},
+      "type": "line"
+    },
+    {
+      "points": [[0.1, 0.2], [0.3, 0.4], [0.6, 0.2]],
+      "space": "normalized_points",
+      "style": {"line_width": 2.0, "opacity": 0.8},
+      "type": "polyline"
+    },
+    {
+      "points": [[0.1, 0.1], [0.3, 0.1], [0.3, 0.3]],
+      "space": "normalized_points",
+      "style": {
+        "fill": true,
+        "fill_color": "#0088ff80",
+        "line_width": 2.0,
+        "opacity": 0.5
+      },
+      "type": "polygon"
+    }
+  ],
+  "id": "demo:4:7:frame",
+  "metrics": {},
+  "render": {
+    "geometry": {
+      "max_items": 64,
+      "max_points": 128,
+      "style": {"line_width": 2, "opacity": 0.8},
+      "types": ["point", "line", "polyline", "polygon"]
+    },
+    "schema_version": 1
+  },
+  "results": [],
+  "schema": "recamera.ai.result",
+  "schema_version": 2,
+  "seq": 7,
+  "source": {
+    "app_id": "demo",
+    "generation": 4,
+    "id": "demo",
+    "instance": "i-4",
+    "kind": "app",
+    "trust": "peercred"
+  },
+  "stream": {
+    "coordinate_space": "normalized_xyxy",
+    "height": 480,
+    "id": "main",
+    "width": 640
+  },
+  "summary": {},
+  "time": {"pts_us": 1234567, "wall_ms": 1780000000000},
+  "type": "frame"
+}

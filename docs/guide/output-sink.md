@@ -46,10 +46,10 @@ opt-in 只要两件事：`capabilities` 加 `"output"`，并给一个 `output` �
 | 键 | 必填 | 含义 |
 |---|---|---|
 | `fields[].name` | 是 | 字段逻辑名（映射/模板里可引用） |
-| `fields[].from` | 是 | 只读点路径（`results[].box`、`events[kind=detection].label`），带 `[]` 列表投影；**不是任意 Jinja**，是取值路径 |
+| `fields[].from` | 是 | 只读点路径（`results[].box`、`events[kind=detection].label`、`geometry[]`），带 `[]` 列表投影；**不是任意 Jinja**，是取值路径 |
 | `fields[].type` | 是 | 类型标注（`string`/`integer`/`float`/`bbox<float>[4]`/`object<number>` 等） |
 | `fields[].description` | 是 | 人读说明，前端字段选择器展示 |
-| `fields[].coord` | 否 | 坐标系（`pixel_xyxy`/`pixel_quad`/`normalized_xyxy`），格式器不得静默改写 |
+| `fields[].coord` | 否 | 坐标系（如 `pixel_xyxy`、`pixel_quad`；`geometry[]` 只能用 `pixel_points`/`normalized_points`），格式器不得静默改写 |
 | `fields[].event_kind` / `unit` / `optional` | 否 | 事件种类绑定 / 单位 / 可空标注 |
 | `default_channel` | 否 | 默认通道，字符串或列表，载入时归一成列表 |
 | `default_mode` | 否 | `raw` / `custom` / `ha` |
@@ -69,11 +69,17 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
   "seq": 42,                       // 每 app/进程单调递增
   "frame": {"width": 1920, "height": 1080, "pts": 123.456},
   "results": [],                   // app 产出的结果项
-  "events": []                     // app 产出的业务事件
+  "events": [],                    // app 产出的业务事件
+  "geometry": []                   // 可选 canonical 绘制图元
 }
 ```
 
 映射和模板都是对这个 envelope 取值。
+
+`geometry[]` 支持 `point/line/polyline/polygon`，每项统一使用 `points:[[x,y],...]`。
+它随 raw/custom 输出保留；Result Hub 会按严格 manifest v2 声明重新验证并注入可信坐标空间。
+完整字段、style 上限与 manifest `render.geometry` 示例见
+[result-hub-v2.md](./result-hub-v2.md#通用-geometry-primitives)。
 
 ## 3. 通道（可多选并发）
 
@@ -111,7 +117,7 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 
 ### 4.2 custom（可视化映射 + Jinja2）
 
-两种视图，同一底层格式器，永不产生两份发布：
+两种视图，同一底层格式器，永不产生两份发布。`template_mode` 是显式互斥选择：`mapping` 只使用 `output_mapping`，`template` 只使用 `dTemplate`；不再用“mapping 非空就静默覆盖自由模板”的隐式优先级。旧配置没有该键时仍兼容原行为（有 mapping 选 mapping，否则选 template），manifest 带 `default_mapping` 的既有包默认值为 `mapping`：
 
 **① 可视化映射行**（`default_mapping` / 前端映射表）——`source → target → topic`：
 
@@ -143,7 +149,7 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 
 受限环境：`StrictUndefined`、autoescape off（JSON 非 HTML）、只放 `tojson`/`default`/`length`/`selectattr`/`map`/`min`/`max`/`sum` 等；**无**文件加载器、import/include、Python 内部属性访问、用户可调对象。强制模板长度、渲染载荷与命名空间条目上限。渲染出错只丢那条通道消息，不终止推理；Result Hub 另用有界异步 worker 隔离慢模板，不阻塞 raw/推理 ingress。
 
-`dTemplate` / `output_mapping` 的 apply mode 为 `live`：SIGHUP 后
+`template_mode` / `dTemplate` / `output_mapping` 的 apply mode 均为 `live`：SIGHUP 后
 `ConfigurableSink` 会用已保存的 manifest/app metadata 与新的 effective config
 重新 resolve/build formatter。编译失败保留上一个已知正常的 formatter，不再依赖
 不存在于 config.json 的私有 `_formatter` 对象。Result Hub 的 formatted

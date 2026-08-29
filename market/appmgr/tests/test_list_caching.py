@@ -23,6 +23,7 @@ silently:
      (same inode, same size) can produce an identical key for different content.
 """
 import json
+import hashlib
 import os
 import shutil
 import sys
@@ -199,7 +200,8 @@ class UpgradeInvalidationTests(_Pinned):
         installer.install(_make_pkg("2.0.0", man=_manifest("2.0.0"),
                                     files={"icon.png": PNG}))
         self.assertEqual(self._entry()["icon_url"],
-                         "/api/appMgr/icon?id=cache-app&v=2.0.0")
+                         "/api/appMgr/icon?id=cache-app&v=2.0.0&h="
+                         + hashlib.sha256(PNG).hexdigest()[:16])
 
     def test_uninstall_then_reinstall_does_not_resurrect_stale_data(self):
         installer.install(_make_pkg("1.0.0", man=_manifest("1.0.0", name="Old"),
@@ -226,7 +228,8 @@ class IconCacheInvalidationTests(_Pinned):
             f.write(PNG)
         self._age_dir(60)                     # dir mtime bumps for real; age it out
         self.assertEqual(self._entry()["icon_url"],
-                         "/api/appMgr/icon?id=cache-app&v=1.0.0")
+                         "/api/appMgr/icon?id=cache-app&v=1.0.0&h="
+                         + hashlib.sha256(PNG).hexdigest()[:16])
 
     def test_icon_removed_by_hand_is_picked_up(self):
         installer.install(_make_pkg("1.0.0", files={"icon.png": PNG}))

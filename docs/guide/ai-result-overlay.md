@@ -48,6 +48,9 @@ AI 结果是两类信息：日志仍从 App Center 日志接口查看，结构�
 软件叠加只画在浏览器画布上，**不会写入 RTSP/录像码流**。渲染器应按以下顺序处理：
 
 1. 只消费 `type=frame`；event/status 不用于清空或重画当前框。
+   `type=source_invalidated` 是例外的生命周期控制：按消息携带的精确
+   `app/instance/generation` 立即清除旧 frame，并拒绝另一条 formatted/raw WS 延迟到达
+   的同 tuple；不得按 app id 通配清掉已经出现的新 generation。
 2. 按 `source.id + stream.id` 保存最新帧；多应用可同时显示或由用户筛选。
 3. 读取 `stream.width/height/coordinate_space` 和每个 result 的 `spaces`，禁止通过
    “坐标是否小于 1”猜测归一化。
@@ -57,9 +60,17 @@ AI 结果是两类信息：日志仍从 App Center 日志接口查看，结构�
 5. 视频使用 `object-fit: contain` 时，坐标映射到实际画面矩形并加入 letterbox 偏移；
    canvas 位图尺寸还要乘 `devicePixelRatio`。
 
-当前平台 `camera.frames` 来自 frame.sock VI pipe0/ch1，对应 main preview
-(`/live/0`)，所以 Hub 使用 `stream.id=main`；应用历史字段 `camera-0` 只是诊断值。前端还
-应在 rotation/aspect 不匹配时 fail closed，不能把 main 坐标硬套到另一条码流。
+`frame.geometry[]` 是应用自定义绘制的统一入口，支持 `point/line/polyline/polygon`；
+box、quad、keypoints、pose 可由 Python Kit helper 转换。渲染器只接受 Hub 注入的
+`space` 及 envelope 中的可信 `render.geometry`，图元自带的 `space/render/stream/source`
+不能提升权限。`space=unknown`、未知图元或越出声明坐标范围的图元必须跳过，但不能因此
+清掉同一 frame 中其他合法 results/geometry。
+
+`camera.frames` 只授予资源权限，不代表当前进程实际使用的帧源。只有 appmgr 受控启动
+为该 instance/generation 选择 official frame.sock VI pipe0/ch1，并把独立的可信 stream
+contract 交给 Hub 时，Hub 才使用 `stream.id=main`，对应 main preview `/live/0`；缺失或
+非法 contract 均不关联视频流。应用历史字段 `camera-0`/`main` 只是诊断值。前端还应在
+rotation/aspect 不匹配时 fail closed，不能把 main 坐标硬套到另一条码流。
 
 一个结果可能同时有 box 和 keypoints：
 
@@ -87,6 +98,10 @@ AI 结果是两类信息：日志仍从 App Center 日志接口查看，结构�
 metrics/status inspector。语音应用没有视频 shape，应显示字幕/历史/状态面板，而不是
 强行叠加在画面上。
 
+消息模板是额外的 formatted 文本投影，不是绘制数据的替代品。raw 与 formatted frame
+均保留 canonical `geometry[]` 和 `render`；前端开启模板后仍应从 frame 绘制，不能只因
+存在 `payload` 就跳过叠加。
+
 canonical envelope 的 `render` 不是应用运行时数据：Hub 会丢弃 payload 自带值，仅
 注入当前认证 generation 对应的已安装 manifest v2 声明。因此第 1 项可以直接作为
 可视化契约使用；第 2 项主要用于连接建立前的卡片预览与兼容回退。
@@ -102,7 +117,18 @@ canonical envelope 的 `render` 不是应用运行时数据：Hub 会丢弃 payl
 |---|---:|---:|
 | Result Hub `/ws/ai/results/v2` | 是 | 否 |
 | legacy App 8124 | 可由旧消费者绘制 | 否 |
-| `result-in.sock` / `OfficialResultSink` | 可同时有 metadata | 是 |
+| appmgr detection OSD bridge / `osd-in.sock` | 与浏览器并列消费 raw v2 | 是 |
 
-后续平台 OSD bridge 可通过 Result Hub 的异步 observer 消费已认证 raw v2 envelope；
-它与浏览器 WS 是并列消费者，不允许反向修改 raw 或阻塞推理 ingress。
+设备级烧录通过 `PUT /api/app-center/v1/visualization` 配置。启用时
+`osd.sources` 至少包含一个应用，不能保存 `enabled=true,sources=[]`；旧固件遗留的这类
+矛盾配置在读取、bridge 启动和 API 展示时统一按 disabled 处理。只有 manifest v2 同时
+使用 `output.contract_version=2`、`render.schema_version=1`，且
+`render.stream_osd.supported` 明确包含 `boxes`，并直接声明至少一个
+`results[].box` 且所有别名使用同一明确 xyxy 坐标空间的应用可选。对早期严格 v2 契约，仅当
+`render.boxes` 存在、且恰好声明一个非 derived 的 `results[].box`，坐标明确为
+`pixel_xyxy` 或 `normalized_xyxy` 时，控制面才投影等价能力；不根据应用 id、版本、
+payload 或坐标数值猜测。其他旧应用需要升级或重新安装兼容版本。
+
+bridge 是 Result Hub 已认证 raw v2 envelope 的异步 observer，与浏览器 WS 为并列消费者；
+它不反向修改 raw，也不阻塞推理 ingress。浏览器设置页在切换“实时/可视化”页签时应保留
+同一个视频预览组件，设备级烧录设置本身不会暂停 WebRTC 或浏览器 canvas 绘制。

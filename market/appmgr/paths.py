@@ -171,6 +171,13 @@ MAX_STAGED_UPLOADS = int(os.environ.get("APPMGR_MAX_STAGED_UPLOADS", "8"))
 UPLOAD_TTL_SEC = int(os.environ.get("APPMGR_UPLOAD_TTL_SEC", str(24 * 60 * 60)))
 MIN_UPLOAD_FREE_BYTES = int(os.environ.get(
     "APPMGR_MIN_UPLOAD_FREE_BYTES", str(128 * 1024 * 1024)))
+# Bound both an idle socket read and the complete multipart receive.  nginx has
+# its own edge timeouts, but appmgr also accepts loopback API clients directly;
+# one stalled client must not retain a reservation forever.
+UPLOAD_SOCKET_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_UPLOAD_SOCKET_TIMEOUT_SEC", "60"))
+UPLOAD_TOTAL_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_UPLOAD_TOTAL_TIMEOUT_SEC", "600"))
 # Keep authenticated UI retries from creating an unbounded backlog of stale
 # lifecycle callbacks or one handler thread per SSE connection.
 MAX_PENDING_OPERATIONS = int(os.environ.get(
