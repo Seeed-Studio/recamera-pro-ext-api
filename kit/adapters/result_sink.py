@@ -13,6 +13,9 @@ ABC:
                     go2rtc preview. Pure stdlib (socket + threading + hashlib);
                     a hand-rolled RFC6455 server frames text messages itself, so
                     NO `websockets`/`aiohttp`/etc. dependency is pulled in.
+* `GatewayResultSink` -- appmgr-managed publisher.  It sends NDJSON to one Unix
+                         socket; appmgr owns the sole WebSocket listener, so
+                         multiple applications never contend for :8124.
 
 Why our own lightweight WS (not the official :8123)
 ---------------------------------------------------
@@ -46,6 +49,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
+
+from kit.errors import AdapterError
+from kit.diagnostics import get_logger
+
+
+log = get_logger("result.sink")
 
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -220,6 +229,18 @@ class ResultSink(ABC):
         """
         pass
 
+    def emit_checked(self, payload: dict, pts: float) -> None:
+        """Publish and surface synchronous acceptance failures.
+
+        Historical :meth:`emit` implementations are intentionally best-effort
+        so one telemetry/output backend cannot stop an inference loop.  Typed
+        callers that must not mistake a local rejection for success use this
+        additive method.  The default delegates to ``emit``; sinks that hide
+        native/fan-out failures override it.
+        """
+
+        self.emit(payload, pts)
+
     def set_frame_size(self, w: int, h: int) -> None:
         """Tell the sink the current frame's pixel dimensions.
 
@@ -231,6 +252,11 @@ class ResultSink(ABC):
         convention and wire format) are completely unaffected.
         """
         pass
+
+    def set_frame_size_checked(self, w: int, h: int) -> None:
+        """Set geometry while surfacing synchronous backend failures."""
+
+        self.set_frame_size(w, h)
 
     def on_config_reload(self, config: dict) -> None:
         """Live-apply a config change (SIGHUP) to this sink.
@@ -262,6 +288,12 @@ class ResultSink(ABC):
 
     def __exit__(self, *exc):
         self.close()
+
+
+# ``ResultSink`` is retained for all existing imports.  ``ResultPublisher`` is
+# the less ambiguous public name: the low-level native package also has a
+# ``recamera_ext.ResultSink`` with a different, typed send_* API.
+ResultPublisher = ResultSink
 
 
 class StdoutSink(ResultSink):
@@ -513,6 +545,218 @@ class WsResultSink(ResultSink):
                 pass
 
 
+class GatewayResultSink(ResultSink):
+    """Publish to appmgr's authenticated Unix-domain result gateway.
+
+    appmgr injects the socket, app id, random instance id and generation.  The
+    first NDJSON record is a hello; the gateway validates it against the
+    pre-READY PID registry and acknowledges it.  Subsequent records are result
+    envelopes.  A bounded latest-wins writer queue keeps a slow/restarting
+    gateway off the inference thread.
+
+    ``host`` and ``port`` are accepted for signature compatibility with
+    :class:`WsResultSink`; they are intentionally ignored.
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8124,
+                 app_id: str = "app", preserve_envelope: bool = False, *,
+                 sock: Optional[str] = None, queue_size: int = 64,
+                 connect_timeout: float = 5.0, send_timeout: float = 0.25,
+                 **_ignored):
+        del host, port
+        self.sock = sock or os.environ.get("RECAMERA_RESULT_GATEWAY_SOCK", "")
+        self.app_id = os.environ.get("RECAMERA_APP_ID", app_id)
+        self.instance_id = os.environ.get("RECAMERA_APP_INSTANCE", "")
+        generation = os.environ.get("RECAMERA_APP_GENERATION", "")
+        try:
+            self.generation = int(generation)
+        except (TypeError, ValueError):
+            self.generation = -1
+        if not self.sock:
+            raise AdapterError(
+                "result gateway socket is not configured",
+                operation="result.gateway.connect", retryable=True)
+        if not self.instance_id or self.generation < 0:
+            raise AdapterError(
+                "managed result gateway identity is incomplete",
+                operation="result.gateway.hello", retryable=False,
+                details={"app": self.app_id})
+        self.preserve_envelope = bool(preserve_envelope)
+        self._connect_timeout = max(0.1, float(connect_timeout))
+        self._send_timeout = max(0.01, float(send_timeout))
+        self._q: "queue.Queue" = queue.Queue(maxsize=max(1, int(queue_size)))
+        self._conn: Optional[socket.socket] = None
+        self._conn_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._seq = 0
+        self._frame_w: Optional[int] = None
+        self._frame_h: Optional[int] = None
+        self._sent = 0
+        self._dropped = 0
+        self._errors = 0
+        # Fail startup before appmgr READY when the gateway or identity registry
+        # is unavailable.  A short retry covers the Popen/on_spawn scheduling
+        # race without ever falling back to binding :8124 in the child.
+        self._connect(retry_until=time.monotonic() + self._connect_timeout)
+        self._writer = threading.Thread(target=self._run, daemon=True)
+        self._writer.start()
+
+    @staticmethod
+    def _recv_line(conn: socket.socket, limit: int = 4096) -> bytes:
+        data = bytearray()
+        while len(data) <= limit:
+            chunk = conn.recv(1)
+            if not chunk:
+                break
+            if chunk == b"\n":
+                return bytes(data)
+            data.extend(chunk)
+        raise ConnectionError("invalid result gateway hello acknowledgement")
+
+    def _hello(self) -> bytes:
+        return (json.dumps({
+            "type": "hello",
+            "protocol": "recamera-result-gateway@1",
+            "app": self.app_id,
+            "instance": self.instance_id,
+            "generation": self.generation,
+            "pid": os.getpid(),
+        }, separators=(",", ":")) + "\n").encode("utf-8")
+
+    def _connect(self, retry_until: Optional[float] = None) -> socket.socket:
+        last = None
+        while not self._stop.is_set():
+            conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                conn.settimeout(self._send_timeout)
+                conn.connect(self.sock)
+                conn.sendall(self._hello())
+                ack = json.loads(self._recv_line(conn).decode("utf-8"))
+                if not isinstance(ack, dict) or ack.get("ok") is not True:
+                    raise PermissionError((ack or {}).get("error", "gateway rejected hello"))
+                with self._conn_lock:
+                    old, self._conn = self._conn, conn
+                if old is not None:
+                    try:
+                        old.close()
+                    except OSError:
+                        pass
+                return conn
+            except Exception as exc:
+                last = exc
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                if retry_until is None or time.monotonic() >= retry_until:
+                    break
+                time.sleep(0.05)
+        raise AdapterError(
+            "cannot connect to result gateway %s: %s" % (self.sock, last),
+            operation="result.gateway.connect", retryable=True,
+            details={"socket": self.sock, "app": self.app_id})
+
+    def _disconnect(self) -> None:
+        with self._conn_lock:
+            conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def _offer(self, obj: dict) -> None:
+        try:
+            line = (json.dumps(obj, separators=(",", ":"), default=str)
+                    + "\n").encode("utf-8")
+        except Exception:
+            self._errors += 1
+            return
+        if len(line) > 512 * 1024:
+            self._errors += 1
+            return
+        if offer_latest_wins(self._q, line):
+            self._dropped += 1
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                line = self._q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            sent = False
+            for attempt in range(2):
+                try:
+                    with self._conn_lock:
+                        conn = self._conn
+                    if conn is None:
+                        conn = self._connect(
+                            retry_until=time.monotonic() + self._connect_timeout)
+                    conn.settimeout(self._send_timeout)
+                    conn.sendall(line)
+                    self._sent += 1
+                    sent = True
+                    break
+                except Exception:
+                    self._errors += 1
+                    self._disconnect()
+                    if attempt == 0 and not self._stop.is_set():
+                        continue
+            if not sent:
+                self._dropped += 1
+
+    def set_frame_size(self, w: int, h: int) -> None:
+        if w and h and int(w) > 0 and int(h) > 0:
+            self._frame_w, self._frame_h = int(w), int(h)
+
+    def publish_envelope(self, envelope: dict) -> None:
+        obj = dict(envelope)
+        obj.setdefault("type", "results")
+        self._offer(obj)
+
+    def emit(self, payload: dict, pts: float) -> None:
+        if self.preserve_envelope:
+            self.publish_envelope(payload)
+            return
+        self._seq += 1
+        obj = dict(payload)
+        obj.setdefault("type", "results")
+        obj.setdefault("app", self.app_id)
+        obj["pts"] = pts
+        obj["seq"] = self._seq
+        if self._frame_w and self._frame_h:
+            obj["frame"] = {"width": self._frame_w, "height": self._frame_h}
+        self._offer(obj)
+
+    def emit_meta(self, payload: dict) -> None:
+        obj = dict(payload)
+        obj.setdefault("type", "meta")
+        obj.setdefault("app", self.app_id)
+        self._offer(obj)
+
+    def stats(self) -> dict:
+        return {"sent": self._sent, "dropped": self._dropped,
+                "send_error": self._errors, "queued": self._q.qsize(),
+                "backend": "appmgr-gateway"}
+
+    def close(self) -> None:
+        self._stop.set()
+        try:
+            self._q.put_nowait(None)
+        except queue.Full:
+            try:
+                self._q.get_nowait()
+                self._q.put_nowait(None)
+            except (queue.Empty, queue.Full):
+                pass
+        self._disconnect()
+        writer = getattr(self, "_writer", None)
+        if writer is not None and writer is not threading.current_thread():
+            writer.join(timeout=1.0)
+
+
 class MultiSink(ResultSink):
     """Fan-out sink: forward every emit() to a list of child sinks.
 
@@ -533,6 +777,45 @@ class MultiSink(ResultSink):
             except Exception:
                 pass
 
+    @staticmethod
+    def _raise_checked(operation: str, failures) -> None:
+        """Raise one aggregate error after every fan-out child was attempted."""
+
+        if not failures:
+            return
+        details = {
+            "operation": operation,
+            "failed_children": [
+                {"sink": type(sink).__name__, "error": str(exc)}
+                for sink, exc in failures
+            ],
+        }
+        first = failures[0][1]
+        log.error(
+            "result fan-out failed operation=%s children=%s",
+            operation,
+            [item["sink"] for item in details["failed_children"]],
+        )
+        raise AdapterError(
+            f"{len(failures)} result sink child operation(s) failed",
+            operation=f"result.multi.{operation}",
+            details=details,
+        ) from first
+
+    def emit_checked(self, payload: dict, pts: float) -> None:
+        """Attempt every child and report any synchronous failure."""
+
+        failures = []
+        for sink in self.sinks:
+            emitter = getattr(sink, "emit_checked", None)
+            if not callable(emitter):
+                emitter = sink.emit
+            try:
+                emitter(payload, pts)
+            except Exception as exc:
+                failures.append((sink, exc))
+        self._raise_checked("emit", failures)
+
     def emit_meta(self, payload: dict) -> None:
         for s in self.sinks:
             try:
@@ -547,6 +830,20 @@ class MultiSink(ResultSink):
                 s.set_frame_size(w, h)
             except Exception:
                 pass
+
+    def set_frame_size_checked(self, w: int, h: int) -> None:
+        """Attempt every child geometry update and aggregate failures."""
+
+        failures = []
+        for sink in self.sinks:
+            setter = getattr(sink, "set_frame_size_checked", None)
+            if not callable(setter):
+                setter = sink.set_frame_size
+            try:
+                setter(w, h)
+            except Exception as exc:
+                failures.append((sink, exc))
+        self._raise_checked("set_frame_size", failures)
 
     def on_config_reload(self, config: dict) -> None:
         # Fan the hot-reload out so a wrapped ConfigurableSink re-applies its
@@ -587,11 +884,24 @@ class MultiSink(ResultSink):
         return out
 
     def close(self) -> None:
+        failures = []
+        control_error = None
         for s in self.sinks:
             try:
                 s.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                failures.append((s, exc))
+            except BaseException as exc:
+                if control_error is None:
+                    control_error = exc
+        if control_error is not None:
+            if failures:
+                log.error(
+                    "result fan-out close also failed for children=%s",
+                    [type(sink).__name__ for sink, _exc in failures],
+                )
+            raise control_error
+        self._raise_checked("close", failures)
 
 
 # --------------------------------------------------------------------------- #

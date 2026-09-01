@@ -39,6 +39,7 @@ class _FakeExtFrame:
         self.height = h
         self.fourcc = 0x3231564E
         self.planes = [(0, w, h), (w * h, w, h // 2)]  # (offset, stride, vstride)
+        self.fd = 7
         # Private C-buf shim: OfficialFrameSource reads _c.fd for the RGA path;
         # with no librga present that path is never taken, but keep it realistic.
         self._c = types.SimpleNamespace(fd=7)
@@ -399,32 +400,42 @@ def test_registry_selects_official():
         os.environ["RECAMERA_FRAME_SOCK"] = ftf.name
         os.environ["RECAMERA_RESULT_SOCK"] = rtf.name
         caps = registry.capabilities(refresh=True)
-        assert caps.frame_broker and caps.result_ingress, caps
+        assert not caps.frame_broker and not caps.result_ingress, caps
 
-        # Frame source STILL auto-switches to the official zero-copy broker.
+        # Regular files and UNKNOWN endpoints never auto-switch the data path.
         src = registry.select_frame_source(url="rtsp://x", prefer="ffmpeg")
-        assert isinstance(src, OfficialFrameSource), type(src)
-        assert src.sock == ftf.name, src.sock
+        from kit.adapters.frame_source import FfmpegRtspSource
+        assert isinstance(src, FfmpegRtspSource), type(src)
+        src.close()
 
         # ★S1★ Result sink does NOT auto-switch to OSD burn-in on socket
         # presence -- the default is the SOFTWARE overlay (WsResultSink).
-        sink = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
-                                            app_id="demo")
+        sink = registry.select_result_sink("ws", host="127.0.0.1", port=0,
+                                           app_id="demo")
         assert isinstance(sink, WsResultSink), type(sink)
+        sink.close()
 
         # OSD burn-in is opt-in: RECAMERA_RESULT_OSD=1 or kind="osd".
         os.environ["RECAMERA_RESULT_OSD"] = "1"
-        osd = registry.select_result_sink("ws", host="0.0.0.0", port=8124,
-                                           app_id="demo")
-        assert isinstance(osd, OfficialResultSink), type(osd)
+        from kit.errors import CapabilityError
+        try:
+            registry.select_result_sink("ws", host="0.0.0.0", port=8124,
+                                        app_id="demo")
+            raise AssertionError("custom native endpoint must fail closed")
+        except CapabilityError:
+            pass
         os.environ.pop("RECAMERA_RESULT_OSD", None)
-        osd2 = registry.select_result_sink("osd", app_id="demo")
-        assert isinstance(osd2, OfficialResultSink), type(osd2)
     for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK"):
         os.environ.pop(k, None)
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+    src = registry.select_frame_source(url="rtsp://x", prefer="ffmpeg")
+    assert isinstance(src, OfficialFrameSource), type(src)
+    osd2 = registry.select_result_sink("osd", app_id="demo")
+    assert isinstance(osd2, OfficialResultSink), type(osd2)
+    os.environ.pop("RECAMERA_ADAPTER_PREFER", None)
     registry.capabilities(refresh=True)
-    print("PASS test_registry_selects_official (frame.sock -> Official frame; "
-          "result default WS, OSD opt-in)")
+    print("PASS test_registry_selects_official (filesystem fails closed; "
+          "explicit matching-firmware policy selects official)")
 
 
 if __name__ == "__main__":

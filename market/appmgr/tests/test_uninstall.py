@@ -35,11 +35,25 @@ os.environ["APPMGR_MODEL_ROOTS"] = _MODELS
 # Import the package (server.py uses relative imports, so we import it AS a
 # package member, not as a bare top-level module).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from appmgr import server, paths, state, installer  # noqa: E402
+from appmgr import server, paths, state, installer, visualization  # noqa: E402
 
 
 class UninstallTests(unittest.TestCase):
     def setUp(self):
+        # pytest imports sibling modules before executing tests, so paths may
+        # already have been imported with another fixture layout.
+        self._saved_paths = {
+            "APPS_DIR": paths.APPS_DIR,
+            "APPMGR_DIR": paths.APPMGR_DIR,
+            "VENVS_DIR": paths.VENVS_DIR,
+            "STATE_FILE": paths.STATE_FILE,
+        }
+        paths.APPS_DIR = _APPS
+        paths.APPMGR_DIR = _APPMGR
+        paths.VENVS_DIR = _VENVS
+        paths.STATE_FILE = os.path.join(_APPS, "state.json")
+        self.addCleanup(lambda: [setattr(paths, key, value)
+                                 for key, value in self._saved_paths.items()])
         paths.ensure_dirs()
         os.makedirs(_VENVS, exist_ok=True)
         os.makedirs(_MODELS, exist_ok=True)
@@ -109,6 +123,33 @@ class UninstallTests(unittest.TestCase):
         self.assertFalse(res["was_active"])
         self.assertEqual(state.get_active(), "some-other-app",
                          "uninstalling a non-active app must not clear active")
+
+    def test_uninstall_removes_only_its_stream_burn_in_source(self):
+        self._make_app("osd-app")
+        visualization.save({
+            "osd": {"enabled": True, "sources": ["osd-app", "other-app"]},
+        })
+        self.addCleanup(lambda: visualization.save(visualization.defaults()))
+
+        class Bridge:
+            def __init__(self):
+                self.reloaded = []
+
+            def reload(self, value):
+                self.reloaded.append(value)
+
+        bridge = Bridge()
+        previous_bridge = server._visualization_bridge_instance
+        server._visualization_bridge_instance = bridge
+        self.addCleanup(
+            lambda: setattr(server, "_visualization_bridge_instance", previous_bridge))
+
+        server.do_uninstall("osd-app")
+
+        self.assertEqual(visualization.load(), {
+            "osd": {"enabled": True, "sources": ["other-app"]},
+        })
+        self.assertEqual(bridge.reloaded[-1], visualization.load())
 
     # -- error / idempotency ------------------------------------------------ #
     def test_uninstall_unknown_app_errors(self):

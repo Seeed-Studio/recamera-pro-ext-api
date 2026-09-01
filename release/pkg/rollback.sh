@@ -2,6 +2,10 @@
 # recamera-ext-api rollback.sh  -- restore factory rkipc (and entry.cgi) into /oem, then reboot.
 # Run ON THE DEVICE as root.
 set -e
+
+echo "FATAL: archived rollback policy has overlapping factory/extension hashes; refusing to write /oem." >&2
+echo "Restore only from a separately verified factory image using an approved recovery procedure." >&2
+exit 1
 # A rollback target MUST be a genuine clean factory rkipc (see install.sh for the rationale).
 VERIFIED_FACTORY_MD5S="9826e9ecf8ed543a6dc78e3731102e0f"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
 KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550 f683352a9d062a05a3df1f8df22d7d53"  # ext builds -- NOT rollback targets

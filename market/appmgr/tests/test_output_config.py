@@ -25,7 +25,7 @@ from appmgr import config as appconfig  # noqa: E402
 
 
 _OUTPUT_KEYS = {"output_channels", "iMode", "dMqtt", "dHttp", "dUart",
-                "dTemplate", "output_mapping", "output_filters"}
+                "dTemplate", "template_mode", "output_mapping", "output_filters"}
 
 
 def _manifest(capabilities, config_schema=None, output=None):
@@ -62,6 +62,7 @@ class OutputSchemaInjectionTests(unittest.TestCase):
         self.assertEqual(specs["dMqtt"]["apply"], "restart")
         self.assertEqual(specs["output_filters"]["apply"], "live")
         self.assertEqual(specs["dTemplate"]["apply"], "live")
+        self.assertEqual(specs["template_mode"]["apply"], "live")
 
     def test_effective_manifest_idempotent(self):
         man = _manifest(["output"], output={"default_channel": ["ws"]})
@@ -93,7 +94,7 @@ class OutputSchemaInjectionTests(unittest.TestCase):
         self.assertIn("dMqtt", resp["defaults"])
         self.assertIn("output_filters", resp["values"])
 
-    def test_validate_accepts_opaque_output_values(self):
+    def test_validate_accepts_structured_output_values(self):
         man = _manifest(["output"])
         clean, errors = appconfig.validate_config(man, {
             "iMode": "raw",
@@ -105,6 +106,47 @@ class OutputSchemaInjectionTests(unittest.TestCase):
         self.assertEqual(clean["iMode"], "raw")
         self.assertEqual(clean["dMqtt"]["sURL"], "127.0.0.1")
         self.assertEqual(clean["output_channels"], ["mqtt", "http"])
+
+    def test_validate_rejects_opaque_complex_values(self):
+        man = _manifest(["output"])
+        for key, value in {
+            "dMqtt": "broker:1883",
+            "dHttp": "https://example.test",
+            "dTemplate": "{{ detection.count }}",
+            "output_mapping": "detection.count -> count",
+            "output_filters": "all",
+            "output_channels": "mqtt",
+        }.items():
+            _, errors = appconfig.validate_config(man, {key: value})
+            self.assertTrue(any(key in error for error in errors),
+                            (key, errors))
+
+    def test_template_mode_is_explicit_and_typed(self):
+        man = _manifest(["output"], output={"default_mapping": [{
+            "source": "detection.count", "target": "count", "topic": "t"}]})
+        self.assertEqual(appconfig.schema_defaults(man)["template_mode"], "mapping")
+        clean, errors = appconfig.validate_config(
+            man, {"template_mode": "template"})
+        self.assertEqual(errors, [])
+        self.assertEqual(clean, {"template_mode": "template"})
+        _, errors = appconfig.validate_config(man, {"template_mode": "auto"})
+        self.assertTrue(errors)
+
+    def test_legacy_empty_mapping_keeps_historical_template_fallback(self):
+        man = _manifest(["output"], output={"default_mapping": [{
+            "source": "detection.count", "target": "count", "topic": "t"}]})
+        app_id = "legacy-template-mode"
+        os.makedirs(appconfig.paths.app_dir(app_id), exist_ok=True)
+        appconfig.write_user_config(app_id, {
+            "output_mapping": [],
+            "dTemplate": {"sDetection": "{{ detection.count }}"},
+        })
+        effective = appconfig.effective_values(man, app_id)
+        self.assertEqual(effective["template_mode"], "template")
+
+        appconfig.write_user_config(app_id, {"template_mode": "mapping"})
+        explicit = appconfig.effective_values(man, app_id)
+        self.assertEqual(explicit["template_mode"], "mapping")
 
     def test_validate_rejects_bad_enum_and_unknown(self):
         man = _manifest(["output"])
@@ -148,6 +190,72 @@ class IntegerControlTests(unittest.TestCase):
         for bad in (0, 17):
             _, errors = appconfig.validate_config(self._man(), {"max_faces": bad})
             self.assertTrue(any("max_faces" in e for e in errors), (bad, errors))
+
+    def test_rejects_invalid_step_schema_at_runtime_boundary(self):
+        manifest = self._man()
+        manifest["config_schema"]["groups"][0]["items"][0]["step"] = 0
+        _, errors = appconfig.validate_config(manifest, {"max_faces": 7})
+        self.assertTrue(any("step" in e for e in errors), errors)
+
+    def test_step_is_ui_increment_not_server_quantization_grid(self):
+        manifest = _manifest([], config_schema={"groups": [{"key": "g", "items": [{
+            "key": "window", "type": "number", "apply": "live",
+            "min": 0, "max": 5, "step": 0.1, "default": 0.75,
+        }]}]})
+        clean, errors = appconfig.validate_config(manifest, {"window": 0.73})
+        self.assertEqual(errors, [])
+        self.assertEqual(clean["window"], 0.73)
+
+
+class DropdownControlTests(unittest.TestCase):
+    def test_labelled_options_preserve_typed_value(self):
+        manifest = _manifest([], config_schema={"groups": [{"key": "g", "items": [{
+            "key": "backend", "type": "select", "apply": "restart",
+            "default": 1,
+            "options": [
+                {"value": 1, "label": "Fast", "label_zh": "快速"},
+                {"value": 2, "label": "Accurate", "label_zh": "精确"},
+            ],
+        }]}]})
+        clean, errors = appconfig.validate_config(manifest, {"backend": 2})
+        self.assertEqual(errors, [])
+        self.assertEqual(clean["backend"], 2)
+        clean_float, errors = appconfig.validate_config(manifest, {"backend": 2.0})
+        self.assertEqual(errors, [])
+        self.assertEqual(clean_float["backend"], 2.0)
+        _, errors = appconfig.validate_config(manifest, {"backend": "2"})
+        self.assertTrue(errors, "browser string must not silently change enum type")
+
+    def test_numeric_enum_options_cannot_duplicate_across_int_float(self):
+        manifest = _manifest([], config_schema={"groups": [{"key": "g", "items": [{
+            "key": "mode", "type": "enum", "apply": "live",
+            "options": [1, 1.0], "default": 1,
+        }]}]})
+        _, errors = appconfig.validate_config(manifest, {"mode": 1})
+        self.assertTrue(any("duplicates" in error for error in errors), errors)
+
+    def test_null_is_preserved_as_reset_marker(self):
+        manifest = _manifest([], config_schema={"groups": [{"key": "g", "items": [{
+            "key": "name", "type": "string", "apply": "live", "default": "x",
+        }]}]})
+        clean, errors = appconfig.validate_config(manifest, {"name": None})
+        self.assertEqual(errors, [])
+        self.assertEqual(clean, {"name": None})
+
+    def test_password_array_and_object_are_structurally_typed(self):
+        manifest = _manifest([], config_schema={"groups": [{"key": "g", "items": [
+            {"key": "token", "type": "password", "apply": "restart", "default": ""},
+            {"key": "labels", "type": "array", "apply": "live", "default": []},
+            {"key": "metadata", "type": "object", "apply": "live", "default": {}},
+        ]}]})
+        clean, errors = appconfig.validate_config(manifest, {
+            "token": "secret", "labels": ["a"], "metadata": {"k": 1},
+        })
+        self.assertEqual(errors, [])
+        self.assertEqual(clean["labels"], ["a"])
+        for key, opaque in (("labels", "a,b"), ("metadata", "k=1")):
+            _, errors = appconfig.validate_config(manifest, {key: opaque})
+            self.assertTrue(errors, (key, errors))
 
     def test_real_manifest_roundtrip(self):
         """The shipped face-analysis schema really produces ints."""

@@ -60,6 +60,9 @@ class RuntimeSignatureGateTests(unittest.TestCase):
         subprocess.run(["openssl", "ec", "-in", self.priv, "-pubout",
                         "-out", self.pub], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Production refuses group/world-writable trust anchors. Developer
+        # machines commonly run with umask 0002, so make the fixture explicit.
+        os.chmod(self.pub, 0o644)
 
         # A DIFFERENT keypair, to forge a signature that is valid crypto but wrong
         # signer.
@@ -119,6 +122,33 @@ class RuntimeSignatureGateTests(unittest.TestCase):
         names = voiceruntime._verify_and_extract(pkg, None, dest)
         self.assertIn("files/hello.txt", names)
         self.assertTrue(os.path.isfile(os.path.join(dest, "files", "hello.txt")))
+
+    @unittest.skipUnless(os.path.isdir("/proc/self/fd"),
+                         "Linux /proc fd paths required")
+    def test_proc_fd_verification_inherits_only_open_package(self):
+        """A CLOEXEC package fd remains the verification source after unlink.
+
+        Unlinking makes it impossible for openssl to fall back to reopening the
+        original pathname and therefore directly exercises fd inheritance while
+        preserving the single-open-file TOCTOU guarantee.
+        """
+        pkg = self._bundle()
+        sig_path = self._sign(pkg, self.priv)
+        with open(sig_path) as f:
+            signature_b64 = f.read().strip()
+
+        package_fd = os.open(pkg, os.O_RDONLY)
+        try:
+            self.assertFalse(os.get_inheritable(package_fd))
+            proc_path = f"/proc/self/fd/{package_fd}"
+            os.unlink(pkg)
+
+            status = signing.verify_package(
+                proc_path, signature_b64, pubkey=self.pub,
+            )
+            self.assertTrue(status["verified"])
+        finally:
+            os.close(package_fd)
 
     def test_unsigned_bundle_refused_by_default(self):
         pkg = self._bundle()   # no .sig written, no explicit signature

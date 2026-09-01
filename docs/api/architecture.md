@@ -10,11 +10,20 @@
 >
 > 本文所有组件关系、socket 路径、函数名均从源码核实，带 `file:line`。
 
+> [!WARNING]
+> 本文描述的是当前源码架构，不表示历史 `release/pkg` 已包含这些能力。旧
+> sideload 已禁用；正式设备必须安装由匹配 commit 构建、并通过真机门禁的
+> rkipc/native/Python 发布集。
+
 ---
 
 ## 1. 一句话定位与设计哲学
 
-**扩展 API 是 reCamera Pro 固件（rkipc 进程 + 官方推理 + Web 后端 + notify）向第三方进程开放的一组运行时接口：方案商在设备上跑自己的进程，通过 `/run/recamera/` 下的 unix domain socket 拿相机帧、回注检测结果、观测推理内部——不改固件源码、不重编、不刷自编固件。**
+**扩展 API 是 reCamera Pro 固件（rkipc 进程 + 官方推理 + Web 后端 + notify）
+向第三方进程开放的一组运行时接口：设备先安装包含这些 endpoint、且与 SDK
+协议匹配的固件；此后方案商可把自己的 AI 应用作为独立进程部署，通过
+`/run/recamera/` 下的 unix domain socket 拿相机帧、取得 NPU 租约、回注
+结果和观测推理内部，无需为每个应用再次修改或重编固件。**
 
 四条设计哲学贯穿全系统：
 
@@ -47,11 +56,13 @@
 │  │  │ frame_export │ │ rc_result_in │ │  rc_probe    │  ← 端点层      │  │
 │  │  │  (VI chn1)   │ │(→dispatch)   │ │ (infer tap)  │               │  │
 │  │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘               │  │
+│  │       rc_inference_control（builtin/external NPU 单 owner）         │  │
 │  │         │  common/rc_ext_core（核心库，共用）                       │  │
 │  └─────────┼────────────────┼────────────────┼──────────────────────┘  │
 │            │ frame.sock      │ result-in.sock │ probe.sock              │
 │            │ (SEQPACKET+fd)  │ (SEQPACKET)    │ (SEQPACKET+memfd)       │
-│         /run/recamera/  [0750 root:recamera-ext, sock 0660]             │
+│            │ inference-control.sock（SEQPACKET，连接即 NPU lease）      │
+│         /run/recamera/  [0750 root:root, sock 0660]                     │
 │            │                │                 │                         │
 │  ┌─────────┴────────────────┴─────────────────┴──────────────────────┐ │
 │  │              方案商进程（自带模型/GUI，root 运行）                    │ │
@@ -74,7 +85,8 @@
 
 关键点（源码核实）：
 
-- 三条数据面 socket 全在 **rkipc 进程内**监听，`main.c:414-416` 依次 `rc_result_in_start()` / `frame_export_start()` / `rc_probe_start()`。
+- frame/result/probe 数据面与 inference-control 资源面都在 **rkipc 进程内**
+  监听。NPU acquire/release 不经 entry.cgi；CGI 只负责配置与能力查询。
 - **notify-server 是独立进程**：监听 `/var/tmp/notify`（`notify_server.py:209` `socket_path="/var/tmp/notify"`），rkipc 侧 `rc_notify` 是它的**客户端**（`rc_notify_client.c:36-52` `connect(AF_UNIX, SOCK_STREAM)`）。结果注入并不直连 WS——而是经 dispatch → rc_notify → notify-server → WS/MQTT/HTTP/UART。
 - **entry.cgi 是 CGI**（nginx 拉起），承载 HTTP 配置/控制 API 与前端扩展挂载；`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，对方案商标注 internal（`../guide/rkipc-rpc-status.md`）。
 
@@ -130,7 +142,7 @@
 
 ---
 
-## 4. 四条数据通路
+## 4. 五条通路
 
 ### 4.1 帧代理（相机 → VI chn1 → dma-buf fd → SCM_RIGHTS → 方案商）
 
@@ -187,7 +199,7 @@ sequenceDiagram
 rc_infer 推理线程（热路径）
    rc_probe_frame_begin()  ← 每帧一次，推进采样抽取
    if (rc_probe_stage_active(stage))       ← 内联：一次 relaxed 原子读 submask
-        rc_probe_emit(stage, payload, size, meta)  ← 拷进有界队列，永不阻塞
+        rc_probe_emit(stage, payload, size, meta)  ← mutex + bounded memcpy；满则丢
         │  (无订阅者时 submask==0 → 一次 load + 分支即返回，零拷贝)
         ▼
    [有界队列] ──▶ 独立低优先级 worker 线程
@@ -198,7 +210,11 @@ rc_infer 推理线程（热路径）
               probe.sock ── SEQPACKET(+memfd fd) ──▶ 方案商
 ```
 
-**一句话**：`rc_infer` 流水线各 stage（preproc.out / npu.raw / postproc.out / metrics）插 tap，热路径只做一次原子读判断有无订阅者；采样经有界队列交独立低优先级 worker 序列化发送，大张量走 memfd + `SCM_RIGHTS`——任何情况下不阻塞推理主线程（`rc_probe.h`，规格 §4.1）。
+**一句话**：`rc_infer` 流水线各 stage（preproc.out / npu.raw / postproc.out /
+metrics）插 tap；无订阅时只有一次原子 gate。有订阅时当前热路径仍会持短期
+队列 mutex 并 memcpy 到有界 slab，队列满立即丢弃；序列化/socket 发送在
+低优先级 worker，大张量走 memfd + `SCM_RIGHTS`。因此不会等待慢消费者，
+但样本复制成本仍须通过真机压力门禁，不能宣称严格 non-blocking。
 
 ### 4.4 控制（方案商 → nginx / entry.cgi → ext API）
 
@@ -219,6 +235,26 @@ rc_infer 推理线程（热路径）
 ```
 
 **一句话**：控制/配置走 HTTP，不走数据面 socket——方案商把网页 + 后端用 `ext_<name>.conf` 挂到 nginx 的 `/extension/<name>/`，复用官方 JWT 会话（`auth_request`）；配置类请求经 entry.cgi HTTP API，M4 起提供版本化 `/api/v1/ext/*` 域（`../guide/frontend-extension.md`、`../guide/control-api.md`、规格 §5.1）。
+
+### 4.5 NPU 仲裁（方案商 → inference-control → rc_model）
+
+```text
+ExternalNpuLease / InferenceLease
+        │ Hello + ACQUIRE(timeout,fallback)
+        ▼
+inference-control.sock ──▶ rkipc broker ── external_hold_begin()
+                                   │
+                                   ├─ NPU thread: deinit builtin RKNN
+                                   ├─ 等 handle=NULL/state=stopped/fps=0
+                                   └─ GRANT{lease_id,epoch,generation}
+        │ load_rknn/init_runtime → READY
+        │ connection 保持 = ownership 保持
+        └─ RELEASE / crash HUP ──▶ revoke + optional builtin fallback
+```
+
+**一句话**：`rkipc` 才是系统 NPU 所有权的权威。Python 在创建 RKNN context
+前必须取得 connection-lifetime lease；client 被 `SIGKILL` 时 kernel HUP 是
+回收边界，不依赖 `finally`。entry.cgi 的 HTTP 200 不参与此正确性判断。
 
 ---
 
@@ -283,7 +319,7 @@ struct frame_hdr {
 | 2 | **数量演进走 limits** | 并发/速率/池深变化只改 `Capability.limits` 数值，客户端按握手返回值自适应，不得硬编码 |
 | 3 | **结构演进走保留位** | `frame_hdr` 的 `ver` + `reserved[16]` 承载新字段；重排/删字段才升 `ver`，旧 `ver` 至少再支持两个固件版本 |
 | 4 | **任务类型演进走 oneof 追加** | `InferenceResult` 新任务 = 新 oneof 分支（tag 15+），旧读者跳过未知分支 |
-| 5 | **只增不减** | `/run/recamera/` 存在期间，v1 baseline `frame@1`/`result@1`/`probe@1` 与其线格式永不移除 |
+| 5 | **只增不减** | `/run/recamera/` 存在期间，v1 baseline `frame@1`/`result@1`/`probe@1`/`inference-control@1` 与其线格式永不移除 |
 
 配套 schema 纪律：proto tag 永不复用；删字段必 `reserved`；中转组件（notify-server）转发外来 payload **透传原始字节，禁止 decode→re-encode**（`rc_result_dispatch.c` 注释：录像与 notify 拿"ORIGINAL per-source bytes"）。
 
@@ -308,6 +344,7 @@ struct frame_hdr {
 | 结果推送（notify legacy） | M0 | `/var/tmp/notify`（仅分发、不叠加、0666 无鉴权、受限） | 现成可用 |
 | rkipc RPC 现状文档化 | M0 | entry.cgi HTTP API（`/var/tmp/rkipc` internal） | 现成可用 |
 | 观测面（preproc/npu.raw/postproc/metrics） | M3 | `probe.sock` / `rc_ext_probe_*` | 端点在库，前端呈现规划中 |
+| NPU 单 owner 仲裁 | M4 | `inference-control.sock` / `rc_ext_inference_lease_*` / `InferenceLease` | 控制 lease 已实现；数据端点 generation fencing 待下一版 |
 | 控制面（版本化 + capabilities + app token） | M4 | `/api/v1/ext/*`（entry.cgi） | 规划中 |
 | DSI 屏自定义显示（整屏出租 + 帧代理自绘） | M5 | 复用 M2 帧代理 + LVGL/DRM（`/dev/dri/card0`） | 规划中（依赖 M2） |
 | 生态框架接入（GStreamer/FFmpeg/OpenCV/v4l2loopback） | M6 | 基于 M2 dma-buf + M1 result-in | 拿帧+软件处理实测通；硬件编码回推待补 |
@@ -331,6 +368,7 @@ struct frame_hdr {
 | | `frame_export.{c,h}`（帧代理端点 + VI chn1） | 新增 |
 | | `rc_notify/rc_result_in.c` + `rc_result_dispatch.c` + `rc_result_osd.c` | 新增（dispatch 抽出、内建路径共用） |
 | | `common/rc_probe/`（观测端点） | 新增 |
+| | `common/rc_ext_core/rc_inference_control.*` + `rc_model` external hold | 新增/修改（NPU broker） |
 | | `ext_api.proto` + `inference.proto` 的 `source_id`/`pts_us` | 新增（兼容） |
 | | `librecamera_ext.so.1`（C ABI）+ Python 封装 | 新增（客户端） |
 

@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import ssl
+import time
 from typing import Any, Dict, Optional
 
 from . import config as appconfig
@@ -47,6 +49,15 @@ _CGI_BASE = "/cgi-bin/entry.cgi"
 _INFERENCE = "/model/inference"
 _MODEL_INFO = "/model/info"
 _MODEL_ID = 0
+
+# POST /model/inference only queues ``rc_model_infer_restart`` in rkipc.  The
+# NPU thread releases the RKNN/RGA objects asynchronously, so a successful HTTP
+# response is not a resource hand-off barrier.  External inference must wait for
+# the observable terminal state before it is allowed to load its own RKNN
+# context.  Environment overrides keep device tuning and deterministic tests
+# possible without changing the public appmgr API.
+STOP_TIMEOUT = float(os.environ.get("APPMGR_BUILTIN_STOP_TIMEOUT", "15"))
+STOP_POLL_INTERVAL = float(os.environ.get("APPMGR_BUILTIN_STOP_POLL", "0.1"))
 
 # The firmware default model (current shipped detector). Used as the fallback
 # File-name for /model/info reads before /model/inference has reported sModel.
@@ -205,9 +216,121 @@ def start() -> dict:
     return set_inference(enable=True)
 
 
-def stop() -> dict:
-    """Disable built-in inference (does not touch rkipc / the video pipeline)."""
-    return set_inference(enable=False)
+def _stop_state(data: dict) -> tuple:
+    """Return ``(confirmed, detail)`` for one inference-status response.
+
+    The current firmware exposes no RKNN-handle count or completion token.  The
+    strongest available, conservative observation is therefore all three of:
+
+      * persisted enable is zero;
+      * rkipc's model state is exactly ``stopped`` (set only after deinit);
+      * measured inference FPS is zero.
+
+    Missing/malformed fields are deliberately *not* treated as stopped.  That is
+    fail-closed: older/incomplete firmware may prevent an external app starting,
+    but it cannot make appmgr overlap two RKNN owners on an assumption.
+    """
+    missing = [k for k in ("iEnable", "sStatus", "iActualFPS") if k not in data]
+    if missing:
+        return False, "missing fields: %s" % ",".join(missing)
+    try:
+        enabled = int(data["iEnable"])
+        actual_fps = int(data["iActualFPS"])
+    except (TypeError, ValueError):
+        return False, "non-integer iEnable/iActualFPS"
+    status = str(data.get("sStatus", "")).strip().lower()
+    confirmed = enabled == 0 and status == "stopped" and actual_fps == 0
+    return confirmed, "iEnable=%d sStatus=%s iActualFPS=%d" % (
+        enabled, status or "<empty>", actual_fps)
+
+
+def wait_stopped(timeout: Optional[float] = None,
+                 poll_interval: Optional[float] = None) -> dict:
+    """Wait until rkipc reports that built-in RKNN teardown completed.
+
+    Raises :class:`BuiltinError` on timeout, including the last complete status
+    (or transport error) in the message.  Callers must propagate that failure
+    and must not start an external RKNN process.
+    """
+    timeout = STOP_TIMEOUT if timeout is None else max(0.0, float(timeout))
+    poll_interval = (STOP_POLL_INTERVAL if poll_interval is None
+                     else max(0.0, float(poll_interval)))
+    started = time.monotonic()
+    deadline = started + timeout
+    attempts = 0
+    last_status = None
+    last_detail = "no status response"
+    last_logged = None
+
+    while True:
+        attempts += 1
+        try:
+            status = get_inference()
+            last_status = status
+            confirmed, last_detail = _stop_state(status)
+            if confirmed:
+                elapsed = time.monotonic() - started
+                print("[appmgr] builtin stop confirmed after %.3fs (%d probes): %s"
+                      % (elapsed, attempts, last_detail), flush=True)
+                return status
+        except BuiltinError as e:
+            last_detail = "status probe failed: %s" % e
+
+        # Log state transitions, not every 100 ms poll, so the failure is
+        # diagnosable without flooding /var/log/appmgr.log.
+        if last_detail != last_logged:
+            print("[appmgr] waiting for builtin teardown: %s" % last_detail,
+                  flush=True)
+            last_logged = last_detail
+
+        now = time.monotonic()
+        if now >= deadline:
+            elapsed = now - started
+            rendered = (json.dumps(last_status, sort_keys=True)
+                        if last_status is not None else "<unavailable>")
+            raise BuiltinError(
+                "built-in inference stop was not confirmed within %.3fs "
+                "(%d probes); fail-closed, external RKNN was not started; "
+                "last=%s; detail=%s" %
+                (elapsed, attempts, rendered, last_detail))
+        time.sleep(min(poll_interval, max(0.0, deadline - now)))
+
+
+def stop(timeout: Optional[float] = None,
+         poll_interval: Optional[float] = None) -> dict:
+    """Disable built-in inference and wait for its RKNN teardown barrier.
+
+    The POST acknowledgement alone is insufficient: it only queues a restart in
+    rkipc.  A lost POST response is tolerated if the subsequent readback proves
+    the pipeline is stopped; otherwise this method raises and callers fail
+    closed.
+    """
+    print("[appmgr] requesting builtin inference stop", flush=True)
+    response = None
+    post_error = None
+    try:
+        response = set_inference(enable=False)
+    except BuiltinError as e:
+        # The request may have reached entry.cgi even when its response was lost.
+        # Readback is authoritative for this transition.
+        post_error = e
+        print("[appmgr] builtin stop POST failed; verifying readback: %s" % e,
+              flush=True)
+
+    try:
+        status = wait_stopped(timeout=timeout, poll_interval=poll_interval)
+    except BuiltinError as e:
+        if post_error is not None:
+            raise BuiltinError("builtin disable request failed (%s); %s" %
+                               (post_error, e)) from e
+        raise
+
+    result = dict(response) if isinstance(response, dict) else {}
+    result["stop_confirmed"] = True
+    result["confirmed_status"] = status
+    if post_error is not None:
+        result["warning"] = "disable response lost; stopped state confirmed by readback"
+    return result
 
 
 # --------------------------------------------------------------------------- #

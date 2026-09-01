@@ -25,6 +25,7 @@ Canonical envelope (spec §1)::
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import socket
@@ -45,8 +46,28 @@ from kit.adapters.result_sink import (
 # so HaDiscoveryFormatter.format does not re-import it on every frame.
 from kit.adapters.mqtt_sink import MqttSink
 
-# Edge/business events that may bypass rate limiting (spec §2.3).
-EDGE_KINDS = frozenset({"fall", "blink", "yawn", "line_cross", "transcript"})
+# Edge/business events that may bypass rate limiting (spec §2.3).  This list
+# covers every event edge emitted by the nine bundled v2 applications.  Status
+# telemetry remains rate-limited; discrete user/business events must not vanish
+# merely because they shared a frame with a recently-published result.
+EDGE_KINDS = frozenset({
+    "fall", "line_cross", "blink", "yawn", "wake", "transcript",
+    "listen_timeout", "rep_completed", "set_completed", "workout_complete",
+})
+_EDGE_BOOLEAN_KEYS = frozenset(("edge", "is_edge", "edge_event"))
+_WORKOUT_EDGE_KEYS = frozenset(
+    ("rep_completed", "set_completed", "workout_complete"))
+
+
+def is_edge_event(event: object) -> bool:
+    """Classify a discrete business edge across bundled/compatible apps."""
+    if not isinstance(event, dict):
+        return False
+    kind = str(event.get("kind") or event.get("type") or "").strip().lower()
+    return (kind in EDGE_KINDS
+            or any(event.get(key) is True for key in _EDGE_BOOLEAN_KEYS)
+            or (kind == "workout" and any(
+                event.get(key) is True for key in _WORKOUT_EDGE_KEYS)))
 # Events that do NOT count as "a detection" for only_on_detection (spec §2.1).
 _METRICS_KINDS = frozenset({"metrics"})
 
@@ -54,6 +75,14 @@ _METRICS_KINDS = frozenset({"metrics"})
 MAX_TEMPLATE_LEN = 16 * 1024
 MAX_RENDER_LEN = 256 * 1024
 MAX_NS_ITEMS = 2000
+MAX_TEMPLATE_AST_NODES = 2048
+MAX_TEMPLATE_LITERAL_LEN = 4096
+MAX_TEMPLATE_LOOPS = 8
+MAX_TEMPLATE_LOOP_DEPTH = 1
+MAX_TEMPLATE_REPEAT_CHARS = 64 * 1024
+MAX_TEMPLATE_REPEAT_ITEMS = 4096
+MAX_TEMPLATE_INTEGER_BITS = 4096
+MAX_TEMPLATE_POW_EXPONENT = 16
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +147,17 @@ def build_namespace(envelope: dict, *, app_id: str, device_id: str = "") -> dict
         "frame": envelope.get("frame") or {},
         "results": results,
         "events": events,
+        "geometry": list(envelope.get("geometry") or [])[:MAX_NS_ITEMS],
+        "metrics": dict(envelope.get("metrics") or {}),
+        "summary": dict(envelope.get("summary") or {}),
+        "render": dict(envelope.get("render") or {}),
+        "stream_id": envelope.get("stream_id"),
+        "inference_time_ms": envelope.get("inference_time_ms"),
+        "pipeline_ms": envelope.get("pipeline_ms"),
+        "latency_ms": envelope.get("latency_ms"),
+        "preprocess_ms": envelope.get("preprocess_ms"),
+        "postprocess_ms": envelope.get("postprocess_ms"),
+        "dropped": envelope.get("dropped"),
         "detection": detection,
         "keypoints": keypoints,
         "classification": classification,
@@ -136,6 +176,67 @@ _ALLOWED_FILTERS = ("tojson", "default", "length", "selectattr", "reject",
 _TOPIC_RE = re.compile(r"^[^+#\x00]+$")
 
 
+def _validate_template_ast(root) -> None:
+    """Reject template structures that can buffer or multiply work unseen.
+
+    Jinja's sandbox controls attribute/call access, but it is not a CPU/memory
+    quota.  This separate compile-time policy bounds syntax and loop nesting;
+    runtime binary operators and streamed output are bounded below.
+    """
+    from jinja2 import nodes
+
+    forbidden = (
+        nodes.Macro, nodes.CallBlock, nodes.Import, nodes.FromImport,
+        nodes.Include, nodes.Extends, nodes.Block, nodes.AssignBlock,
+        nodes.FilterBlock,
+    )
+    count = 0
+    loops = 0
+
+    def visit(node, loop_depth=0):
+        nonlocal count, loops
+        count += 1
+        if count > MAX_TEMPLATE_AST_NODES:
+            raise ValueError("template exceeds AST node limit")
+        if isinstance(node, forbidden):
+            raise ValueError("template construct is not allowed")
+        if isinstance(node, nodes.For):
+            loops += 1
+            loop_depth += 1
+            if loops > MAX_TEMPLATE_LOOPS:
+                raise ValueError("template exceeds loop count limit")
+            if loop_depth > MAX_TEMPLATE_LOOP_DEPTH:
+                raise ValueError("nested template loops are not allowed")
+        literal = None
+        if isinstance(node, nodes.Const):
+            literal = node.value
+        elif isinstance(node, nodes.TemplateData):
+            literal = node.data
+        if isinstance(literal, (str, bytes)):
+            if len(literal) > MAX_TEMPLATE_LITERAL_LEN:
+                raise ValueError("template literal exceeds length limit")
+        elif isinstance(literal, int) and not isinstance(literal, bool):
+            if literal.bit_length() > MAX_TEMPLATE_INTEGER_BITS:
+                raise ValueError("template integer exceeds bit limit")
+        for child in node.iter_child_nodes():
+            visit(child, loop_depth)
+
+    visit(root)
+
+
+def _bounded_render(template, *args, max_bytes=MAX_RENDER_LEN, **kwargs) -> str:
+    """Stream a compiled template and stop before its output grows unbounded."""
+    chunks = []
+    total = 0
+    for value in template.generate(*args, **kwargs):
+        chunk = str(value)
+        total += len(chunk.encode("utf-8"))
+        if total > max(1, int(max_bytes)):
+            raise ValueError("template output exceeds render limit")
+        chunks.append(chunk)
+    return "".join(chunks)
+
+
 def make_restricted_env():
     """A sandboxed jinja2 Environment: StrictUndefined, autoescape off, no
     loader/imports, whitelisted filters only. Raises RuntimeError if jinja2 is
@@ -143,12 +244,89 @@ def make_restricted_env():
     try:
         from jinja2 import StrictUndefined
         from jinja2.sandbox import SandboxedEnvironment
+        from jinja2.utils import Namespace
     except Exception as e:  # pragma: no cover - import guard
         raise RuntimeError(f"jinja2 unavailable: {e}")
-    env = SandboxedEnvironment(
+    class RestrictedSandbox(SandboxedEnvironment):
+        # SandboxedEnvironment does not intercept arithmetic by default.  A
+        # short expression such as ``'x' * 20000000`` would otherwise allocate
+        # before the post-render size check ever runs.
+        intercepted_binops = frozenset(("+", "*", "**", "%"))
+
+        def _parse(self, source, name, filename):
+            root = super()._parse(source, name, filename)
+            _validate_template_ast(root)
+            return root
+
+        def is_safe_attribute(self, obj, attr, value):
+            # Bound methods can allocate before streamed output accounting
+            # sees a byte (str.ljust/center/zfill/replace/format, list helpers,
+            # or a callable smuggled in result data).  Templates use filters
+            # for transformations, so callable attributes fail closed.
+            return (not callable(value)
+                    and super().is_safe_attribute(obj, attr, value))
+
+        def is_safe_callable(self, obj):
+            # The generated output-mapping template needs exactly one call:
+            # namespace(items=[]).  Filters are compiler-dispatched through
+            # the explicit whitelist and do not pass this object-call path.
+            return obj is Namespace
+
+        def call_binop(self, context, operator, left, right):
+            if operator == "+":
+                if isinstance(left, (str, bytes, list, tuple)) and isinstance(
+                        right, type(left)):
+                    limit = (MAX_TEMPLATE_REPEAT_CHARS
+                             if isinstance(left, (str, bytes))
+                             else MAX_TEMPLATE_REPEAT_ITEMS)
+                    if len(left) + len(right) > limit:
+                        raise ValueError("template concatenation exceeds limit")
+            elif operator == "*":
+                sequence = count = None
+                if isinstance(left, (str, bytes, list, tuple)) and isinstance(
+                        right, int):
+                    sequence, count = left, right
+                elif isinstance(right, (str, bytes, list, tuple)) and isinstance(
+                        left, int):
+                    sequence, count = right, left
+                if sequence is not None:
+                    limit = (MAX_TEMPLATE_REPEAT_CHARS
+                             if isinstance(sequence, (str, bytes))
+                             else MAX_TEMPLATE_REPEAT_ITEMS)
+                    if max(0, count) * len(sequence) > limit:
+                        raise ValueError("template repetition exceeds limit")
+                elif (isinstance(left, int) and not isinstance(left, bool)
+                      and isinstance(right, int) and not isinstance(right, bool)
+                      and left.bit_length() + right.bit_length()
+                      > MAX_TEMPLATE_INTEGER_BITS):
+                    raise ValueError("template integer product exceeds limit")
+            elif operator == "**":
+                if (not isinstance(right, int) or isinstance(right, bool)
+                        or abs(right) > MAX_TEMPLATE_POW_EXPONENT):
+                    raise ValueError("template exponent exceeds limit")
+                if (isinstance(left, int) and not isinstance(left, bool)
+                        and right > 0
+                        and left.bit_length() * right
+                        > MAX_TEMPLATE_INTEGER_BITS):
+                    raise ValueError("template power exceeds bit limit")
+                if isinstance(left, float) and not math.isfinite(left):
+                    raise ValueError("non-finite template power")
+            elif operator == "%" and isinstance(left, (str, bytes)):
+                # printf field widths can allocate huge strings without using
+                # the intercepted repetition operator.
+                raise ValueError("template string modulo is not allowed")
+            value = super().call_binop(context, operator, left, right)
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("non-finite template arithmetic")
+            return value
+
+    env = RestrictedSandbox(
         autoescape=False,
         undefined=StrictUndefined,
         loader=None,
+        # Constant folding uses Python operators during compilation and would
+        # bypass call_binop (including allocating a giant constant repeat).
+        optimized=False,
         keep_trailing_newline=False,
     )
     allowed = {}
@@ -161,7 +339,6 @@ def make_restricted_env():
     env.filters = allowed
     # Drop range/dict/etc. callables but keep `namespace` -- the generated
     # mapping templates use a namespace accumulator to build always-valid JSON.
-    from jinja2.utils import Namespace
     env.globals = {"namespace": Namespace}
     return env
 
@@ -276,7 +453,9 @@ class Jinja2Formatter(OutputFormatter):
     def _render_topic(self, tmpl) -> Optional[str]:
         if tmpl is None:
             return None
-        topic = tmpl.render(app=self.app_id, device_id=self.device_id).strip()
+        topic = _bounded_render(
+            tmpl, app=self.app_id, device_id=self.device_id,
+            max_bytes=MAX_TEMPLATE_LITERAL_LEN).strip()
         if not topic or not _TOPIC_RE.match(topic):
             raise ValueError(f"invalid topic {topic!r}")
         return topic
@@ -287,7 +466,7 @@ class Jinja2Formatter(OutputFormatter):
         out: List[OutputMessage] = []
         for entry in self._compiled:
             try:
-                body = entry["body"].render(ns)
+                body = _bounded_render(entry["body"], ns)
             except Exception:
                 continue  # bad template drops only this message
             if not body.strip():
@@ -675,12 +854,18 @@ class ConfigurableSink(ResultSink):
 
     def __init__(self, *, app_id: str, channels: List[OutputChannel],
                  formatter: OutputFormatter, filters: Optional[dict] = None,
-                 device_id: str = "", verbose: bool = False):
+                 device_id: str = "", verbose: bool = False,
+                 formatter_builder: Optional[Callable[[dict], OutputFormatter]] = None):
         self.app_id = app_id
         self.channels = [c for c in (channels or []) if c is not None]
         self.formatter = formatter
         self.device_id = device_id
         self.verbose = verbose
+        # assemble_output_sink supplies a closure over the immutable manifest and
+        # app metadata.  SIGHUP then carries only the ordinary effective config;
+        # the sink can rebuild its restricted formatter without an undocumented
+        # `_formatter` object being smuggled through config.json.
+        self._formatter_builder = formatter_builder
         self._lock = threading.Lock()
         self._seq = 0
         self._frame_w: Optional[int] = None
@@ -721,6 +906,14 @@ class ConfigurableSink(ResultSink):
         apply:"restart" and never reach here (spec §3)."""
         self.set_filters((config or {}).get("output_filters"))
         new_fmt = config.get("_formatter") if isinstance(config, dict) else None
+        if new_fmt is None and self._formatter_builder is not None:
+            try:
+                new_fmt = self._formatter_builder(config or {})
+            except Exception as e:
+                # Compilation/config failures retain the known-good formatter;
+                # raw/primary output and every other channel continue unaffected.
+                self._log_channel_error("formatter-reload", e)
+                return
         if new_fmt is not None:
             with self._lock:
                 self.formatter = new_fmt
@@ -778,8 +971,7 @@ class ConfigurableSink(ResultSink):
                           and e.get("kind") not in _METRICS_KINDS]
             if not results and not non_metric:
                 return None
-        has_edge = any(isinstance(e, dict) and e.get("kind") in EDGE_KINDS
-                       for e in events)
+        has_edge = any(is_edge_event(event) for event in events)
         return env, has_edge
 
     def _rate_ok(self, channel: str, has_edge: bool) -> bool:
@@ -893,6 +1085,11 @@ def resolve_output_config(manifest: dict, eff: dict) -> dict:
     mapping = eff.get("output_mapping")
     if mapping is None:
         mapping = mout.get("default_mapping") or []
+    template_mode = eff.get("template_mode")
+    if template_mode not in ("mapping", "template"):
+        # Compatibility for packages/config files created before the selector:
+        # preserve the historical mapping-first rule.
+        template_mode = "mapping" if mapping else "template"
 
     return {
         "channels": channels,
@@ -903,13 +1100,15 @@ def resolve_output_config(manifest: dict, eff: dict) -> dict:
         "templates": templates,
         "dTemplate": dTemplate,
         "mapping": mapping,
+        "template_mode": template_mode,
         "filters": eff.get("output_filters") or {},
     }
 
 
 def build_formatter(mode: str, cfg: dict, *, app_id: str, node: str,
                     base_topic: str, entities: List[dict], device_name: str,
-                    discovery_prefix: str = "homeassistant") -> OutputFormatter:
+                    discovery_prefix: str = "homeassistant",
+                    fallback_raw: bool = True) -> OutputFormatter:
     """Pick and construct the formatter for the resolved mode (spec §3/§4/§5)."""
     if mode == "ha":
         return HaDiscoveryFormatter(
@@ -918,7 +1117,10 @@ def build_formatter(mode: str, cfg: dict, *, app_id: str, node: str,
             device_name=device_name)
     if mode == "custom":
         mapping = cfg.get("mapping") or []
-        if mapping:
+        template_mode = cfg.get("template_mode")
+        if template_mode not in ("mapping", "template"):
+            template_mode = "mapping" if mapping else "template"
+        if template_mode == "mapping":
             specs = generate_mapping_templates(mapping)
         else:
             # one per-task template with a default topic
@@ -936,7 +1138,9 @@ def build_formatter(mode: str, cfg: dict, *, app_id: str, node: str,
         try:
             return Jinja2Formatter(specs, app_id=app_id, device_id=node)
         except Exception:
-            return RawJsonFormatter()
+            if fallback_raw:
+                return RawJsonFormatter()
+            raise
     return RawJsonFormatter()
 
 
@@ -972,6 +1176,20 @@ def assemble_output_sink(app, app_dir: str, manifest: dict, eff: dict, *,
         mode, cfg, app_id=app_id, node=node, base_topic=base_topic,
         entities=entities, device_name=device_name,
         discovery_prefix=discovery_prefix)
+
+    def rebuild_formatter(next_effective: dict) -> OutputFormatter:
+        """Re-resolve live templates/mapping against the saved manifest.
+
+        Structural channel changes remain apply:"restart"; this closure only
+        replaces the formatter used by the already-open channels.
+        """
+        next_cfg = resolve_output_config(manifest, next_effective or {})
+        next_mqtt = next_cfg.get("dMqtt") or {}
+        next_base = (next_mqtt.get("sTopic") or base_topic).rstrip("/") or "recamera"
+        return build_formatter(
+            next_cfg["mode"], next_cfg, app_id=app_id, node=node,
+            base_topic=next_base, entities=entities, device_name=device_name,
+            discovery_prefix=discovery_prefix, fallback_raw=False)
 
     state_topic = f"{base_topic}/{app_id}/state"
     status_topic = f"{base_topic}/{app_id}/status"
@@ -1015,5 +1233,6 @@ def assemble_output_sink(app, app_dir: str, manifest: dict, eff: dict, *,
 
     sink = ConfigurableSink(app_id=app_id, channels=channels, formatter=formatter,
                             filters=cfg.get("filters"), device_id=node,
-                            verbose=verbose)
+                            verbose=verbose,
+                            formatter_builder=rebuild_formatter)
     return sink, True

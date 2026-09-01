@@ -108,6 +108,7 @@ class _FakeExtFrame:
         self.fourcc = 0
         self.planes = [(0, self.width, self.height),
                        (self.width * self.height, self.width, self.height // 2)]
+        self.fd = 7
         self._c = types.SimpleNamespace(fd=7)
         self.ref_rgb = ref_rgb
 

@@ -1,19 +1,59 @@
 [project]
-name = "recamera-pro-kit"
-version = "0.1.0"
-description = "reCamera Pro kit runtime dependencies (host-side / device wheel source)"
-requires-python = ">=3.9"
-# Runtime deps that must be present in the device venv (/userdata/rknnenv) AND
-# resolvable on a host for `python3 -m pytest`. Vision/NPU deps (numpy, rknnlite,
-# opencv, sherpa) are supplied by the firmware/device image and are intentionally
-# NOT pinned here. jinja2 backs the unified configurable-output templates
-# (internal/OUTPUT_SINK_SPEC.md §8); its MarkupSafe transitive dep ships in the
-# same offline wheel set.
-dependencies = [
-    "jinja2>=3.1,<4",
-]
+name = "recamera-pro-ext-api-workspace"
+version = "0.0.0"
+description = "Development workspace for the reCamera extension Python packages"
+requires-python = ">=3.11,<3.12"
+dependencies = []
 
 [dependency-groups]
 dev = [
-    "pytest>=7",
+    # Match the NumPy ABI/version provided by the RV1126B firmware image.
+    "jinja2>=3.1,<4",
+    # Validate the published manifest schema against the same fixtures as the
+    # runtime validator so packagers and the device cannot disagree.
+    "jsonschema>=4,<5",
+    "numpy==1.23.5",
+    # Host-side image/postprocess tests; target firmware provides its own cv2.
+    "opencv-python-headless==4.8.1.78",
+    "pytest>=7,<10",
+]
+
+[tool.uv]
+# The repository root coordinates development only. The publishable artifacts
+# are the two workspace members below, not a third aggregate wheel.
+package = false
+
+[tool.uv.workspace]
+members = [
+    "sdk/python",
+    "kit",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra --strict-markers --import-mode=importlib"
+pythonpath = [
+    ".",
+    "sdk/python",
+]
+testpaths = [
+    "apps",
+    "kit/adapters",
+    "kit/tests",
+    "market/appmgr/tests",
+    "market/catalog",
+    "sdk/tests",
+]
+norecursedirs = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "release",
+]
+markers = [
+    "host: tests that run on the development host without an RV1126B device",
+    "package: wheel build/install smoke tests",
+    "device: tests that require a reCamera Pro device and extension sockets",
+    "release_artifact: tests that require staged packages, models, or adjacent source repositories",
 ]

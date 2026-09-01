@@ -50,6 +50,7 @@ import re                                                            # noqa: E40
 from typing import Any, List, Optional, Tuple                        # noqa: E402
 
 from kit.app import App, run_app                                     # noqa: E402
+from kit.errors import ConfigurationError                            # noqa: E402
 
 
 USAGE = (
@@ -59,7 +60,7 @@ USAGE = (
 )
 
 
-class RunError(Exception):
+class RunError(ConfigurationError):
     """Bad target / unloadable app -- reported as a one-line error, not a traceback."""
 
 

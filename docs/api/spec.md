@@ -4,7 +4,11 @@
 > **代码基**：`recamera_v2` manifest main 分支（2026-08-10 sync，82 仓库），路径基于 `project/app/`。
 > **状态**：v0.1 评审 REDESIGN-NEEDED（7 条）→ v0.2 复审 **SHIP-WITH-FIXES**（3 CLOSED / 4 PARTIAL / 3 新发现）→ v0.3 吸收全部剩余项（两轮修订记录见文末）→ **v0.4 增补 §8 架构与扩展模型**（服务端核心库、扩展五规则、兼容性工程）。字段编号、socket 路径、结构体布局已冻结。
 >
-> **交付现状（截至发布 train v1.5.0）**：本规格定义的核心已**交付并真机验证**——M1 结果注入（`result-in.sock` + `rc_ext_result_send_*`）、M2 帧代理（`frame.sock` 零拷贝 NV12）、M3 观测面（`probe.sock` / `ProbeSource`，SDK 1.2.0）、M4 硬件遮罩（`rc_ext_mask_*` / `MaskControl`）均已随 SDK `librecamera_ext.so.1`（版本 1.2.0）发布，9 个自建 app 在其上运行。下文若出现「待门禁 Gx / 待做 / 即刻开工」等**规划口吻，是留存的原始分期基线**，不代表当前未实现；具体某能力的落地状态以其所在小节的现状标注、`CHANGELOG.md` 与 `docs/guide/` 各专题手册为准。
+> **交付现状**：M1 结果注入、M2 帧代理、M3 probe 与 M4 硬件遮罩曾在
+> 匹配的 v1.x 补丁固件上运行；v1.6.0 handoff 已把相应 client/server 源码
+> 补回当前工作树。本轮另新增 `inference-control@1`。host/交叉构建结果不
+> 等同目标板发布，当前整合版仍须完成 RV1126B 真机 kill/restart/OTA 门禁。
+> 下文保留的早期规划口吻应以各小节“当前状态”与 guide 为准。
 
 ---
 
@@ -34,6 +38,7 @@
   - `/run/recamera/frame.sock` — 帧订阅（M2）
   - `/run/recamera/result-in.sock` — 结果回注（M1）
   - `/run/recamera/probe.sock` — 观测面（M3）
+  - `/run/recamera/inference-control.sock` — external RKNN 单 owner 仲裁（M4，连接即租约）
 - 选 SEQPACKET：天然消息边界；fd 传递（`SCM_RIGHTS`）与消息原子绑定。
 - **权限（v1 实测：root-only，共享 root）：目录 `0750 root:root`，socket 文件 `0660`**。原设计曾拟用 `recamera-ext` 组做粗粒度授权，但上机（2026-08-10，V1.0.10）确认扩展应用**实际以 root 运行**（媒体设备节点均 root 属主，非 root 开不了），故 v1 落地为共享 root、无独立组；身份区分靠下条的 SO_PEERCRED + appmgr 注册表（见 §1.1 校准说明）。拆分组做多级授权留作后续演进。
 - **身份（v1 即有，不推迟）**：服务端对每个连接取 `SO_PEERCRED`（pid/uid/gid），作为连接身份记录并用于：
@@ -49,7 +54,10 @@
 
 ### 1.2 握手与版本协商
 
-连接后客户端先发 `Hello`，服务端回 `HelloAck`，之后进入各自协议。protobuf 编码，定义在新文件 `common/vigil/protocol/ext_api.proto`：
+连接后客户端先发 `Hello`，服务端回 `HelloAck`，之后进入各自协议。protobuf
+编码；公共 SDK 的权威副本是 `sdk/proto/ext_api.proto`，固件侧对应
+`recamera_ipc/protobufs/ext_api.proto`（构建门禁要求两份 generated wire
+定义一致）：
 
 ```proto
 message Hello {
@@ -74,7 +82,10 @@ message HelloAck {
 ```
 
 - **协商规则**：服务端在客户端声明的 `[version_min, version_max]` 与自身支持集合的交集内取最大值；交集为空 → EVERSION + 关闭（评审发现 4：不再用 `min(client, server)`）。
-- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` 一经发布**不可移除**——只要 `/run/recamera/` 存在，v1 客户端就能工作。能力演进 = 新增 Capability 或提升 version，limits 数值可变（客户端必须按 limits 自适应）。
+- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` /
+  `inference-control@1` 一经发布**不可移除**。能力演进 = 新增 Capability
+  或提升 version，limits 数值可变（客户端必须按 limits 自适应）。socket
+  inode 存在不代表协商成功，客户端仍须完成 Hello/HelloAck。
 - **schema 演进纪律**：proto tag 永不复用；删除字段必须 `reserved`；**中转组件（notify-server 等）转发外来 payload 时透传原始字节，禁止 decode→re-encode**（防旧端丢未知字段）；CI 加 v1 客户端 ↔ v2 服务端双向 round-trip 测试。
 
 ### 1.3 错误码（SDK 层统一暴露）
@@ -264,7 +275,11 @@ C 侧对应 `rc_ext_result_open/send/close`。SDK 内部完成 proto 组包，�
 
 ### 4.1 服务端
 
-`rc_infer` 流水线插 tap 点，**独立低优先级 worker 线程 + 有界队列**（评审发现 7）：tap 处仅做"有无订阅"判断与指针入队，序列化/发送全在 worker 内；队列满 → 丢采样并计数，**任何情况下不阻塞推理主线程**。无订阅时 tap 为一次原子读——开销非零但恒定且不分支到慢路径。
+`rc_infer` 流水线插 tap 点，发送/序列化由**独立低优先级 worker + 有界
+队列**完成。无订阅时 tap 只有原子 gate；有订阅时当前实现会在推理线程持
+队列 mutex，并把样本复制到最多 8 MiB 的预留 slab。队列满立即丢弃，不会
+等待消费者或 socket，但这段 mutex+memcpy 并非“绝不阻塞”，必须纳入真机
+延迟/带宽门禁；后续可改为预分配 try-lock/先丢后拷。
 
 | stage_id | 位置 | 数据 |
 |---|---|---|
@@ -291,6 +306,28 @@ message ProbeData {
 
 **移出 M3 范围，随后续批次交付**（评审发现 7：v1 优先冻结数据口）。届时 Web 面板挂 `/extension/probe/`，走 M0 文档化的挂载约定，后端经 skt2ws 桥到 `probe.sock`——全部复用存量机制，不新增前端基建。
 
+### 4.4 M4 external NPU 所有权（`inference-control.sock`）
+
+需要 RKNN 的方案商进程不得以 CGI `POST 200` 或 pidfile 作为资源已释放的
+证明。真正持有 builtin RKNN context 的 rkipc 提供 `inference-control@1`：
+
+1. client 完成 Hello 后发送 `ACQUIRE{request_id,app_id,instance_id,timeout_ms,
+   fallback_builtin}`；
+2. rkipc 设置 external hold，驱动内建 NPU 线程 deinit；只有
+   `handle==NULL && state==stopped && actual_fps==0` 时返回 GRANT；
+3. GRANT 返回非零 `lease_id`、本次 rkipc `epoch` 和递增 `generation`；
+4. external 完成 `load_rknn/init_runtime` 后发送 READY；STATUS、READY、
+   SET_FALLBACK、RELEASE 都校验 live `lease_id+epoch`；
+5. AF_UNIX 连接本身是租约。显式 RELEASE 或 HUP/EOF 都撤销 owner；已获
+   GRANT 的连接按 `fallback_builtin` 恢复/保持关闭，未获 GRANT 的断线不改
+   原先 builtin intent；
+6. 同时只授予一个 external owner。fork child 只 close 自己继承的 fd 副本，
+   不发送 RELEASE；所有 client/listener fd 均 CLOEXEC。
+
+控制 v1 的 generation 尚未写入 frame/result/probe Hello，因此当前只对 NPU
+所有权本身做 fencing；数据端点拒绝旧 generation（ESTALE）留给协议下一版。
+HTTP `/api/v1/ext/capabilities` 可声明这项能力，但 acquire/release 不经 CGI。
+
 ---
 
 ## 5. M0 存量文档化（清单）
@@ -314,8 +351,8 @@ message ProbeData {
 
 | 模块 | 改动 | 新增/修改 |
 |---|---|---|
-| `common/vigil/protocol/inference.proto` | +`source_id`/`pts_us` | 修改（兼容） |
-| `common/vigil/protocol/ext_api.proto` | Hello/Capability/Subscribe/Probe 等 | **新增** |
+| `recamera_ipc/protobufs/inference.proto` + `common/vigil/protocol/inference.proto` | +`source_id`/`pts_us`；两份由 Vigil CMake 哈希门禁保持一致 | 修改（兼容） |
+| `sdk/proto/ext_api.proto` + `recamera_ipc/protobufs/ext_api.proto` | Hello/Capability/Subscribe/Probe/InferenceLease 等；SDK/固件各持一份协议发布源 | **新增** |
 | **`common/rc_ext_core/`** | **服务端核心库（§8.1）：传输/握手/身份/配额/所有权/fd 收发，三端点共用** | **新增（先行）** |
 | `src/rv1126b_ipc/video/frame_export.{c,h}` | 帧代理端点（core 之上的薄层：VI 取帧 + plane 填充） | **新增** |
 | `src/rv1126b_ipc/video/video.c` | 三路分发抽为 `rc_result_dispatch()`；新 VI chn1 初始化 | 修改（~几十行） |
@@ -323,6 +360,7 @@ message ProbeData {
 | `common/rc_infer/`（流水线各级） | tap 点 + probe 端点（core 之上的薄层） | 修改 + **新增** |
 | `recamera_web_backend/src/rest_api.cpp` + `ext_api.{h,cpp}` | ext 域 | 修改（2 行）+ **新增** |
 | `sdk/librecamera_ext/` | C ABI（v1 冻结对象）+ Python 薄封装 | **新增**（发布形态属门禁 G7） |
+| `common/rc_ext_core/rc_inference_control.{c,h}` + `common/rc_model/` | connection-lifetime NPU broker + builtin drain barrier | **新增 + 修改** |
 | init 脚本 | `/run/recamera` 目录（`0750 root:root`）+ socket `0660`（root-only，无独立组） | 修改 |
 
 **DoD（每里程碑验收）**：
@@ -352,7 +390,9 @@ message ProbeData {
 
 ## 8. 架构与扩展模型（v0.4 增补）
 
-> §1-§7 定义了三条 socket 的契约；本章定义**怎么实现才能长出第四、第五条而不写第四、第五遍**，以及兼容性如何被工程化保证而不是靠自觉。
+> §1-§7 最初定义三条数据 socket；同一核心现已长出第四条
+> `inference-control`，本章定义**怎么增加端点而不复制一套实现**，以及兼容性
+> 如何被工程化保证而不是靠自觉。
 
 ### 8.1 组件分层：一个核心库，N 个薄端点
 
@@ -390,7 +430,10 @@ rkipc 进程内
 2. **数量演进走 limits**：并发数、速率、池深这类配额变化只改 `Capability.limits` 数值，客户端必须按握手返回值自适应，不得硬编码。
 3. **结构演进走保留位**：`frame_hdr` 的 `ver` + `reserved[16]`（如 G3 失败需加第二时间戳，占 reserved 8 字节 + flags 一位标识，`ver` 不变）；重排/删字段才升 `ver`，且旧 `ver` 服务端至少再支持两个固件版本。
 4. **任务类型演进走 oneof 追加**：`InferenceResult` 新任务 = 新 oneof 分支（tag 15+），旧读者跳过未知分支；与 rc_infer 后处理注册表的字符串名一一对应，注册表加算法不需要动 proto。
-5. **只增不减**：`/run/recamera/` 存在期间，v1 baseline 能力（`frame@1`/`result@1`/`probe@1`）与其线格式永不移除。废弃流程：`Capability.limits["deprecated"]=1` 标记 ≥ 2 个固件版本 → 从 capabilities 列表消失（但端点仍应答 EVERSION 类错误而非消失式断连）。
+5. **只增不减**：`/run/recamera/` 存在期间，v1 baseline 能力
+   （`frame@1`/`result@1`/`probe@1`/`inference-control@1`）与其线格式永不
+   移除。废弃流程：`Capability.limits["deprecated"]=1` 标记 ≥ 2 个固件版本
+   → 从 capabilities 列表消失（但端点仍应答 EVERSION 类错误而非消失式断连）。
 
 ### 8.3 兼容性工程（CI 化，不靠自觉）
 

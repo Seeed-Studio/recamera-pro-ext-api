@@ -1,9 +1,61 @@
 {
+  "manifest_version": 2,
+  "release": {"sequence": 4, "channel": "stable"},
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64", "python": "==3.11.*",
+    "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"
+  },
+  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "artifacts": [
+    {
+      "id": "pose-model", "kind": "rknn", "source": "bundled",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add",
+      "size": 4691086, "mount": "models/yolo11n_pose_rawhead_int8.rknn",
+      "required": true, "share_scope": "content"
+    },
+    {
+      "id": "temporal-recamera", "kind": "data", "source": "bundled",
+      "file": "models/temporal_recamera_pro_rknn_v1.json.gz",
+      "sha256": "4473e2af0fe5e47b03306bf9a866103a21dbdfceb794933034173bed53de6826",
+      "size": 85038, "mount": "models/temporal_recamera_pro_rknn_v1.json.gz",
+      "required": true, "share_scope": "content"
+    },
+    {
+      "id": "temporal-yolo11s", "kind": "data", "source": "bundled",
+      "file": "models/temporal_yolo11s_pose_v1.json.gz",
+      "sha256": "36545c5b5de501a07d3d46e626c8827d6f23e155c2420d5e4206bac7e555d74d",
+      "size": 95570, "mount": "models/temporal_yolo11s_pose_v1.json.gz",
+      "required": false, "share_scope": "content"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {"name": "camera.frames", "mode": "shared", "required": true},
+      {"name": "npu.rknn", "mode": "scheduled", "required": true},
+      {"name": "rga", "mode": "shared", "required": true},
+      {"name": "result.publish", "mode": "brokered", "required": true}
+    ],
+    "limits": {"memory_mb": 384, "cpu_percent": 300, "storage_mb": 32, "shutdown_grace_sec": 10}
+  },
+  "permissions": {
+    "sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"],
+    "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]},
+    "network": {"listen": [], "outbound": ["configured.outputs"]}
+  },
+  "health": {
+    "protocol": "kit-health-v1", "startup_timeout_sec": 120,
+    "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3,
+    "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}
+  },
+  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
   "id": "fall-detection",
   "name": "Fall Detection",
   "name_zh": "跌倒检测",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "image": "/appcenter/apps/fall-detection.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",
@@ -11,11 +63,9 @@
   "description_zh": "使用 YOLO11n-Pose、几何候选触发与冻结的 48 帧学习型时序确认门在设备本地检测多人跌倒。每个人都有稳定的 track_id、独立历史和独立跌倒状态。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
-  "kit": ">=0.1.0",
   "package": {
     "exclude": ["evaluation", "tools", "test_*.py", "*.md"]
   },
-  "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
     "output"
   ],
@@ -34,8 +84,8 @@
       "keypoints": "coco17"
     }
   ],
-  "default_model": "yolo11n_pose_rawhead_int8",
-  "temporal_profile": {
+  "x-default_model": "yolo11n_pose_rawhead_int8",
+  "x-temporal_profile": {
     "id": "jetson-yolo11s-pose-optimized-v1",
     "file": "models/temporal_yolo11s_pose_v1.json.gz",
     "provenance": "transfer-fallback-not-recamera-pro-native",
@@ -48,16 +98,22 @@
   },
   "postproc": "pose",
   "render": {
+    "schema_version": 1,
+    "boxes": {"color_by": "state", "label": "state", "line_width": 2},
     "keypoints": {
       "layout": "coco17",
       "point_radius": 3,
       "line_width": 2,
       "conf_min": 0.3
-    }
+    },
+    "events": {
+      "fall": {"as": "toast", "position": "top-center", "duration_sec": 4, "text": "Fall #{{ track_id }}"}
+    },
+    "stream_osd": {"supported": ["boxes"], "default": false}
   },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
-    "port": 8124,
     "schema": "results[]{box,score,keypoints[17][x,y,conf],kind,track_id,state,fall_detected,event_id} + events[]{kind=pose_state|fall,track_id,state,fall_detected,event_id,...}",
     "default_channel": [
       "ws"
@@ -66,7 +122,7 @@
     "fields": [
       {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Person box, original-frame xyxy pixels"},
       {"name": "score", "from": "results[].score", "type": "float", "description": "Person detection confidence"},
-      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "description": "COCO-17 pose keypoints"},
+      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "coord": "pixel_points", "description": "COCO-17 pose keypoints"},
       {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'person'"},
       {"name": "track_id", "from": "results[].track_id", "type": "integer", "description": "Stable per-identity track id"},
       {"name": "state", "from": "results[].state", "type": "string", "description": "Per-identity fall state"},
@@ -74,7 +130,7 @@
       {"name": "event_id", "from": "results[].event_id", "type": "integer", "description": "Fall event id for this identity"},
       {"name": "person_detected", "from": "results[].person_detected", "type": "bool", "description": "Person present flag"},
       {"name": "person_score", "from": "results[].person_score", "type": "float", "description": "Person score augmentation"},
-      {"name": "tracking", "from": "results[].tracking", "type": "object", "description": "Tracking diagnostics"},
+      {"name": "tracking", "from": "results[].tracking", "type": "bool", "description": "Tracking active flag"},
       {"name": "missed_frames", "from": "results[].missed_frames", "type": "integer", "description": "Consecutive missed frames for the track"},
       {"name": "features", "from": "results[].features", "type": "object", "description": "Nested geometric fall features/diagnostics"},
       {"name": "pose_state_kind", "from": "events[kind=pose_state].kind", "type": "string", "event_kind": "pose_state", "description": "Event kind, always 'pose_state'"},

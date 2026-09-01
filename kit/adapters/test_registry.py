@@ -6,6 +6,7 @@ No device, no network: FfmpegRtspSource is constructed with explicit
 width/height so it never probes the RTSP stream.
 """
 import os
+import socket
 import sys
 import tempfile
 
@@ -19,11 +20,13 @@ from kit.adapters import registry
 from kit.adapters.frame_source import FfmpegRtspSource, SnapshotSource, open_frame_source
 from kit.adapters.result_sink import StdoutSink, WsResultSink, open_result_sink
 from kit.adapters.official import OfficialFrameSource, OsdInjectResultSink
+from kit.errors import CapabilityError, ConfigurationError
 
 
 def _clear_env():
     for k in ("RECAMERA_FRAME_SOCK", "RECAMERA_RESULT_SOCK", "RECAMERA_AUDIO_SOCK",
               "RECAMERA_RESULT_INGRESS", "RECAMERA_RESULT_OSD", "RECAMERA_CONTROL_API",
+              "RECAMERA_FRAME_SOURCE", "RECAMERA_RESULT_GATEWAY_SOCK",
               "RECAMERA_ADAPTER_PREFER"):
         os.environ.pop(k, None)
 
@@ -58,22 +61,28 @@ def test_no_official_selects_workaround():
 
 
 def test_simulated_official_selects_official():
-    """Fake /run/recamera/frame.sock present -> OfficialFrameSource chosen."""
+    """Unknown socket does not auto-select; explicit verified policy does."""
     _clear_env()
     with tempfile.NamedTemporaryFile(prefix="frame-", suffix=".sock") as tf:
-        os.environ["RECAMERA_FRAME_SOCK"] = tf.name  # exists on disk now
+        os.environ["RECAMERA_FRAME_SOCK"] = tf.name  # regular file, not socket
         caps = registry.capabilities(refresh=True)
-        assert caps.frame_broker is True, caps
+        assert caps.frame_broker is False, caps
 
         src = open_frame_source(url="rtsp://x", prefer="ffmpeg")
-        assert isinstance(src, OfficialFrameSource), type(src)
-        assert src.sock == tf.name, src.sock
-        # explicit snapshot fallback is still honoured verbatim
-        snap = open_frame_source(url="rtsp://x", prefer="snapshot")
-        assert isinstance(snap, SnapshotSource), type(snap)
-        snap.close()
-        print("PASS test_simulated_official_selects_official "
-              f"(OfficialFrameSource, sock={tf.name})")
+        assert isinstance(src, FfmpegRtspSource), type(src)
+        src.close()
+
+    os.environ.pop("RECAMERA_FRAME_SOCK", None)
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+    src = open_frame_source(url="rtsp://x", prefer="ffmpeg")
+    assert isinstance(src, OfficialFrameSource), type(src)
+    assert src.sock == "/run/recamera/frame.sock", src.sock
+    # explicit snapshot fallback is still honoured verbatim
+    snap = open_frame_source(url="rtsp://x", prefer="snapshot")
+    assert isinstance(snap, SnapshotSource), type(snap)
+    snap.close()
+    print("PASS test_simulated_official_selects_official "
+          "(unknown endpoint fails closed; explicit policy selects official)")
 
 
 def test_result_sink_defaults_to_ws_even_when_socket_present():
@@ -86,8 +95,11 @@ def test_result_sink_defaults_to_ws_even_when_socket_present():
     """
     _clear_env()
     os.environ["RECAMERA_FRAME_SOCK"] = "/nonexistent/frame.sock.absent"
-    with tempfile.NamedTemporaryFile(prefix="result-in-", suffix=".sock") as tf:
-        os.environ["RECAMERA_RESULT_SOCK"] = tf.name  # socket EXISTS on disk
+    with tempfile.TemporaryDirectory(prefix="result-in-") as directory:
+        endpoint = os.path.join(directory, "result-in.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(endpoint)
+        os.environ["RECAMERA_RESULT_SOCK"] = endpoint
         caps = registry.capabilities(refresh=True)
         assert caps.result_ingress is True, caps      # probe sees it...
 
@@ -98,13 +110,18 @@ def test_result_sink_defaults_to_ws_even_when_socket_present():
 
         # Explicit opt-in via RECAMERA_RESULT_OSD flips it to OSD burn-in.
         os.environ["RECAMERA_RESULT_OSD"] = "1"
-        osd = open_result_sink("ws", host="127.0.0.1", port=0, app_id="t")
-        assert isinstance(osd, OsdInjectResultSink), type(osd)
+        try:
+            open_result_sink("ws", host="127.0.0.1", port=0, app_id="t")
+            raise AssertionError("native custom result endpoint must be rejected")
+        except CapabilityError:
+            pass
         os.environ.pop("RECAMERA_RESULT_OSD", None)
 
-        # kind="osd" forces burn-in without any env.
-        osd2 = open_result_sink("osd", app_id="t")
-        assert isinstance(osd2, OsdInjectResultSink), type(osd2)
+        server.close()
+    os.environ.pop("RECAMERA_RESULT_SOCK", None)
+    # kind="osd" forces the canonical native endpoint without any env.
+    osd2 = open_result_sink("osd", app_id="t")
+    assert isinstance(osd2, OsdInjectResultSink), type(osd2)
     print("PASS test_result_sink_defaults_to_ws_even_when_socket_present "
           "(default WS; RECAMERA_RESULT_OSD / kind='osd' opt in to OSD)")
 
@@ -127,10 +144,58 @@ def test_prefer_override():
     print("PASS test_prefer_override (workaround-force + official-force)")
 
 
+def test_dedicated_frame_source_policy_does_not_change_result_sink():
+    """The managed opt-in selects frame.sock without opting into OSD."""
+    _clear_env()
+    os.environ["RECAMERA_FRAME_SOURCE"] = "official"
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "workaround"
+    registry.capabilities(refresh=True)
+
+    src = open_frame_source(url="rtsp://sub", prefer="ffmpeg")
+    assert isinstance(src, OfficialFrameSource), type(src)
+    assert src.sock == "/run/recamera/frame.sock", src.sock
+    # A managed launch's dedicated frame contract cannot be bypassed by an app
+    # requesting the low-resolution snapshot workaround.
+    explicit_snapshot = open_frame_source(url="rtsp://sub", prefer="snapshot")
+    assert isinstance(explicit_snapshot, OfficialFrameSource), type(explicit_snapshot)
+
+    ws = open_result_sink("ws", host="127.0.0.1", port=0, app_id="managed")
+    assert isinstance(ws, WsResultSink), type(ws)
+    ws.close()
+
+    os.environ["RECAMERA_FRAME_SOURCE"] = "workaround"
+    os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+    fallback = open_frame_source(
+        url="rtsp://sub", prefer="ffmpeg", width=640, height=480)
+    assert isinstance(fallback, FfmpegRtspSource), type(fallback)
+    fallback.close()
+
+    os.environ["RECAMERA_FRAME_SOURCE"] = "auto"
+    inherited = open_frame_source(url="rtsp://sub", prefer="ffmpeg")
+    assert isinstance(inherited, OfficialFrameSource), type(inherited)
+    _clear_env()
+    print("PASS test_dedicated_frame_source_policy_does_not_change_result_sink")
+
+
+def test_invalid_dedicated_frame_source_policy_fails_closed():
+    _clear_env()
+    os.environ["RECAMERA_FRAME_SOURCE"] = "offical"  # intentional typo
+    try:
+        open_frame_source(
+            url="rtsp://sub", prefer="ffmpeg", width=640, height=480)
+        raise AssertionError("invalid frame-source policy must be rejected")
+    except ConfigurationError as exc:
+        assert "RECAMERA_FRAME_SOURCE" in str(exc), str(exc)
+    _clear_env()
+    print("PASS test_invalid_dedicated_frame_source_policy_fails_closed")
+
+
 if __name__ == "__main__":
     test_no_official_selects_workaround()
     test_simulated_official_selects_official()
     test_result_sink_defaults_to_ws_even_when_socket_present()
     test_prefer_override()
+    test_dedicated_frame_source_policy_does_not_change_result_sink()
+    test_invalid_dedicated_frame_source_policy_fails_closed()
     _clear_env()
     print("ALL REGISTRY TESTS PASSED")

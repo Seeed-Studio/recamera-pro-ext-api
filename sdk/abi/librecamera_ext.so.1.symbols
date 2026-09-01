@@ -1,0 +1,37 @@
+# Public C ABI required from every librecamera_ext.so.1 build.
+# Additive ABI changes must update this list deliberately; removing or renaming
+# an existing entry requires a SONAME break rather than editing the baseline.
+rc_ext_frame_close
+rc_ext_frame_geometry
+rc_ext_frame_map
+rc_ext_frame_next
+rc_ext_frame_open
+rc_ext_frame_release
+rc_ext_inference_lease_alive
+rc_ext_inference_lease_abandon_after_fork
+rc_ext_inference_lease_close
+rc_ext_inference_lease_open
+rc_ext_inference_lease_ready
+rc_ext_inference_lease_set_fallback
+rc_ext_inference_lease_status
+rc_ext_mask_clear
+rc_ext_mask_close
+rc_ext_mask_open
+rc_ext_mask_query
+rc_ext_mask_set
+rc_ext_mask_update
+rc_ext_osd_close
+rc_ext_osd_open
+rc_ext_osd_send_detections
+rc_ext_probe_close
+rc_ext_probe_info
+rc_ext_probe_next
+rc_ext_probe_open
+rc_ext_probe_release
+rc_ext_result_close
+rc_ext_result_open
+rc_ext_result_send_classification
+rc_ext_result_send_detections
+rc_ext_result_send_keypoints
+rc_ext_result_send_segmentation
+rc_ext_result_send_tracking

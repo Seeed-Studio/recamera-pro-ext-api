@@ -40,6 +40,10 @@ def _sha_size(path):
     return h.hexdigest(), n
 
 
+@unittest.skipUnless(
+    os.environ.get("RECAMERA_RELEASE_ARTIFACT_TESTS") == "1",
+    "requires staged release packages",
+)
 class CapabilitiesForwardingTests(unittest.TestCase):
     """`capabilities` must survive manifest -> catalog.
 
@@ -87,6 +91,10 @@ class CapabilitiesForwardingTests(unittest.TestCase):
             self.assertNotIn("capabilities", app)
 
 
+@unittest.skipUnless(
+    os.environ.get("RECAMERA_RELEASE_ARTIFACT_TESTS") == "1",
+    "requires staged release packages",
+)
 class RuntimeBundleTests(unittest.TestCase):
     """`runtimes` tells the store WHERE to get an on-demand runtime.
 
@@ -147,6 +155,10 @@ class BuildModelsTests(unittest.TestCase):
             self.spec = {k: v for k, v in json.load(f).items()
                          if not k.startswith("_")}
 
+    @unittest.skipUnless(
+        os.environ.get("RECAMERA_RELEASE_ARTIFACT_TESTS") == "1",
+        "requires staged release models",
+    )
     def test_voice_transcribe_two_groups(self):
         models = gen_catalog._build_models(
             "voice-transcribe", self.spec, MODELS_DIR, BASE)
@@ -165,6 +177,10 @@ class BuildModelsTests(unittest.TestCase):
         self.assertEqual(len(by_target["/userdata/local/models/asr"]), 5)
         self.assertEqual(len(by_target["/userdata/local/models/asr/kws"]), 5)
 
+    @unittest.skipUnless(
+        os.environ.get("RECAMERA_RELEASE_ARTIFACT_TESTS") == "1",
+        "requires staged release models",
+    )
     def test_sha256_and_url_match_staged(self):
         models = gen_catalog._build_models(
             "voice-transcribe", self.spec, MODELS_DIR, BASE)

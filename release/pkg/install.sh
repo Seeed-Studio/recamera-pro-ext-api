@@ -4,6 +4,17 @@
 # Idempotent: backs up factory files once, md5-verifies every artifact, then overwrites /oem.
 set -e
 
+# This directory is an archived sideload snapshot, not a releasable package.
+# Its checked-in binaries do not match MANIFEST.txt/install.sh and the rkipc
+# hash 9826e9... is classified as both factory and extension in the historic
+# lists below.  Installing by merely updating one checksum could destroy the
+# only valid rollback target.  A source-built release pipeline must regenerate
+# all artifacts, hashes and the mutually-exclusive factory/extension policy,
+# then deliberately remove this guard.
+echo "FATAL: release/pkg is an archived, internally inconsistent snapshot." >&2
+echo "Build rkipc, entry.cgi and librecamera_ext from the pinned source tree; do not sideload this directory." >&2
+exit 1
+
 PKG=$(cd "$(dirname "$0")" && pwd)
 RKIPC_MD5=f683352a9d062a05a3df1f8df22d7d53
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a

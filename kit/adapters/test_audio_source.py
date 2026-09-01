@@ -8,7 +8,9 @@ No device, no real audio: subprocess.Popen is monkeypatched with an in-memory
 fake, so nothing ever touches /dev/snd. Constructors never open a device.
 """
 import os
+import socket
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
@@ -215,19 +217,28 @@ def test_registry_default_is_ai_asr():
     print("PASS test_registry_default_is_ai_asr (ai_asr default; rtsp/alsa opt-in)")
 
 
-def test_registry_official_supersedes():
-    """A present audio.sock -> OfficialPcmSource supersedes ai_asr."""
-    import tempfile
+def test_registry_audio_socket_is_unknown_until_explicit_opt_in():
+    """A filesystem audio socket stays UNKNOWN; prefer=official must opt in."""
     _clear_env()
     from kit.adapters.official import OfficialPcmSource
-    with tempfile.NamedTemporaryFile(prefix="audio-", suffix=".sock") as tf:
-        os.environ["RECAMERA_AUDIO_SOCK"] = tf.name
+    with tempfile.TemporaryDirectory(prefix="audio-sock-") as directory:
+        endpoint = os.path.join(directory, "audio.sock")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(endpoint)
+        os.environ["RECAMERA_AUDIO_SOCK"] = endpoint
         registry.capabilities(refresh=True)
         src = registry.select_audio_source()
-        assert isinstance(src, OfficialPcmSource), type(src)
+        assert isinstance(src, AiAsrAudioSource), type(src)
+
+        os.environ["RECAMERA_ADAPTER_PREFER"] = "official"
+        registry.capabilities(refresh=True)
+        forced = registry.select_audio_source()
+        assert isinstance(forced, OfficialPcmSource), type(forced)
+        server.close()
     _clear_env()
     registry.capabilities(refresh=True)
-    print("PASS test_registry_official_supersedes (audio.sock -> OfficialPcmSource)")
+    print("PASS test_registry_audio_socket_is_unknown_until_explicit_opt_in "
+          "(socket probe stays workaround; prefer=official selects OfficialPcmSource)")
 
 
 if __name__ == "__main__":
@@ -239,6 +250,6 @@ if __name__ == "__main__":
     test_open_read_frames_mocked()
     test_open_permission_error_raises_busy()
     test_registry_default_is_ai_asr()
-    test_registry_official_supersedes()
+    test_registry_audio_socket_is_unknown_until_explicit_opt_in()
     _clear_env()
     print("ALL AUDIO SOURCE TESTS PASSED")

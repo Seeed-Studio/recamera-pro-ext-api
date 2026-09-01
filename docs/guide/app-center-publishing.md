@@ -27,7 +27,9 @@
    里的一组普通函数，CLI（`python3 -m appmgr <cmd>`）和 HTTP API 共用同一份代码。
 2. **最小 HTTP API**：监听 **loopback `127.0.0.1:8130`**
    （`paths.py:68-69`，`HTTP_HOST`/`HTTP_PORT`），由 nginx 边缘（`ext_appmgr.conf`）用官方 JWT
-   会话把关，路径 `/api/appMgr/`。
+   会话把关。Web 应用中心使用独立版本域 `/api/app-center/v1/`；历史工具仍可使用
+   `/api/appMgr/`。不得把 Web 应用中心重新映射到 `/api/v1/`，该路径属于固件现有的
+   SenseCraft/cloud proxy。
 
 ### app 的运行形态
 
@@ -59,14 +61,16 @@
 apps/<id>/
 ├── manifest.json     # 必需：app 的全部声明（见下）
 ├── app.py            # 必需：入口，通常继承 kit.app.App
+├── icon.png          # 推荐：随安装包分发的应用缩略图（由 manifest.icon 声明）
 ├── models/           # 可选：随包分发的模型文件（*.rknn 等）
 │   └── <model>.rknn
 ├── hooks/            # 可选：安装/启停钩子（会被打进包）
 └── run               # 可选：自定义启动脚本（会被打进包，装后置 0755）
 ```
 
-打包器只收 `manifest.json / app.py / models / hooks / run` 这几项
-（`build.py:28` 的 `INCLUDE_TOP`），其余（`__pycache__`、隐藏文件、`.pyc`、`kit/`）一律排除。
+打包器收集 app 目录的完整文件树，再排除 `__pycache__`、隐藏文件、`.pyc`、`kit/`、
+构建产物以及 `package.exclude` 声明的路径。因此 `icon.png`、同级 Python 模块、模板和数据文件
+都会自然进入包，不需要维护固定白名单。
 **共享的 `kit` 运行时不随 app 分发**，它单独部署到设备一份（见 §3）。
 
 ### 安装后（设备上）
@@ -95,7 +99,8 @@ apps/<id>/
 | `name` | ✅ | list/UI | 展示名。 |
 | `name_zh` | | UI | 中文名（可选，部分 app 有）。 |
 | `version` | ✅ | 打包/state | 版本号。`build.py` 用它拼包名 `<id>-<ver>-arm64.tar.gz`；无则打包报错。 |
-| `image` | | list/UI | 画廊图路径，如 `/appcenter/apps/<id>.png`。 |
+| `image` | | catalog/UI | 目录页兼容缩略图 URL，如 `/appcenter/apps/<id>.png`；它不替代安装包内的图标资产。 |
+| `icon` | | validator/installer/list | manifest v2 的安装后图标声明：`{"path":"icon.png","media_type":"image/png"}`。声明后文件必须在包内且进入 BOM；设备从已安装内容生成 `icon_url`。 |
 | `type` | | list/UI | 现有样本全为 `"self-hosted"`。 |
 | `scene` / `scene_zh` | | UI | 场景分类，如 `"Retail & Audience"`。 |
 | `description` / `description_zh` | | list/UI/catalog | 描述文案。`gen_catalog.py` 从包内 manifest 取 `description` 写进目录。 |
@@ -110,7 +115,7 @@ apps/<id>/
 | `postproc` | | kit | 后处理器名，如 `detect`/`pose`/`db_ocr`/`voice`。 |
 | `tags[]` | | UI | 标签数组。 |
 | `output{}` | | supervisor/kit | 输出通道。`sink`（现有全为 `"ws"`）、`port`（如 `8124`）、`schema`（事件结构文字说明）、`topic`（MQTT 主题）。**supervisor 仅当 `sink=="ws"` 且有 `port` 时追加 `--sink ws --port <port>`**（`supervisor._build_cmd`）。 |
-| `config_schema` | | config API | 可配置项 schema，**必须用分组写法** `groups[].items[]`（每个 item 带 `key`）。扁平写法 `{key: spec}` 已弃用，仅为老包保留兼容分支并打印弃用日志（`kit/config.py:_flat_to_grouped`、`market/appmgr/config.py:_flat_to_grouped`）。控件类型：`number`（带 min/max/step）、`integer`（整数语义，绑定后为 `int`）、`boolean`、`enum`（options/option_labels）、`string`、`zone`、`line`。UI 据此渲染表单，appmgr 据此校验写入。 |
+| `config_schema` | | config API | 可配置项 schema，**必须用分组写法** `groups[].items[]`（每个 item 带 `key`）。扁平写法 `{key: spec}` 已弃用，仅为老包保留兼容分支并打印弃用日志（`kit/config.py:_flat_to_grouped`、`market/appmgr/config.py:_flat_to_grouped`）。正式控件类型：`number`（有限数，服务端校验 min/max；step 必须为正并作为 UI 调节粒度）、`integer`（整数语义，绑定后为 `int`）、`boolean`、`enum`/`select`（typed scalar options）、`string`/`password`、`array`/`object`、`zone`、`line`、`field_mapping`、`output_filters`。UI 据此渲染表单，appmgr 据此校验写入；复杂类型必须提交 JSON 数组/对象，不能用 opaque string 代替。为兼容已有 manifest（例如 default=0.75、step=0.1），step 不被当作服务端量化网格。 |
 | `ha_entities[]` | | MQTT/HA | Home Assistant 实体声明（component/object_id/name/value_template/device_class…），app 开启 MQTT 后据此上报。 |
 | `privacy_blur` | | app 逻辑 | 隐私开关声明（face-analysis 用）。 |
 
@@ -121,16 +126,40 @@ apps/<id>/
 > appmgr 原样透传、不校验。写清这点是为了让方案商知道哪些字段"填错会装不上/起不来"
 > （前四类），哪些"填错只影响 UI/运行逻辑"（其余）。
 
-### 应用图标解析（三级回退）
+下拉参数有两种向后兼容写法。简单写法继续用 `options` 加平行标签；需要把中英文标签与值放在一起时，可以使用 labelled option object：
 
-前端渲染 app 图标按三级回退，安装弹窗（AppStore）与已装列表（Applications）两处**用同一套逻辑**：
+```jsonc
+{
+  "key": "backend", "type": "select", "apply": "restart", "default": 1,
+  "options": [
+    {"value": 1, "label": "Fast", "label_zh": "快速"},
+    {"value": 2, "label": "Accurate", "label_zh": "精确"}
+  ]
+}
+```
 
-1. **catalog / manifest 的 `image` 字段**：条目带 `image`（如 `/appcenter/apps/<id>.png`）时直接用它。
-2. **前端内置 `APP_IMAGES`**：`image` 缺省时，若 app `id` 命中前端内置映射表，用打包进前端的内置图——图片放
-   `recamera_web_react/src/components/app_center/apps/<id>.png`，并在 `appImages.js` 里按 `id` 登记进 `APP_IMAGES`。
-3. **首字母占位**：前两级都缺时，回落到用 app 名首字母生成的占位图标。
+`value` 只允许非 null 的 string/number/integer/boolean 标量，并按 JSON wire 语义比较：数值 `1` 与 `1.0` 是同一个 option（不得重复声明），数值 `2` 与字符串 `"2"` 则严格不同。原有 `options:["cpu","rk"]` 配合 `option_labels` / `option_labels_zh` 仍完全兼容。本轮 `string` 只声明并校验字符串类型，尚未承诺 `minLength` / `maxLength` / `pattern`。
 
-给自己的 app 配图标：要随包/目录分发就填 `image`；要内置进官方前端就走第 2 级（放 png + 登记 `appImages.js`）。
+### 目录缩略图与安装后图标
+
+`image` 与 `icon` 服务于两个不同阶段：catalog 在应用安装前使用 `image` URL；安装完成后，
+设备以包内 `icon.path` 为权威内容，并通过应用列表的 `icon_url` 提供图标。这样第三方应用不需要
+修改或重新构建设备前端，也能显示自己的图标。若任一阶段没有可用图片，UI 才回退到内置映射或
+文字占位。为兼容旧 catalog，示例应用同时保留两项声明。
+
+图标声明示例：
+
+```json
+"image": "/appcenter/apps/my-app.png",
+"icon": {"path": "icon.png", "media_type": "image/png"}
+```
+
+`icon.path` 必须是规范的包内相对路径并指向普通文件，最大 1 MiB。只允许 PNG、WebP、JPEG，
+扩展名、`media_type` 与文件 magic 必须一致：`.png`=`image/png`、`.webp`=`image/webp`、
+`.jpg`/`.jpeg`=`image/jpeg`。SVG/HTML/JavaScript 等主动内容不会作为图标安装或同源提供。
+新增或替换图标会改变 v2 BOM 与 `release_id`，至少必须递增 `release.sequence`；正式发布的
+示例建议同时递增语义化 `version`。同版本但更高 sequence 合法，安装后的 `icon_url` 会用
+图标内容摘要隔离缓存；不能用同一 sequence 发布不同内容。
 
 ### 最小可用 manifest 模板
 
@@ -141,6 +170,8 @@ apps/<id>/
   "version": "0.1.0",
   "type": "self-hosted",
   "author": "Your Company",
+  "image": "/appcenter/apps/my-app.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "entry": "app.py",
   "kit": ">=0.1.0",
   "models": [
@@ -263,14 +294,16 @@ app.py 里**没有**任何 sys.path 自举代码，`import kit.app` 由启动方
 - `gen_catalog.py` 把它们哈希后，作为 **catalog 顶层 `models[]` 条目**发出
   `{url, filename, sha256, size, target_path}`（**与 manifest 里那份 per-app 的 `models[]` 不是同一个东西**：
   manifest `models[]` 描述模型元数据供 kit/supervisor 用，catalog `models[]` 描述"装机前要下载并落到哪个目录"）；
-- 安装时**浏览器先把这些文件下载 + sha256 校验，再 `POST /api/appMgr/putModel` 写到 `target_path`，
-  然后才装 app 包**（install 流程见 §6）。
+- 这是 legacy catalog 的共享模型形态；`putModel` 现在只允许设备本机 loopback
+  迁移工具调用，公网 nginx 返回 410。当前 Web/manifest v2 首版把所需模型作为
+  package 的 authenticated bundled artifact 一起上传和安装（流程见 §6）。
 
-**活样本 voice-transcribe**：manifest `models: []`、`needs_model: false`、
-`interpreter: /userdata/rknnenv/bin/python`；共享模型 4 个文件
-（`sensevoice_rv1126b_w4a16.rknn` 133 MB + `am.mvn` + `embedding.npy` +
-`chn_jpn_yue_eng_ko_spectok.bpe.model`）→ `target_path=/userdata/local/models/asr`
-（`models.json:3-11`）。其余 8 个 app 的 catalog `models[]` 为空（模型仍在包里）。
+**legacy 样本 voice-transcribe**：旧 catalog 曾以 `models: []`、
+`needs_model: false` 配合 `target_path=/userdata/local/models/asr` 分发共享模型。
+当前 manifest v2 仍以 `needs_model: false` 表示“不走 kit 的视频模型加载器”，但 RK ASR、
+VAD、BPE 与 KWS 文件均在 `artifacts[]` 中声明并随签名包安装到
+`apps/voice-transcribe/models/asr/`；per-release venv 也由 `python.wheels[]` 构建。
+RK 后端通过 `inferenced` 时只授权这个安装路径。
 
 ---
 
@@ -290,14 +323,16 @@ python3 build.py ../../apps/my-app --out /tmp/out  # 指定输出目录
 
 ```
 manifest.json      ← 必须在顶层（installer/gen_catalog 都 getmember("manifest.json")）
-app.py             ← 必须存在，否则 build.py 报错
+app.py             ← 示例入口；实际以 manifest.entry 声明的相对路径为准
+icon.png           ← 若 manifest.icon 声明则必须存在，并进入 v2 BOM
 models/…           ← 若声明了模型
 hooks/ run         ← 若存在
 ```
 
 要点（`build.py`）：
 
-- 只收 `INCLUDE_TOP` 五项，自动剔除 `__pycache__`/隐藏文件/`.pyc`/`kit/`。
+- 收集完整 app 文件树，自动剔除 `__pycache__`/隐藏文件/`.pyc`/`kit/`/构建产物，
+  并应用可选的 `manifest.package.exclude`；声明的入口、图标和 bundled payload 不能被排除。
 - **完全确定性（可复现）打包**：同样的输入字节 → 同样的输出字节 → 同样的 sha256，
   从根上杜绝"catalog 里的 checksum 和实际服务的包对不上"这个 bug。两处非确定性都被钉死
   （`build.py:82-109`）：
@@ -335,9 +370,15 @@ zip-slip/tar-bomb 防护，最后才解包。
 | 密钥 | 位置 | 在仓库？ | 在设备？ |
 |---|---|---|---|
 | 私钥 `release_priv.pem` | `~/.recamera_release_key/`（chmod 600） | 否，永不 | 否，永不 |
-| 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随 appmgr 部署到 `/userdata/local/appmgr/keys/`） |
+| Vendor 公钥 `release_pub.pem` | `market/appmgr/keys/release_pub.pem` | 是（已提交） | 是（随固件部署到只读 `/usr/lib/recamera/appmgr/keys/`） |
+| Owner 公钥 `*.pem` | 设备所有者配置 | 否 | `/userdata/local/appmgr/keys/owners/` |
 
-设备侧唯一信任锚就是这份公钥（`paths.py:46-47`，可用 `APPMGR_RELEASE_PUBKEY` 覆盖）。
+Vendor 公钥始终是不可变信任锚；owner trust store 只能扩展、不能替换它。公钥与
+owner 目录均禁止 symlink 和 group/world writable，且受公钥数量/大小上限约束。验签结果返回
+`signer_kind`（`vendor`/`owner`）及规范 SPKI 的 SHA-256 `key_fingerprint`。应用包本身禁止携带
+PEM/私钥容器或 trust-store 目录。设备所有者必须通过独立的
+`POST /api/app-center/v1/trust/owners` 管理操作显式确认并导入 P-256 公钥；上传、preflight、
+manifest 和安装流程都不会自动导入或信任包中提供的密钥。
 
 ### 怎么签一个包
 
@@ -351,8 +392,23 @@ python3 sign.py --verify    # 可选：拿公钥回验
 
 ### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`paths.py:56-57`）
 
-- 默认 **1（开）**：**无签名的包被拒**；**签名错误的包永远被拒**。
-- **0**：允许无签名包（审计告警）；签名错误仍拒。这是迁移/兜底开关。
+- 默认 **1（开）**：direct API、future cloud、legacy/global installer 的**无签名包被拒**。
+  本地 Web v1 上传是唯一产品例外：请求必须经过 nginx JWT 鉴权并通过同源 `Origin` 门禁；nginx
+  在鉴权成功后覆盖写入内部 route stamp，appmgr 据此生成
+  `source=local-web` / `channel=app-center-v1-same-origin`。客户端 multipart/JSON 自报
+  `source`/`channel` 无效，finalize 若携带这两个字段反而直接拒绝。现役 React 同时发送
+  `Authorization: Bearer ...`；只要 post-auth stamp 与严格同源 Origin 成立，该头不会把请求降级为 direct。
+- 本地 Web unsigned preflight 返回 `critical` 的 `unsigned-root-code` 警告，明确提示发布者身份
+  未验证且应用代码以 root 运行；前端必须展示警告，并在 finalize 提交严格布尔值
+  `unsigned_risk_confirmed:true`。这是唯一的 unsigned 风险确认字段（权限确认仍独立）；旧客户端
+  多发 `developer_mode` 布尔字段可兼容，但它不参与准入。缺少风险确认即拒绝。安装完成后保持
+  **stopped**，即使它升级的是正在运行的应用也不会自动重启；用户须另行显式 Start。
+- **签名错误/伪造的包在所有通道永远拒绝**，不会降级成 unsigned。无 `Origin` 的 API/Bearer、
+  未带服务端可信 route stamp 的直连以及未来 cloud/legacy 通道均不获得本地 Web 豁免。
+- `APPMGR_REQUIRE_SIGNATURE=0` 只保留为受控迁移/历史 installer 兜底开关；本地 Web 正常交互
+  无需也不应修改此全局配置。Web-native v1 的 direct/future-cloud 来源即使在该历史开关关闭时
+  仍硬拒 unsigned；`GET /api/app-center/v1/policy` 因此始终报告 `signature.required:true`，并用
+  `signature.local_web_unsigned` 单独描述唯一例外。
 - 已安装的 app 不会被重新验签，翻这个开关不会弄死在跑的设备，只影响新安装。
 - 有签名但设备上没有公钥 → **fail closed**（拒装，`signing.py:128-131`）。
 
@@ -361,19 +417,18 @@ python3 sign.py --verify    # 可选：拿公钥回验
 **机制完整，生态不完整。** 逐条核实：
 
 - 签名/验签的机制是**完整可用**的：`keygen.sh`/`sign.py`/`signing.py` 全链路能跑，
-  仓库里 `dist/` 的 **9 个包**都有有效 `.sig` 且已嵌入 `catalog.json`
-  （含较新的 voice-transcribe，现已签名上架），
-  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 公钥。
-- 但这是**单密钥自签模型**，不是 CA / 开发者证书体系：
-  - 只有**一对**密钥。谁跑了 `keygen.sh`、谁手里就有能让全设备信任的私钥。仓库里这枚公钥
-    对应的私钥由发布方（Seeed，样本 `author` 为 "Seeed reCamera Pro"）持有。
-  - **没有面向第三方方案商的证书签发流程**。方案商自己签的包，出厂设备的信任锚（Seeed 公钥）
-    验不过 → 默认策略下装不上。
-- 因此，方案商要让包装进"出厂设备的应用中心"，当前只有三条路，**都需要额外配合或降级**：
+  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 Vendor 公钥。
+- 构建生成的 `market/packaging/dist/` 被 Git 忽略，源码检出不会自带九个发布包；测试目录中的
+  包也可能由某个 Owner 测试密钥签名，不能假定出厂固件会信任。正式分发必须同时发布与包字节
+  匹配的 `.tar.gz.sig`，并由设备已信任的 Vendor 或 Owner 私钥签署。
+- 这不是 CA / 开发者证书体系：Seeed 发布包由 vendor 私钥签名；设备所有者可显式配置自己的
+  P-256 公钥，但仓库仍未定义面向第三方方案商的证书签发/吊销流程。
+- 因此，方案商要让包装进"出厂设备的应用中心"，当前有三条路：
   1. **由 Seeed 侧签发**（把包交给持私钥方签名）—— 需 Seeed 配合，流程未在本仓库定义；
-  2. **自管设备群**：把设备上的 `release_pub.pem` 换成自己的公钥，用自己的私钥签
-     （或用 `APPMGR_RELEASE_PUBKEY` 指向自己的锚）；
-  3. **关闭强制**：`APPMGR_REQUIRE_SIGNATURE=0` 允许无签名安装（牺牲真伪保证）。
+  2. **自管设备群**：把自己的公钥安全放进持久化 owner trust store，用自己的私钥签；vendor
+     公钥保持不变且继续受信；
+  3. **设备本地开发/测试**：从已登录的同源 Web 应用中心上传，阅读 root 风险警告并二次确认；
+     包只会被安装为 stopped。不要为了这个流程关闭全局强制签名。
 
 > 结论：**签名基础设施已就绪，但"第三方开发者证书 / 上架签发"这一环是半成品，需 Seeed 侧配合才能形成
 > 面向生态的信任链。** 规格 §1（第 18-20 行）也把"打包分发/签名"列为 P1/P2、不在当前固件范围。
@@ -466,8 +521,10 @@ url/checksum 永不手写。缺 `.sig` 会打印 `WARN … UNSIGNED`（默认策
 ### 装到设备的流程
 
 设备在常见 USB 组网下没有外网路由（`gen_catalog.py:5-10`），所以**由浏览器代下**。
-浏览器侧 install 分两阶段（前端 `AppStore.js` 的 install 逻辑 + `appmgrClient.putModel()`，
-在官方 web-native 前端仓；契约核实自 `server.py`/`modelstore.py`）：
+以下两阶段流程只描述 **legacy loopback 迁移链路**，不再是 Web-native 前端行为；
+公网 exact `/api/appMgr/putModel` 和 `/api/appMgr/upload` 均返回 410。当前 Web 前端
+上传 manifest v2 package 到 `/api/app-center/v1/uploads`，模型/依赖作为经过 BOM
+认证的 bundled artifacts 随包进入同一 preflight/install 事务：
 
 ```
 [阶段 0：共享模型 models-first 循环]  —— 仅当 catalog 该 app 的 models[] 非空
@@ -499,7 +556,7 @@ for m in app.models:
   拒绝覆盖目标处已存在的符号链接；大小 `1..256 MB`（`APPMGR_MAX_MODEL_BYTES`，与 nginx
   `client_max_body_size 256m` 对齐）；**原子写**（同目录 temp + fsync + `os.replace`）；
   给了 `X-Sha256` 就复核，**不符即删**（绝不在盘上留半截/被篡改的模型）。
-- **鉴权**：走现有 nginx `/api/appMgr/` 的同一道 JWT 边界（`ext_appmgr.conf`），无新增边界。
+- **边界**：仅 loopback 迁移工具可用；公网 nginx exact location 返回 410。
   单元测试见 `market/appmgr/tests/test_modelstore.py`。
 
 设备本地也可直接用 CLI（`__main__.py`）：`python3 -m appmgr install <pkg.tar.gz>`
@@ -557,8 +614,103 @@ arch/package/models，`gen_catalog.py:265-275`）；设备安装后从包里读 
 
 ## 7. 安装/管理 API 参考
 
-Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（同源 cookie `token`）把关。
-路径尾部斜杠会被 strip（`server.py:443,481`）。核实自 `server.py`。
+Loopback `127.0.0.1:8130`；公网侧用官方 JWT（同源 cookie `token`）把关。官方 React
+应用中心只调用 `/api/app-center/v1/`；`/api/appMgr/` 是兼容旧工具的接口。两者都由
+appmgr 提供，但 nginx **没有** `/api/v1/` 别名，以免覆盖 SenseCraft/cloud proxy。
+浏览器的动态请求还受同源 `Origin` 检查保护（WebSocket 也一样）；跨站 Origin
+直接返回 403。设备本机脚本可直接访问 loopback。经 nginx 调用的非浏览器脚本应
+显式提供与设备 URL 一致的 `Origin`，并携带有效登录 Cookie；不要依赖浏览器会
+自动附带的 Cookie 作为跨站 API 凭据。
+
+Web-native manifest v2 主流程：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/app-center/v1/policy` | 返回运行时 manifest 版本、multipart/解包/暂存限制，以及签名/本地 unsigned 策略 |
+| GET | `/api/app-center/v1/trust` | 列出 Vendor/Owner 公钥的规范 SPKI 指纹；不返回 PEM 内容 |
+| POST | `/api/app-center/v1/trust/owners` | 显式确认并安装 Owner P-256 PEM 公钥；新建返回 `201`，相同密钥幂等返回 `200` |
+| DELETE | `/api/app-center/v1/trust/owners/<64hex>` | 按 SHA-256 SPKI digest 删除 Owner 公钥；Vendor 指纹不可删除 |
+| POST | `/api/app-center/v1/uploads` | 受 JWT+同源边界保护的流式 multipart 上传并 preflight；返回服务端 `source/channel`、`upload_id`、manifest、权限、签名、警告、start-time admission 说明和 `release_id` |
+| DELETE | `/api/app-center/v1/uploads/<upload_id>` | 幂等取消未进入安装阶段的暂存上传；安装已排队/进行中返回 `409` |
+| POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限；unsigned 还必须显式确认 `unsigned_risk_confirmed:true`，提交异步安装 |
+| GET | `/api/app-center/v1/apps` | 列出多应用状态 |
+| POST | `/api/app-center/v1/apps/<id>/{start,stop,restart}` | 提交异步生命周期操作 |
+| GET/PUT | `/api/app-center/v1/apps/<id>/config` | 读取或更新单应用配置 |
+| GET/PUT | `/api/app-center/v1/apps/<id>/visualization` | 读取或切换该应用结果是否烧录到设备视频流；能力由受信 manifest 判定 |
+| GET | `/api/app-center/v1/apps/<id>/logs` | 读取有界日志尾部 |
+| DELETE | `/api/app-center/v1/apps/<id>` | 提交异步卸载 |
+| GET | `/api/app-center/v1/operations` | 查询异步操作状态 |
+| GET | `/api/app-center/v1/resources` | 查询系统/应用资源视图 |
+| GET | `/api/app-center/v1/events` | SSE 状态更新流 |
+
+`policy` 使用 `{manifest, upload, signature}` 嵌套 envelope；其中
+`upload.max_package_bytes`、`max_signature_bytes` 和 `filename_pattern` 直接来自设备当前
+运行时门禁，前端不应复制编译期常量。`signature.owner_keys` 同样报告 Owner 密钥管理能力、
+PEM/P-256 格式、密钥数量/字节上限，以及必须显式确认的约束。
+`signature.local_web_unsigned` 明确给出本地例外的服务端 source/channel、确认字段、警告 code
+和 `auto_start:false`；它不等于全局 developer mode，也不能用于 direct/cloud 请求。
+
+Unsigned preflight 的关键契约如下（字段由服务端产生）：
+
+```json
+{
+  "source": "local-web",
+  "channel": "app-center-v1-same-origin",
+  "signature": {
+    "status": "unsigned",
+    "unsigned_install_allowed": true
+  },
+  "warnings": [{"code": "unsigned-root-code", "severity": "critical"}],
+  "unsigned_confirmation": {
+    "required": true,
+    "fields": ["unsigned_risk_confirmed"],
+    "confirmation_field": "unsigned_risk_confirmed",
+    "expected": true,
+    "auto_start": false
+  },
+  "conflicts": [],
+  "start_admission": {
+    "enforced_on": "start",
+    "live_resources": "deferred",
+    "dependencies": "deferred"
+  }
+}
+```
+
+上传/preflight/install 仍静态验证 manifest 的资源声明是否合法，但不会查询或占用当前 live
+reservation，也不会探测依赖是否在线。实际资源冲突、内存/存储/温度余量和依赖可用性统一在
+`start` 时由 coordinator 重新采样并原子准入；因此别的应用正在占用资源可以让后续 Start
+进入 waiting/失败，但不能阻止有效包的上传或安装。`GET /api/app-center/v1/resources` 的
+`runtime_admission` 只用于诊断展示，不是资源租约。
+
+Owner 导入 body 为
+`{"label":"factory-floor","public_key":"-----BEGIN PUBLIC KEY-----…","confirm_trust":true}`。
+`label` 只允许 1–48 个 ASCII 字母、数字、点、下划线或连字符；`public_key` 只接受 P-256
+公开 PEM，服务端规范化后以 `0600` 原子写入持久化 Owner store。`confirm_trust` 必须严格为
+布尔值 `true`，避免普通上传动作扩大设备信任面。GET 返回 `{"keys":[...]}`；每项包含
+`kind`、`fingerprint`、`algorithm` 和 `removable`，Owner 另含 `label`。DELETE 路径使用
+`sha256:` 后面的 64 位十六进制 digest。不存在返回 `404`，Vendor 修改或命名冲突返回 `409`，
+无效 PEM/字段返回 `400`。POST/DELETE 都经同源 mutation 门禁、全局 busy gate、audit log
+和 `trust` SSE 事件；不得把私钥或 PEM 全文写入 audit/event。
+
+删除 Owner key 只改变**后续** package/runtime bundle 的验签结果：appmgr 不会追溯重验、撤销、
+停止或卸载已经安装的代码。需要撤销已部署应用时，设备所有者必须另行停止并卸载对应应用。
+同样，上传与 preflight 仅用当前 trust store 验证签名，绝不从 package、manifest、边车签名或
+其他上传字段自动提取、安装或信任任何公钥材料。
+
+上传取消与 finalize 串行，并在上传状态锁内完成
+“读状态→删除”：`install_queued`/`installing` 一律保留并返回 `409`；合法但未知或已经删除的
+32 位十六进制 ID 返回 `200 {deleted:false,state:"absent"}`，所以断线重试不会把成功清理误报
+成失败；成功删除返回 `200 {deleted:true,state:"deleted",previous_status}`。格式不合法的 ID
+不匹配路由并返回 `404`。DELETE 与其他 mutation 一样继续受 JWT 边界和同源 `Origin` 门禁。
+
+以下是 legacy `/api/appMgr/` 兼容参考：
+
+> 安全边界：`/api/appMgr/upload` 与 `/api/appMgr/putModel` 的历史实现会把完整
+> raw body 放进 appmgr 内存，因此 nginx 公网边界对这两个 exact path 固定返回
+> **410 Gone**。它们只保留给 loopback 迁移工具。Web 应用必须使用流式、有总配额的
+> `/api/app-center/v1/uploads`，依赖/模型按 manifest v2 bundled 或 content-addressed
+> artifact 声明。
 
 | 方法 | 路径 | 入参 | 返回 | 源码 |
 |---|---|---|---|---|
@@ -567,10 +719,10 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 | POST | `/api/appMgr/uninstall` | `{id}` | `{id, uninstalled:true, stopped, was_active}`（先停→清 active→删 app 目录 + per-app venv；共享 models 不动） | `server.py:513-517` / `do_uninstall:209` / `installer.uninstall:180` |
 | POST | `/api/appMgr/switch` | `{id}` | `{active_app, pid, prev}` | `server.py:518-522` / `do_switch:243` |
 | POST | `/api/appMgr/stop` | `{id?}` | `{stopped, detail}`（无 active 时 `{stopped:null, note}`） | `server.py:523-524` / `do_stop:268` |
-| POST | `/api/appMgr/upload` | raw tar.gz 字节 + `X-Filename` 头 | `{path, filename, size}` | `server.py:484-492` / `do_upload:134` |
-| POST | `/api/appMgr/putModel` | raw model 字节 + 头 `X-Filename`/`X-Target-Path`/`X-Sha256?` | `{path, filename, size, sha256}`（sha256 不符即删并报 400） | `server.py:495-505` / `do_putmodel:180` / `modelstore.write_model:98` |
+| POST | `/api/appMgr/upload` | **仅 loopback**；公网 nginx 返回 410 | 历史 raw package staging | `server.py` / `do_upload` |
+| POST | `/api/appMgr/putModel` | **仅 loopback**；公网 nginx 返回 410 | 历史 raw model staging | `server.py` / `modelstore.write_model` |
 | GET | `/api/appMgr/config` | query `?id=` | `{id, config_schema, values, defaults}` | `server.py:446-453` / `do_get_config:279` |
-| POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved:true, restarted, config}`（active 且在跑则重启生效） | `server.py:525-531` / `do_set_config:288` |
+| POST | `/api/appMgr/config` | `{id, config:{...}}` | `{id, saved, applied:"none"|"live"|"restart", changed_keys, noop, restarted, reloaded, config}`；仅真实 effective delta 参与 apply 分类 | `server.py:do_set_config` |
 | GET | `/api/appMgr/mqtt` | — | 全局 MQTT/HA 配置（密码脱敏为 `password_set`） | `server.py:454-455` / `do_get_mqtt:389` |
 | POST | `/api/appMgr/mqtt` | `{mqtt:{...}}` 或平铺 | 同上视图 + `restarted`（改后重启 active app 生效） | `server.py:532-536` / `do_set_mqtt:394` |
 | GET | `/api/appMgr/metrics` | — | `{npu_load, mem, temp_c, active_app, uptime_s, ts}` | `server.py:456-457` / `do_metrics:371` |
@@ -601,7 +753,8 @@ Loopback `127.0.0.1:8130`；公网侧经 nginx `/api/appMgr/` 用官方 JWT（�
 - **包体上限**：压缩 ≤200 MB、解包 ≤400 MB、成员 ≤4096（`paths.py:63-65`）。
 - **当前样本**：`apps/` 有 9 个 app 目录，`catalog.json`（现为 CDN 形态）**9 个应用全部已签名收录**
   （face-analysis / facemesh-reader / fall-detection / fitness-trainer / ppocr-reader /
-  qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。其中 8 个模型随包 bundle
-  （catalog `models[]` 为空）；**voice-transcribe 是共享模型链路的活样本**——manifest `models: []`、
-  catalog `models[]` 有 4 个文件（133 MB rknn + 3 个资源）→ `/userdata/local/models/asr`，
-  装机前由浏览器 `putModel` 落盘（见 §3、§6）。
+  qrcode-reader / retail-vision / yolo-detector / voice-transcribe）。manifest v2 的 9 个样本所需
+  模型均以 authenticated bundled artifacts 随包安装（catalog `models[]` 为空）；
+  voice-transcribe 的 `models: []` 只是不使用 kit 的视频模型加载器，其 ASR/VAD/KWS 资产在
+  `artifacts[]` 中并落到 app root 的 `models/asr/`。旧 catalog 的共享模型/`putModel` 链路
+  仅供 loopback 迁移，公网已关闭（见 §3、§6）。

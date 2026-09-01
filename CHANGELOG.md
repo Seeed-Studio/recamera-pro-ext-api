@@ -3,8 +3,27 @@
 本文件记录 reCamera Pro 扩展 API 与 SDK 面向用户的版本变更，格式遵循
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循语义化版本。
 
-SDK soname 为 `librecamera_ext.so.1`；API 版本为 `frame@1 / result@1 / probe@1`。
+SDK soname 为 `librecamera_ext.so.1`；API 版本为 `frame@1 / result@1 / probe@1 /
+inference-control@1`。
 除非另有说明，各次发布均保持 ABI 向后兼容（新增符号，soname 不变）。
+
+## [1.3.0] - 2026-08-19
+
+### 新增
+- **NPU 单 owner broker client**：新增 `rc_ext_inference_lease_open/ready/status/alive/
+  set_fallback/close/abandon_after_fork`，连接
+  `/run/recamera/inference-control.sock`。rkipc 只在内建 RKNN handle 真正销毁且
+  `state=stopped`、`actual_fps=0` 后授予连接生命周期 lease。
+- lease 状态包含 `lease_id`、`epoch`、`generation` 和 authoritative builtin
+  状态；连接 HUP 自动回收，fork child 可 close-only abandon，不误发 RELEASE。
+- Python distribution `recamera-ext 1.4.0` 新增 typed `InferenceLease`；高层
+  `ExternalNpuLease`/`RknnSession` 默认使用 broker，并在 broker-required 模式下
+  fail closed，不回退 legacy flock。
+
+### 兼容性
+- 仅新增 C 符号和 wire capability，`librecamera_ext.so.1` SONAME 不变。
+- 当前 generation 保护 NPU 控制租约；frame/result/probe 数据连接绑定留给下一
+  协议版本。目标板 kill/restart/OTA 矩阵仍是正式发布门禁。
 
 ## [1.2.0]
 
@@ -41,6 +60,7 @@ SDK soname 为 `librecamera_ext.so.1`；API 版本为 `frame@1 / result@1 / prob
   加载同一 `.so`）；结果发送覆盖 detections / classification / segmentation / tracking /
   keypoints。
 
+[1.3.0]: #130
 [1.2.0]: #120
 [1.1.0]: #110
 [1.0.0]: #100

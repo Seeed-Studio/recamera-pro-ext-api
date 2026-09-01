@@ -1,9 +1,84 @@
 {
+  "manifest_version": 2,
+  "release": {"sequence": 3, "channel": "stable"},
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [
+    {
+      "id": "face-detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/yolov8n_face_rawhead_fp16.rknn",
+      "sha256": "2bd39fb861b4ceb9cfa8a2d1b5c7c8d83a9d4a711636ccb3a88c1aec0801a524",
+      "size": 7106678,
+      "mount": "models/yolov8n_face_rawhead_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "fairface",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/fairface_fp16.rknn",
+      "sha256": "e37aadc6b6e15a7a16c521b2a90b1557b454e9dd8d7d150abdda05be6ee04bf7",
+      "size": 42796144,
+      "mount": "models/fairface_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "emotion",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/emotion_enet_b0_fp16.rknn",
+      "sha256": "32b33fe438b658f6a06d4e18ab150ab319e9f05f26ba52fd2738bc5fc82d3df0",
+      "size": 10479599,
+      "mount": "models/emotion_enet_b0_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {"name": "camera.frames", "mode": "shared", "required": true},
+      {"name": "npu.rknn", "mode": "scheduled", "required": true},
+      {"name": "rga", "mode": "shared", "required": true},
+      {"name": "result.publish", "mode": "brokered", "required": true}
+    ],
+    "limits": {"memory_mb": 512, "cpu_percent": 300, "storage_mb": 96, "shutdown_grace_sec": 10}
+  },
+  "permissions": {
+    "sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"],
+    "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]},
+    "network": {"listen": [], "outbound": ["configured.outputs"]}
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}
+  },
+  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
   "id": "face-analysis",
   "name": "Face Analysis",
   "name_zh": "客群分析",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "image": "/appcenter/apps/face-analysis.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Retail & Audience",
   "scene_zh": "零售客群",
@@ -11,12 +86,9 @@
   "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
-  "kit": ">=0.1.0",
-  "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
     "output"
   ],
-  "privacy_blur": true,
   "models": [
     {
       "id": "yolov8n_face_rawhead_fp16",
@@ -78,11 +150,23 @@
       "role": "stage3_emotion"
     }
   ],
-  "default_model": "yolov8n_face_rawhead_fp16",
+  "x-default_model": "yolov8n_face_rawhead_fp16",
   "postproc": "face_detect",
+  "render": {
+    "schema_version": 1,
+    "boxes": {"color_by": "emotion", "label": "gender", "line_width": 2},
+    "events": {
+      "demographics": {
+        "as": "panel",
+        "position": "top-left",
+        "fields": ["faces", "gender", "age", "race", "emotion"]
+      }
+    },
+    "stream_osd": {"supported": ["boxes"], "default": false}
+  },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
-    "port": 8124,
     "schema": "results[]{box,score,blur,gender,gender_conf,age,age_conf,race,race_conf,emotion,emotion_conf} + events[]{kind=face|demographics,...}",
     "topic": "recamera/face-analysis/results",
     "default_channel": [

@@ -497,6 +497,32 @@ class RetailNewShapeTests(_Base):
         finally:
             app.finish()
 
+    def test_live_reload_replaces_spatial_geometry_at_frame_boundary(self):
+        app = _load_new_app_class()()
+        app.start(None, sink=_RecordingSink(), verbose=False, app_dir=APP_DIR,
+                  manifest=self.manifest, config=dict(EFF))
+        try:
+            old_zone, old_line = app.zone, app.line
+            changed = app._bind_params(
+                {
+                    "count_zone": [[0.2, 0.2], [0.8, 0.2],
+                                   [0.8, 0.8], [0.2, 0.8]],
+                    "entry_line": {"a": [0.1, 0.5], "b": [0.9, 0.5],
+                                   "in": "left"},
+                },
+                live_only=True,
+            )
+            self.assertEqual(changed, {"count_zone", "entry_line"})
+            app.on_params_changed(changed)
+            self.assertIsNot(app.zone, old_zone)
+            self.assertIsNot(app.line, old_line)
+            self.assertTrue(app.zone.enabled)
+            self.assertTrue(app.line.enabled)
+            self.assertEqual(app.line.entry_count, 0)
+            self.assertEqual(app.line.exit_count, 0)
+        finally:
+            app.finish()
+
 
 class _MixedClassModel(_FakeModel):
     """One person + one chair, both above threshold, in every frame.

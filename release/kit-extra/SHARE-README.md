@@ -13,13 +13,17 @@
 
 ## ① 前提：设备已装扩展 API 固件
 
-本包**不含固件**。设备上的 rkipc 必须是含扩展 API 的版本，即 `/run/recamera/` 下存在这三个 socket：
+本包**不含固件**，且本目录本身也是早于当前 Python 1.4/broker 契约的历史
+分享快照。当前设备不仅要有 frame/result/probe，还必须有版本匹配的 NPU
+broker，并完成真实握手（仅检查 inode 不足以证明兼容）：
 
 ```sh
-ls -l /run/recamera/frame.sock /run/recamera/result-in.sock /run/recamera/probe.sock
+ls -l /run/recamera/frame.sock /run/recamera/result-in.sock \
+  /run/recamera/probe.sock /run/recamera/inference-control.sock
 ```
 
-三个都在 → 可直接用本包。若不存在，先刷固件包 `recamera-ext-api-v1.2.0.tar`（另行分发），再回来装本包。
+不要再刷历史 `recamera-ext-api-v1.2.0.tar`。应从 manifest 固定的当前源码
+构建并安装完整固件，再使用与该固件同一发布 train 的 SDK/Python 包。
 
 ## ② 安装
 

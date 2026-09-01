@@ -9,6 +9,8 @@ Pins the invariants the kit/appmgr schema code now relies on:
     in this repo may reintroduce it -- two parallel shapes is what forced every
     reader to carry a double branch.
   * no `pipeline` key: nothing reads it, so a published one silently misleads.
+  * every primary sample declares a bounded raster icon that is packaged with
+    the release, while retaining its catalog `image` URL for old clients.
 
 Run:  python3 -m pytest apps/test_manifest_schema.py
 """
@@ -23,8 +25,11 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from kit import config as kitconfig                                # noqa: E402
+from market.appmgr import manifest as manifest_contract            # noqa: E402
 
 _MANIFESTS = sorted(glob.glob(os.path.join(_ROOT, "apps", "*", "manifest.json")))
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_MAX_ICON_BYTES = 1024 * 1024
 
 
 def _load(path):
@@ -36,6 +41,36 @@ class ManifestSchemaShapeTests(unittest.TestCase):
 
     def test_manifests_found(self):
         self.assertGreaterEqual(len(_MANIFESTS), 9, _MANIFESTS)
+
+    def test_every_shipped_manifest_passes_the_production_v2_validator(self):
+        for path in _MANIFESTS:
+            with self.subTest(app=os.path.basename(os.path.dirname(path))):
+                self.assertEqual(manifest_contract.validate_manifest(_load(path)), 2)
+
+    def test_every_shipped_manifest_declares_a_safe_packaged_icon(self):
+        """Examples must work after install without a front-end asset rebuild."""
+        for path in _MANIFESTS:
+            app_dir = os.path.dirname(path)
+            app_id = os.path.basename(app_dir)
+            manifest = _load(path)
+            with self.subTest(app=app_id):
+                self.assertEqual(manifest.get("icon"), {
+                    "path": "icon.png",
+                    "media_type": "image/png",
+                })
+                # Keep the catalog thumbnail for old catalog clients while the
+                # declared package asset is authoritative after installation.
+                self.assertEqual(
+                    manifest.get("image"), f"/appcenter/apps/{app_id}.png")
+                icon_path = os.path.join(app_dir, manifest["icon"]["path"])
+                self.assertFalse(os.path.islink(icon_path))
+                self.assertTrue(os.path.isfile(icon_path))
+                size = os.path.getsize(icon_path)
+                self.assertGreater(size, len(_PNG_SIGNATURE))
+                self.assertLessEqual(size, _MAX_ICON_BYTES)
+                with open(icon_path, "rb") as icon_file:
+                    self.assertEqual(icon_file.read(len(_PNG_SIGNATURE)),
+                                     _PNG_SIGNATURE)
 
     def test_config_schema_is_grouped(self):
         for path in _MANIFESTS:
@@ -90,6 +125,24 @@ _DELIBERATE_NUMBER_KEYS = {
     "fitness-trainer": {"idle_reset_seconds"},
     "retail-vision": {"dwell_assist", "dwell_speed", "window_duration"},
 }
+
+
+class RuntimeApplySemanticsTests(unittest.TestCase):
+
+    def test_voice_graph_parameters_require_restart(self):
+        """These values are captured by source/VAD/KWS/SM constructors."""
+
+        man = _load(os.path.join(_ROOT, "apps", "voice-transcribe",
+                                 "manifest.json"))
+        specs = kitconfig.schema_items(man)
+        captured = {
+            "wakeword", "min_silence_sec", "max_utterance_sec",
+            "preroll_ms", "listen_timeout_sec", "audio_filter",
+        }
+        self.assertEqual(
+            {key: specs[key]["apply"] for key in captured},
+            {key: "restart" for key in captured},
+        )
 
 
 class IntegerSemanticsTests(unittest.TestCase):
@@ -183,9 +236,9 @@ class RenderDeclarationTests(unittest.TestCase):
         self.assertEqual(kp["point_radius"], 1)
         self.assertEqual(kp["skeleton"], [], "468 landmarks: dots only")
 
-    def test_yolo_colours_boxes_by_label(self):
+    def test_yolo_colours_boxes_by_emitted_class_name(self):
         self.assertEqual(self._render("yolo-detector")["boxes"]["color_by"],
-                         "label")
+                         "cls_name")
 
     def test_every_declaration_uses_known_vocabulary(self):
         for path in _MANIFESTS:

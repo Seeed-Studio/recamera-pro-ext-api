@@ -102,6 +102,15 @@ class ReadyHandshakeTests(unittest.TestCase):
         paths.KIT_DIR = kit
         supervisor._apps.clear()
         del supervisor._reaped[:]
+        # do_switch now crosses the real firmware teardown barrier before it can
+        # launch this host-test app.  Stub only that device boundary; startup and
+        # process cleanup below remain real.
+        real_stop = server.builtin.stop
+        real_running = server._builtin_running
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
+        server._builtin_running = lambda: False
+        self.addCleanup(lambda: setattr(server.builtin, "stop", real_stop))
+        self.addCleanup(lambda: setattr(server, "_builtin_running", real_running))
         self._pids = []
         self.addCleanup(self._kill_all)
 
@@ -304,11 +313,14 @@ class SwitchRollbackTests(unittest.TestCase):
         self.fail_ids = set()
         orig = {n: getattr(server.supervisor, n)
                 for n in ("is_running", "start", "stop")}
+        builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in orig.items()])
+        self.addCleanup(lambda: setattr(server.builtin, "stop", builtin_stop))
         server.supervisor.is_running = lambda a: self.running.get(a)
         server.supervisor.start = self._fake_start
         server.supervisor.stop = self._fake_stop
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
 
     def _fake_start(self, app_id, **k):
         self.calls.append(("start", app_id))
@@ -359,11 +371,14 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.fail_ids = set()
         orig = {n: getattr(server.supervisor, n)
                 for n in ("is_running", "start", "stop")}
+        builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in orig.items()])
+        self.addCleanup(lambda: setattr(server.builtin, "stop", builtin_stop))
         server.supervisor.is_running = lambda a: self.running.get(a)
         server.supervisor.start = self._fake_start
         server.supervisor.stop = self._fake_stop
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
         server.cache_clear()
 
     def _fake_start(self, app_id, **k):
@@ -437,6 +452,42 @@ class UpgradeTransactionTests(unittest.TestCase):
         self.assertTrue(res["restarted"])
         self.assertEqual(self._installed_version(), "2.0.0")
         self.assertEqual(("start", self.APP), self.calls[-1])
+
+    def test_local_unsigned_upgrade_is_installed_stopped(self):
+        """A Web-approved unsigned upgrade never inherits a running state."""
+        server.do_install(self._pkg("1.0.0"))
+        state.set_active(self.APP, "1.0.0")
+        self.running[self.APP] = 999
+        self.calls.clear()
+
+        result = server.do_install(
+            self._pkg("2.0.0"), allow_unsigned=True,
+            expected_preflight={
+                "manifest": {
+                    "id": self.APP,
+                    "version": "2.0.0",
+                    "name": self.APP,
+                    "entry": "app.py",
+                },
+                "release_id": None,
+                "signature": {
+                    "status": "unsigned",
+                    "signer_kind": None,
+                    "key_fingerprint": None,
+                },
+                "source": server.V1_LOCAL_UPLOAD_SOURCE,
+                "channel": server.V1_LOCAL_UPLOAD_CHANNEL,
+            })
+
+        self.assertEqual(self.calls, [("stop", self.APP)])
+        self.assertFalse(result["restarted"])
+        self.assertFalse(result["auto_started"])
+        self.assertTrue(result["requires_manual_start"])
+        self.assertEqual(self._installed_version(), "2.0.0")
+        self.assertNotIn(self.APP, self.running)
+        self.assertIsNone(state.get_active())
+        self.assertEqual(
+            state.get_app(self.APP)["desired_state"], state.DESIRED_STOPPED)
 
 
 # --------------------------------------------------------------------------- #

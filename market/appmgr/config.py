@@ -13,8 +13,11 @@ Responsibilities:
 """
 from __future__ import annotations
 
+import base64
 import json
+import math
 import os
+import stat
 import tempfile
 import time
 from typing import Any, Dict, List, Tuple
@@ -22,15 +25,20 @@ from typing import Any, Dict, List, Tuple
 from . import paths
 
 
+_MAX_TEMPLATE_CHARS = 16 * 1024  # mirrors kit.adapters.output_sink
+
+
 # --------------------------------------------------------------------------- #
 # unified output capability -- injected config_schema group (OUTPUT_SINK_SPEC §3)
 # --------------------------------------------------------------------------- #
 def _output_schema_items(manifest: dict) -> List[dict]:
-    """The 8 flat `output` config keys, defaulted from the manifest `output`
-    block. Opaque control types (`mqtt`/`http`/`uart`/`templates`/
-    `field_mapping`/`channel_multi_select`/`output_filters`) validate opaquely
-    (see `_validate_one`), so the frontend SchemaForm can render them without a
-    backend code change."""
+    """The output config keys, defaulted from the manifest ``output`` block.
+
+    Complex controls have explicit validators in :func:`_validate_one`.  This
+    matters because these values are consumed by network/serial/template code;
+    accepting an arbitrary string here would only postpone a confusing failure
+    until the app is restarted.
+    """
     mout = (manifest or {}).get("output") or {}
     dc = mout.get("default_channel")
     channels = [dc] if isinstance(dc, str) else (list(dc) if dc else ["ws"])
@@ -41,6 +49,16 @@ def _output_schema_items(manifest: dict) -> List[dict]:
         {"key": "iMode", "type": "enum", "apply": "restart",
          "label": "Output mode", "options": ["ha", "custom", "raw"],
          "default": mout.get("default_mode", "raw")},
+        {"key": "template_mode", "type": "enum", "apply": "live",
+         "label": "Custom format source", "label_zh": "自定义格式来源",
+         "options": [
+             {"value": "mapping", "label": "Field mapping",
+              "label_zh": "字段映射"},
+             {"value": "template", "label": "Message template",
+              "label_zh": "消息模板"},
+         ],
+         # Preserve the historical mapping-first behaviour for existing apps.
+         "default": ("mapping" if mout.get("default_mapping") else "template")},
         {"key": "dMqtt", "type": "mqtt", "apply": "restart", "label": "MQTT",
          "default": {"iPort": 1883, "sClientId": "", "sUsername": "",
                      "sPassword": "", "sTopic": "recamera", "sURL": ""}},
@@ -164,6 +182,195 @@ def legacy_config_path(app_id: str) -> str:
     return os.path.join(paths.app_dir(app_id), "config.json")
 
 
+_UPGRADE_CONFIG_FILES = (
+    ("appdata", "config.json"),
+    ("appdata", "config.quarantine.json"),
+    ("appdata", "config.json.corrupt"),
+    ("legacy", "config.json"),
+    ("legacy", "config.json.migrated"),
+)
+_MAX_UPGRADE_CONFIG_FILE_BYTES = 1024 * 1024
+_MAX_UPGRADE_CONFIG_TOTAL_BYTES = 4 * 1024 * 1024
+
+
+def _upgrade_config_path(app_id: str, scope: str, name: str) -> str:
+    root = (paths.appdata_dir(app_id) if scope == "appdata"
+            else paths.app_dir(app_id))
+    return os.path.join(root, name)
+
+
+def snapshot_upgrade_config(app_id: str) -> dict:
+    """Capture every config file an upgrade may mutate, byte for byte.
+
+    The snapshot is JSON-serialisable so the install phase journal can recover
+    the same bytes after a daemon crash or power loss.  Refuse links and special
+    files: silently following one while preparing root code would turn rollback
+    into an arbitrary-file writer.
+    """
+    if not paths.valid_app_id(app_id):
+        raise ValueError("invalid app id %r" % app_id)
+    records = []
+    total_bytes = 0
+    appdata_root = paths.appdata_dir(app_id)
+    try:
+        appdata_info = os.lstat(appdata_root)
+    except FileNotFoundError:
+        appdata_existed = False
+    else:
+        if not stat.S_ISDIR(appdata_info.st_mode):
+            raise OSError("upgrade config root is not a directory: %s" % appdata_root)
+        appdata_existed = True
+    for scope, name in _UPGRADE_CONFIG_FILES:
+        pathname = _upgrade_config_path(app_id, scope, name)
+        try:
+            info = os.lstat(pathname)
+        except FileNotFoundError:
+            records.append({"scope": scope, "name": name, "present": False})
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("upgrade config path is not a regular file: %s" % pathname)
+        if info.st_size > _MAX_UPGRADE_CONFIG_FILE_BYTES:
+            raise OSError("upgrade config file is too large: %s" % pathname)
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(pathname, flags)
+        try:
+            opened = os.fstat(fd)
+            if (not stat.S_ISREG(opened.st_mode)
+                    or opened.st_dev != info.st_dev or opened.st_ino != info.st_ino
+                    or opened.st_size != info.st_size):
+                raise OSError("upgrade config changed while being snapshotted: %s" % pathname)
+            if opened.st_size > _MAX_UPGRADE_CONFIG_FILE_BYTES:
+                raise OSError("upgrade config file is too large: %s" % pathname)
+            with os.fdopen(fd, "rb", closefd=False) as source:
+                data = source.read(_MAX_UPGRADE_CONFIG_FILE_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) != opened.st_size:
+            raise OSError("upgrade config changed while being snapshotted: %s" % pathname)
+        total_bytes += len(data)
+        if total_bytes > _MAX_UPGRADE_CONFIG_TOTAL_BYTES:
+            raise OSError("upgrade config snapshot exceeds size limit")
+        records.append({
+            "scope": scope,
+            "name": name,
+            "present": True,
+            "mode": stat.S_IMODE(info.st_mode),
+            "data_b64": base64.b64encode(data).decode("ascii"),
+        })
+    return {
+        "schema_version": 1,
+        "app_id": app_id,
+        "appdata_existed": appdata_existed,
+        "files": records,
+    }
+
+
+def _atomic_write_bytes(pathname: str, data: bytes, mode: int) -> None:
+    directory = os.path.dirname(pathname)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".config-restore.", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, int(mode) & 0o777)
+        os.replace(temporary, pathname)
+        temporary = None
+        try:
+            directory_fd = os.open(
+                directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _fsync_parent(pathname: str) -> None:
+    directory = os.path.dirname(pathname)
+    try:
+        fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def restore_upgrade_config(snapshot: dict) -> None:
+    """Restore :func:`snapshot_upgrade_config` exactly and idempotently."""
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
+        raise ValueError("invalid upgrade config snapshot")
+    app_id = snapshot.get("app_id")
+    if not isinstance(app_id, str) or not paths.valid_app_id(app_id):
+        raise ValueError("invalid upgrade config snapshot app id")
+    for root in (paths.appdata_dir(app_id), paths.app_dir(app_id)):
+        try:
+            root_info = os.lstat(root)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISDIR(root_info.st_mode):
+            raise OSError("upgrade config root is not a directory: %s" % root)
+    expected = {(scope, name) for scope, name in _UPGRADE_CONFIG_FILES}
+    records = snapshot.get("files")
+    if not isinstance(records, list) or len(records) != len(expected):
+        raise ValueError("invalid upgrade config snapshot files")
+    seen = set()
+    total_bytes = 0
+    for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("invalid upgrade config snapshot record")
+        key = (record.get("scope"), record.get("name"))
+        if key not in expected or key in seen:
+            raise ValueError("invalid upgrade config snapshot path")
+        seen.add(key)
+        pathname = _upgrade_config_path(app_id, *key)
+        try:
+            current = os.lstat(pathname)
+        except FileNotFoundError:
+            current = None
+        if current is not None and not stat.S_ISREG(current.st_mode):
+            raise OSError("upgrade config path is not a regular file: %s" % pathname)
+        if record.get("present") is True:
+            try:
+                data = base64.b64decode(record.get("data_b64", ""), validate=True)
+                mode = int(record.get("mode", 0o600))
+            except (ValueError, TypeError) as exc:
+                raise ValueError("invalid upgrade config snapshot payload") from exc
+            if len(data) > _MAX_UPGRADE_CONFIG_FILE_BYTES:
+                raise ValueError("upgrade config snapshot file exceeds size limit")
+            total_bytes += len(data)
+            if total_bytes > _MAX_UPGRADE_CONFIG_TOTAL_BYTES:
+                raise ValueError("upgrade config snapshot exceeds size limit")
+            _atomic_write_bytes(pathname, data, mode)
+        elif record.get("present") is False:
+            try:
+                if current is not None:
+                    os.unlink(pathname)
+                    _fsync_parent(pathname)
+            except FileNotFoundError:
+                pass
+        else:
+            raise ValueError("invalid upgrade config snapshot presence")
+    if seen != expected:
+        raise ValueError("incomplete upgrade config snapshot")
+    if not snapshot.get("appdata_existed"):
+        try:
+            os.rmdir(paths.appdata_dir(app_id))
+        except OSError:
+            pass
+
+
 def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
@@ -253,12 +460,28 @@ def load_user_config(app_id: str) -> Dict[str, Any]:
     return {}
 
 
+def effective_values_from_overlay(manifest: dict,
+                                  overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Build effective values from one already-loaded sparse user overlay.
+
+    ``template_mode`` was introduced after ``output_mapping``/``dTemplate``.
+    For a legacy overlay that explicitly cleared mapping, retain the historical
+    template fallback even when the package itself ships a default mapping.
+    Once a user saves ``template_mode``, that explicit choice always wins.
+    """
+    eff = schema_defaults(manifest)
+    for k, v in (overlay or {}).items():
+        eff[k] = v
+    caps = (manifest or {}).get("capabilities") or []
+    if "output" in caps and "template_mode" not in (overlay or {}):
+        eff["template_mode"] = (
+            "mapping" if eff.get("output_mapping") else "template")
+    return eff
+
+
 def effective_values(manifest: dict, app_id: str) -> Dict[str, Any]:
     """Manifest defaults overlaid by the user's config.json (config.json wins)."""
-    eff = schema_defaults(manifest)
-    for k, v in load_user_config(app_id).items():
-        eff[k] = v
-    return eff
+    return effective_values_from_overlay(manifest, load_user_config(app_id))
 
 
 def write_user_config(app_id: str, config: Dict[str, Any]) -> None:
@@ -287,7 +510,12 @@ def write_user_config(app_id: str, config: Dict[str, Any]) -> None:
 # validation
 # --------------------------------------------------------------------------- #
 def _is_num(x) -> bool:
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    try:
+        return math.isfinite(float(x))
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 def _valid_point(p) -> bool:
@@ -295,10 +523,130 @@ def _valid_point(p) -> bool:
             and all(_is_num(c) and -0.001 <= c <= 1.001 for c in p))
 
 
+def _enum_values(spec: dict) -> Tuple[List[Any], str]:
+    """Return typed enum values from legacy scalars or labelled option objects."""
+    options = spec.get("options")
+    if not isinstance(options, list) or not options:
+        return [], "options must be a non-empty array"
+    values: List[Any] = []
+    for index, option in enumerate(options):
+        value = option
+        if isinstance(option, dict):
+            if "value" not in option:
+                return [], f"options[{index}] needs value"
+            unknown = set(option) - {"value", "label", "label_zh"}
+            if unknown:
+                return [], (f"options[{index}] has unknown field(s): "
+                            + ", ".join(sorted(unknown)))
+            for label_key in ("label", "label_zh"):
+                if label_key in option and not isinstance(option[label_key], str):
+                    return [], f"options[{index}].{label_key} must be a string"
+            value = option["value"]
+        if value is None or isinstance(value, (dict, list)) or not isinstance(
+                value, (str, int, float, bool)):
+            return [], f"options[{index}] value must be a JSON scalar"
+        if isinstance(value, float) and not math.isfinite(value):
+            return [], f"options[{index}] value must be finite"
+        if any(_enum_value_equal(value, old) for old in values):
+            return [], f"options[{index}] duplicates an earlier value"
+        values.append(value)
+    return values, ""
+
+
+def _enum_value_equal(left: Any, right: Any) -> bool:
+    """JSON-wire equality: numbers share one domain; bool/string stay typed."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if (isinstance(left, (int, float)) and isinstance(right, (int, float))):
+        return left == right
+    return type(left) is type(right) and left == right
+
+
+def _validate_string_map(key: str, value: Any, allowed: set[str], *,
+                         integer_fields: set[str] = frozenset()) \
+        -> Tuple[bool, Any, str]:
+    if not isinstance(value, dict):
+        return False, None, f"{key}: expected object"
+    unknown = set(value) - allowed
+    if unknown:
+        return False, None, (f"{key}: unknown field(s): "
+                             + ", ".join(sorted(unknown)))
+    out = dict(value)
+    for field, field_value in value.items():
+        if field in integer_fields:
+            if (not _is_num(field_value)
+                    or float(field_value) != int(float(field_value))):
+                return False, None, f"{key}.{field}: expected integer"
+            out[field] = int(field_value)
+        elif not isinstance(field_value, str):
+            return False, None, f"{key}.{field}: expected string"
+    return True, out, ""
+
+
+def _validate_mapping(key: str, value: Any) -> Tuple[bool, Any, str]:
+    if not isinstance(value, list):
+        return False, None, f"{key}: expected array"
+    if len(value) > 256:
+        return False, None, f"{key}: at most 256 mapping rows are allowed"
+    allowed = {"source", "target", "topic", "task", "omit_if_none"}
+    out = []
+    for index, row in enumerate(value):
+        prefix = f"{key}[{index}]"
+        if not isinstance(row, dict):
+            return False, None, f"{prefix}: expected object"
+        unknown = set(row) - allowed
+        if unknown:
+            return False, None, (f"{prefix}: unknown field(s): "
+                                 + ", ".join(sorted(unknown)))
+        for required in ("source", "target", "topic"):
+            if not isinstance(row.get(required), str) or not row[required].strip():
+                return False, None, f"{prefix}.{required}: expected non-empty string"
+        if "task" in row and not isinstance(row["task"], str):
+            return False, None, f"{prefix}.task: expected string"
+        if "omit_if_none" in row and not isinstance(row["omit_if_none"], bool):
+            return False, None, f"{prefix}.omit_if_none: expected boolean"
+        out.append(dict(row))
+    return True, out, ""
+
+
+def _validate_output_filters(key: str, value: Any) -> Tuple[bool, Any, str]:
+    if not isinstance(value, dict):
+        return False, None, f"{key}: expected object"
+    allowed = {"only_on_detection", "classes", "rate_limit_hz",
+               "preserve_edge_events"}
+    unknown = set(value) - allowed
+    if unknown:
+        return False, None, (f"{key}: unknown field(s): "
+                             + ", ".join(sorted(unknown)))
+    out = dict(value)
+    for field in ("only_on_detection", "preserve_edge_events"):
+        if field in value and not isinstance(value[field], bool):
+            return False, None, f"{key}.{field}: expected boolean"
+    if "rate_limit_hz" in value:
+        rate = value["rate_limit_hz"]
+        if not _is_num(rate) or not 0 <= float(rate) <= 1000:
+            return False, None, f"{key}.rate_limit_hz: expected number in [0,1000]"
+        out["rate_limit_hz"] = float(rate)
+    if "classes" in value:
+        classes = value["classes"]
+        if (not isinstance(classes, list) or len(classes) > 1024
+                or any(v is None or isinstance(v, (dict, list, bool))
+                       or not isinstance(v, (str, int, float))
+                       or isinstance(v, (int, float)) and not _is_num(v)
+                       for v in classes)):
+            return False, None, f"{key}.classes: expected scalar array"
+    return True, out, ""
+
+
 def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
     """Return (ok, coerced_value, error). Type/enum/range per spec['type']."""
     t = spec.get("type", "number")
     key = spec.get("key", "?")
+
+    # JSON null is the schema-independent reset operation: remove this key from
+    # the user overlay so its manifest default becomes effective again.
+    if value is None:
+        return True, None, ""
 
     if t == "integer":
         # ★Integer-semantics control★: counts, frame intervals, list caps. The
@@ -307,9 +655,15 @@ def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
         if not _is_num(value) or float(value) != int(float(value)):
             return False, None, f"{key}: expected integer, got {value!r}"
         v = int(float(value))
-        if "min" in spec and v < int(spec["min"]):
+        if "step" in spec and (not _is_num(spec["step"])
+                               or float(spec["step"]) <= 0
+                               or float(spec["step"]) != int(float(spec["step"]))):
+            return False, None, f"{key}: schema step must be a positive integer"
+        if "min" in spec and (not _is_num(spec["min"])
+                              or v < int(spec["min"])):
             return False, None, f"{key}: {v} < min {spec['min']}"
-        if "max" in spec and v > int(spec["max"]):
+        if "max" in spec and (not _is_num(spec["max"])
+                              or v > int(spec["max"])):
             return False, None, f"{key}: {v} > max {spec['max']}"
         return True, v, ""
 
@@ -317,12 +671,17 @@ def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
         if not _is_num(value):
             return False, None, f"{key}: expected number, got {type(value).__name__}"
         v = float(value)
-        if "min" in spec and v < float(spec["min"]) - 1e-9:
+        if "step" in spec and (not _is_num(spec["step"])
+                               or float(spec["step"]) <= 0):
+            return False, None, f"{key}: schema step must be a positive number"
+        if "min" in spec and (not _is_num(spec["min"])
+                              or v < float(spec["min"]) - 1e-9):
             return False, None, f"{key}: {v} < min {spec['min']}"
-        if "max" in spec and v > float(spec["max"]) + 1e-9:
+        if "max" in spec and (not _is_num(spec["max"])
+                              or v > float(spec["max"]) + 1e-9):
             return False, None, f"{key}: {v} > max {spec['max']}"
         # keep ints int (step==1 and integral) so counts stay clean
-        if float(spec.get("step", 0)) == 1 and v == int(v):
+        if spec.get("step") == 1 and v == int(v):
             v = int(v)
         return True, v, ""
 
@@ -331,15 +690,27 @@ def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
             return False, None, f"{key}: expected boolean"
         return True, value, ""
 
-    if t == "enum":
-        opts = spec.get("options") or []
-        if value not in opts:
+    if t in ("enum", "select"):
+        opts, option_error = _enum_values(spec)
+        if option_error:
+            return False, None, f"{key}: invalid schema: {option_error}"
+        if not any(_enum_value_equal(value, option) for option in opts):
             return False, None, f"{key}: {value!r} not in {opts}"
         return True, value, ""
 
-    if t == "string":
+    if t in ("string", "password"):
         if not isinstance(value, str):
             return False, None, f"{key}: expected string"
+        return True, value, ""
+
+    if t == "array":
+        if not isinstance(value, list):
+            return False, None, f"{key}: expected array"
+        return True, value, ""
+
+    if t == "object":
+        if not isinstance(value, dict):
+            return False, None, f"{key}: expected object"
         return True, value, ""
 
     if t == "zone":
@@ -368,8 +739,47 @@ def _validate_one(spec: dict, value) -> Tuple[bool, Any, str]:
             out["in"] = str(value["in"]).lower()
         return True, out, ""
 
-    # unknown control type: accept opaquely (forward-compat)
-    return True, value, ""
+    if t == "channel_multi_select":
+        allowed = {"ws", "mqtt", "http", "uart"}
+        if (not isinstance(value, list) or len(value) > len(allowed)
+                or any(not isinstance(v, str) or v not in allowed for v in value)
+                or len(set(value)) != len(value)):
+            return False, None, (f"{key}: expected a unique array containing only "
+                                 "ws, mqtt, http, uart")
+        return True, list(value), ""
+
+    if t == "mqtt":
+        ok, out, error = _validate_string_map(
+            key, value,
+            {"sURL", "sUrl", "iPort", "sClientId", "sUsername", "sPassword",
+             "sTopic"}, integer_fields={"iPort"})
+        if ok and not 1 <= out.get("iPort", 1883) <= 65535:
+            return False, None, f"{key}.iPort: expected integer in [1,65535]"
+        return ok, out, error
+
+    if t == "http":
+        return _validate_string_map(key, value, {"sUrl", "sURL", "sToken"})
+
+    if t == "uart":
+        return _validate_string_map(key, value, {"sPort", "sPortDev"})
+
+    if t == "templates":
+        ok, out, error = _validate_string_map(
+            key, value,
+            {"sDetection", "sClassification", "sKeypoint", "sSegmentation",
+             "sTracking", "sOBB"})
+        if ok and any(len(v) > _MAX_TEMPLATE_CHARS for v in out.values()):
+            return False, None, (f"{key}: each template must be at most "
+                                 f"{_MAX_TEMPLATE_CHARS} characters")
+        return ok, out, error
+
+    if t == "field_mapping":
+        return _validate_mapping(key, value)
+
+    if t == "output_filters":
+        return _validate_output_filters(key, value)
+
+    return False, None, f"{key}: unsupported config type {t!r}"
 
 
 def validate_config(manifest: dict, incoming: dict) -> Tuple[Dict[str, Any], List[str]]:
@@ -391,8 +801,9 @@ def validate_config(manifest: dict, incoming: dict) -> Tuple[Dict[str, Any], Lis
             continue
         ok, coerced, err = _validate_one(spec, val)
         if ok:
-            if coerced is not None:
-                clean[key] = coerced
+            # Preserve None: it is an intentional delete/reset marker consumed
+            # by write_user_config, not an invalid/missing value.
+            clean[key] = coerced
         else:
             errors.append(err)
     return clean, errors

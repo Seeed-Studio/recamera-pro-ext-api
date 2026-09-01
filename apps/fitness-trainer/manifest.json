@@ -1,9 +1,26 @@
 {
+  "manifest_version": 2,
+  "release": {"sequence": 3, "channel": "stable"},
+  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
+  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "artifacts": [
+    {"id": "pose-model", "kind": "rknn", "source": "bundled", "file": "models/yolo11n_pose_rawhead_int8.rknn", "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add", "size": 4691086, "mount": "models/yolo11n_pose_rawhead_int8.rknn", "required": true, "share_scope": "content"}
+  ],
+  "resources": {"claims": [
+    {"name": "camera.frames", "mode": "shared", "required": true},
+    {"name": "npu.rknn", "mode": "scheduled", "required": true},
+    {"name": "rga", "mode": "shared", "required": true},
+    {"name": "result.publish", "mode": "brokered", "required": true}
+  ], "limits": {"memory_mb": 320, "cpu_percent": 300, "storage_mb": 24, "shutdown_grace_sec": 10}},
+  "permissions": {"sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
+  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 120, "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
+  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
   "id": "fitness-trainer",
   "name": "Fitness Trainer",
   "name_zh": "健身教练",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "image": "/appcenter/apps/fitness-trainer.png",
+  "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
   "scene": "Health & Wellness",
   "scene_zh": "健康健身",
@@ -11,8 +28,6 @@
   "description_zh": "使用 YOLO11n-Pose 与关节角迟滞状态机在设备本地数你的组数并提示动作不到位。选择深蹲、俯卧撑或哑铃弯举，设定次数与组数，剩下的交给摄像头——不用手机、不戴手环，画面也不出设备。向 /appcenter 叠加层输出关键点与实时计数。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
-  "kit": ">=0.1.0",
-  "interpreter": "/userdata/rknnenv/bin/python",
   "capabilities": [
     "output"
   ],
@@ -31,9 +46,11 @@
       "keypoints": "coco17"
     }
   ],
-  "default_model": "yolo11n_pose_rawhead_int8",
+  "x-default_model": "yolo11n_pose_rawhead_int8",
   "postproc": "pose",
   "render": {
+    "schema_version": 1,
+    "boxes": {"color_by": "kind", "label": "kind", "line_width": 2},
     "keypoints": {
       "layout": "coco17",
       "point_radius": 3,
@@ -46,11 +63,12 @@
         "position": "top-left",
         "fields": ["mode", "reps", "set", "stage"]
       }
-    }
+    },
+    "stream_osd": {"supported": ["boxes"], "default": false}
   },
   "output": {
+    "contract_version": 2,
     "sink": "ws",
-    "port": 8124,
     "schema": "results[]{box,score,keypoints[17][x,y,conf],kind} + events[]{kind=workout,mode,reps,set,target_reps,target_sets,stage,angle,tracking,rep_completed,set_completed,workout_complete,form_warning,...}",
     "default_channel": [
       "ws"
@@ -59,7 +77,7 @@
     "fields": [
       {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Person box, original-frame xyxy pixels"},
       {"name": "score", "from": "results[].score", "type": "float", "description": "Person detection confidence"},
-      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "description": "COCO-17 pose keypoints"},
+      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "coord": "pixel_points", "description": "COCO-17 pose keypoints"},
       {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'person'"},
       {"name": "workout_kind", "from": "events[kind=workout].kind", "type": "string", "event_kind": "workout", "description": "Event kind, always 'workout'"},
       {"name": "workout_mode", "from": "events[kind=workout].mode", "type": "string", "event_kind": "workout", "description": "Exercise mode"},

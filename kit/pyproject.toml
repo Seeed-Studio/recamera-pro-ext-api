@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recamera-pro-kit"
+version = "0.1.0"
+description = "Reusable Python application and inference kit for reCamera Pro"
+requires-python = ">=3.11,<3.12"
+license = "Apache-2.0"
+dependencies = [
+    "jinja2>=3.1,<4",
+    "numpy>=1.23,<1.24",
+    "recamera-ext>=1.4,<2",
+]
+
+[tool.uv.sources]
+recamera-ext = { workspace = true }
+
+[tool.setuptools]
+# This pyproject lives inside the import package so the SDK and kit can be
+# independent workspace members without moving their existing source trees.
+package-dir = { kit = "." }
+packages = [
+    "kit",
+    "kit.ai",
+    "kit.adapters",
+    "kit.logic",
+    "kit.media",
+    "kit.runtime",
+    "kit.runtime.postprocess",
+    "kit.workflow",
+]
+include-package-data = false

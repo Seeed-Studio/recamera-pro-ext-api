@@ -60,16 +60,29 @@ class SetConfigApplyTests(unittest.TestCase):
         # stubs leak into every later test module in the same pytest process.
         self._orig_sup = {n: getattr(server.supervisor, n)
                           for n in ("is_running", "reload", "stop", "start")}
+        self._orig_builtin_stop = server.builtin.stop
         self.addCleanup(lambda: [setattr(server.supervisor, n, v)
                                  for n, v in self._orig_sup.items()])
+        self.addCleanup(lambda: setattr(
+            server.builtin, "stop", self._orig_builtin_stop))
         server.supervisor.is_running = fake_is_running
         server.supervisor.reload = fake_reload
         server.supervisor.stop = fake_stop
         server.supervisor.start = fake_start
+        server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
 
     def _make_app(self, app_id="demo"):
         d = paths.app_dir(app_id)
         os.makedirs(d, exist_ok=True)
+        # Each test starts from manifest defaults. The module-level temporary
+        # layout is shared across unittest methods, so explicitly remove the
+        # previous method's persisted overlay before exercising delta logic.
+        for config_file in (appconfig.config_path(app_id),
+                            appconfig.legacy_config_path(app_id)):
+            try:
+                os.remove(config_file)
+            except FileNotFoundError:
+                pass
         with open(os.path.join(d, "manifest.json"), "w") as f:
             json.dump({
                 "id": app_id, "version": "1.0.0", "name": app_id,
@@ -155,6 +168,93 @@ class SetConfigApplyTests(unittest.TestCase):
         self.assertFalse(res["restarted"])
         self.assertEqual(self.calls, [], "non-active app is not bounced")
         self.assertEqual(self._saved()["input_size"], 320)
+
+    def test_complete_form_classifies_only_effective_delta(self):
+        """An old UI may POST every field; unchanged restart fields stay inert."""
+        app_dir = self._make_app()
+        manifest_path = os.path.join(app_dir, "manifest.json")
+        with open(manifest_path) as source:
+            manifest = json.load(source)
+        manifest["capabilities"] = ["output"]
+        manifest["output"] = {"default_channel": ["ws"], "default_mode": "raw",
+                              "default_mapping": []}
+        with open(manifest_path, "w") as target:
+            json.dump(manifest, target)
+
+        self.running["demo"] = 4321
+        complete_form = appconfig.effective_values(manifest, "demo")
+        complete_form["dTemplate"] = {
+            **complete_form["dTemplate"],
+            "sDetection": "objects={{ detection.count }}",
+        }
+        res = server.do_set_config("demo", complete_form)
+
+        self.assertEqual(res["applied"], "live")
+        self.assertEqual(res["changed_keys"], ["dTemplate"])
+        self.assertFalse(res["noop"])
+        self.assertTrue(res["reloaded"])
+        self.assertFalse(res["restarted"])
+        self.assertEqual(self.calls, [("reload", "demo")])
+        # Unchanged defaults from the complete form are not needlessly copied
+        # into the sparse user overlay.
+        self.assertEqual(set(self._saved()), {"dTemplate", "template_mode"})
+        self.assertEqual(self._saved()["template_mode"], "template")
+
+    def test_equal_value_is_explicit_noop(self):
+        self._make_app()
+        self.running["demo"] = 4321
+        res = server.do_set_config("demo", {"conf": 0.35,
+                                             "input_size": 640})
+        self.assertEqual(res["applied"], "none")
+        self.assertEqual(res["changed_keys"], [])
+        self.assertTrue(res["noop"])
+        self.assertFalse(res["saved"])
+        self.assertFalse(res["reloaded"])
+        self.assertFalse(res["restarted"])
+        self.assertEqual(self.calls, [])
+
+    def test_first_format_edit_pins_legacy_implicit_selector(self):
+        app_dir = self._make_app()
+        manifest_path = os.path.join(app_dir, "manifest.json")
+        with open(manifest_path) as source:
+            manifest = json.load(source)
+        manifest["capabilities"] = ["output"]
+        manifest["output"] = {"default_channel": ["ws"],
+                              "default_mode": "custom",
+                              "default_mapping": [{
+                                  "source": "detection.count",
+                                  "target": "count", "topic": "t"}]}
+        with open(manifest_path, "w") as target:
+            json.dump(manifest, target)
+        self.running["demo"] = 4321
+
+        res = server.do_set_config("demo", {"output_mapping": []})
+
+        self.assertEqual(res["changed_keys"], ["output_mapping"])
+        self.assertEqual(res["applied"], "live")
+        self.assertEqual(self._saved()["output_mapping"], [])
+        self.assertEqual(self._saved()["template_mode"], "mapping")
+        self.assertEqual(appconfig.effective_values(
+            manifest, "demo")["template_mode"], "mapping")
+
+    def test_null_resets_one_overlay_without_clobbering_others(self):
+        self._make_app()
+        appconfig.write_user_config("demo", {"conf": 0.7, "iou": 0.6})
+        self.running["demo"] = 4321
+
+        res = server.do_set_config("demo", {"conf": None})
+
+        self.assertEqual(res["applied"], "live")
+        self.assertEqual(res["changed_keys"], ["conf"])
+        self.assertEqual(self._saved(), {"iou": 0.6})
+        self.assertEqual(appconfig.effective_values(
+            server._read_manifest("demo"), "demo")["conf"], 0.35)
+
+        self.calls.clear()
+        again = server.do_set_config("demo", {"conf": None})
+        self.assertTrue(again["noop"])
+        self.assertFalse(again["saved"])
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == "__main__":

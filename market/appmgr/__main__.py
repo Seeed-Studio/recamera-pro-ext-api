@@ -4,8 +4,9 @@ CLI entry: python3 -m appmgr <cmd>
   install <pkg.tar.gz>   validate + unpack into /userdata/local/apps/<id>/
   uninstall <id>         stop if running, clear active, rm /userdata/local/apps/<id>/
                          (shared /userdata/local/models is NOT removed)
-  start   <id>           single-active start (== switch): stop old active, start id
-  switch  <id>           alias of start
+  start   <id>           start one managed app without stopping compatible apps
+  restart <id>           restart one managed app with a new instance generation
+  switch  <id>           legacy single-active switch
   stop    [id]           stop id (or current active)
   config  <id> [json]    get effective config (schema+values); with json, set it
   list                   JSON list of installed apps (+ running/active)
@@ -38,9 +39,17 @@ def main(argv=None) -> int:
             if not rest:
                 print("usage: uninstall <id>", file=sys.stderr); return 2
             print(json.dumps(server.do_uninstall(rest[0]), indent=2))
-        elif cmd in ("start", "switch"):
+        elif cmd == "start":
             if not rest:
                 print(f"usage: {cmd} <id>", file=sys.stderr); return 2
+            print(json.dumps(server.do_start(rest[0]), indent=2))
+        elif cmd == "restart":
+            if not rest:
+                print("usage: restart <id>", file=sys.stderr); return 2
+            print(json.dumps(server.do_restart(rest[0]), indent=2))
+        elif cmd == "switch":
+            if not rest:
+                print("usage: switch <id>", file=sys.stderr); return 2
             print(json.dumps(server.do_switch(rest[0]), indent=2))
         elif cmd == "stop":
             print(json.dumps(server.do_stop(rest[0] if rest else None), indent=2))

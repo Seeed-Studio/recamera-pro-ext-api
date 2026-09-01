@@ -174,6 +174,26 @@ class EmitInjectionTests(unittest.TestCase):
         app.emit(events=[])
         self.assertNotIn("render", self.sink.published[-1])
 
+    def test_geometry_is_opt_in_and_explicit_empty_is_preserved(self):
+        """Existing emitters keep their byte shape; explicit geometry opts in."""
+        man = self._manifest(None)
+        app = self._app(man)
+
+        app.emit(events=[])
+        self.assertNotIn("geometry", self.sink.published[-1])
+
+        app.emit(events=[], geometry=[])
+        self.assertEqual(self.sink.published[-1]["geometry"], [])
+
+        app.emit(events=[], geometry=[{
+            "type": "point", "points": [[12, 34]],
+            "style": {"color": "#00ff00"},
+        }])
+        self.assertEqual(self.sink.published[-1]["geometry"], [{
+            "type": "point", "points": [[12.0, 34.0]],
+            "style": {"color": "#00ff00"},
+        }])
+
     def test_broken_declaration_degrades_to_no_key(self):
         man = self._manifest(["not", "a", "dict"])
         app = self._app(man)

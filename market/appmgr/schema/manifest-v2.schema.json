@@ -1,0 +1,837 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://recamera.example/schemas/manifest-v2.schema.json",
+  "title": "reCamera Pro application manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x-": true
+  },
+  "required": [
+    "manifest_version",
+    "id",
+    "name",
+    "version",
+    "type",
+    "entry",
+    "release",
+    "compatibility",
+    "python",
+    "artifacts",
+    "config_schema",
+    "resources",
+    "permissions",
+    "health",
+    "instances",
+    "capabilities"
+  ],
+  "properties": {
+    "manifest_version": {"const": 2},
+    "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "type": {"const": "self-hosted"},
+    "entry": {"$ref": "#/$defs/relativePath"},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["sequence", "channel"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "channel": {"enum": ["stable", "beta", "dev"]}
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["platform_profile", "arch", "python"],
+      "properties": {
+        "platform_profile": {"$ref": "#/$defs/token"},
+        "arch": {"const": "aarch64"},
+        "python": {"const": "==3.11.*"},
+        "firmware_api": {"$ref": "#/$defs/versionConstraint"},
+        "kit_api": {"$ref": "#/$defs/versionConstraint"},
+        "sdk_abi": {"$ref": "#/$defs/versionConstraint"},
+        "rknn_runtime": {"$ref": "#/$defs/versionConstraint"}
+      }
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["runtime_profile", "isolation", "wheels", "imports"],
+      "properties": {
+        "runtime_profile": {"$ref": "#/$defs/token"},
+        "isolation": {"const": "per-release"},
+        "imports": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          }
+        },
+        "wheels": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/wheel"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "config_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["groups"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "groups": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/configGroup"}
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "anyOf": [
+        {"required": ["claims"]},
+        {"required": ["profiles"]}
+      ],
+      "properties": {
+        "claims": {"$ref": "#/$defs/claims"},
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when", "claims"],
+            "properties": {
+              "when": {"type": "object", "minProperties": 1, "maxProperties": 1},
+              "claims": {"$ref": "#/$defs/claims"}
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "memory_mb": {"type": "integer", "minimum": 1},
+            "cpu_percent": {"type": "integer", "minimum": 1, "maximum": 400},
+            "storage_mb": {"type": "integer", "minimum": 1},
+            "shutdown_grace_sec": {"type": "integer", "minimum": 1}
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["sdk", "filesystem", "network"],
+      "properties": {
+        "sdk": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "audio.read", "codec.decode", "frame.read", "gpio.read",
+              "gpio.write", "npu.infer", "probe.read", "result.publish", "rga.use"
+            ]
+          }
+        },
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["read", "write"],
+          "properties": {
+            "read": {"$ref": "#/$defs/fsScopes"},
+            "write": {"$ref": "#/$defs/fsScopes"}
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["listen", "outbound"],
+          "properties": {
+            "listen": {"$ref": "#/$defs/endpoints"},
+            "outbound": {"$ref": "#/$defs/endpoints"}
+          }
+        },
+        "devices": {"type": "array", "maxItems": 0}
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": [
+        "protocol", "startup_timeout_sec", "stabilization_sec",
+        "liveness_interval_sec", "liveness_failures", "restart"
+      ],
+      "properties": {
+        "protocol": {"const": "kit-health-v1"},
+        "startup_timeout_sec": {"type": "integer", "minimum": 1},
+        "stabilization_sec": {"type": "integer", "minimum": 0},
+        "liveness_interval_sec": {"type": "integer", "minimum": 1},
+        "liveness_failures": {"type": "integer", "minimum": 1},
+        "restart": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "max_attempts", "window_sec", "backoff_sec"],
+          "properties": {
+            "policy": {"enum": ["never", "on-failure"]},
+            "max_attempts": {"type": "integer", "minimum": 0},
+            "window_sec": {"type": "integer", "minimum": 1},
+            "backoff_sec": {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "instances": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["max", "config_scope", "data_scope", "endpoint_mode"],
+      "properties": {
+        "max": {"const": 1},
+        "config_scope": {"enum": ["app", "instance"]},
+        "data_scope": {"enum": ["app", "instance"]},
+        "endpoint_mode": {"const": "allocated"}
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string"}
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "patternProperties": {"^x-": true},
+        "properties": {
+          "id": {"type": "string"},
+          "file": {"$ref": "#/$defs/relativePath"},
+          "task": {"type": "string"},
+          "input": {"type": "array", "items": {"type": "integer"}},
+          "quant": {"type": "string"},
+          "classes": {},
+          "dict": {},
+          "heads": {},
+          "keypoints": {},
+          "norm": {},
+          "output": {},
+          "role": {"type": "string"}
+        }
+      }
+    },
+    "needs_model": {"type": "boolean"},
+    "name_zh": {"type": "string"},
+    "description": {"type": "string"},
+    "description_zh": {"type": "string"},
+    "author": {"type": "string"},
+    "image": {"type": "string"},
+    "icon": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["path", "media_type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!\\.{1,2}(?:/|$))(?!.*(?:^|/)\\.{1,2}(?:/|$))[^\\u0000-\\u001f]+$",
+          "not": {
+            "pattern": "(?:^|/)(?:[Kk][Ee][Yy][Ss]|\\.[Ss][Ss][Hh])(?:/|$)"
+          }
+        },
+        "media_type": {
+          "enum": ["image/png", "image/webp", "image/jpeg"]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "media_type": {"const": "image/png"},
+            "path": {"pattern": "\\.png$"}
+          }
+        },
+        {
+          "properties": {
+            "media_type": {"const": "image/webp"},
+            "path": {"pattern": "\\.webp$"}
+          }
+        },
+        {
+          "properties": {
+            "media_type": {"const": "image/jpeg"},
+            "path": {"pattern": "\\.(?:jpg|jpeg)$"}
+          }
+        }
+      ]
+    },
+    "scene": {"type": "string"},
+    "scene_zh": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "postproc": {"type": "string"},
+    "render": {
+      "type": "object",
+      "oneOf": [
+        {"not": {"required": ["schema_version"]}},
+        {"$ref": "#/$defs/renderV1"}
+      ]
+    },
+    "output": {
+      "type": "object",
+      "not": {"required": ["port"]},
+      "oneOf": [
+        {"not": {"required": ["contract_version"]}},
+        {"$ref": "#/$defs/outputV2"}
+      ]
+    },
+    "ha_entities": {"type": "array"},
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "geometry"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      },
+      "then": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "contains": {
+                  "type": "object",
+                  "required": ["from"],
+                  "properties": {"from": {"const": "geometry[]"}}
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "contains": {
+                  "type": "object",
+                  "required": ["from"],
+                  "properties": {"from": {"const": "geometry[]"}}
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "geometry"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["render"],
+        "properties": {
+          "render": {
+            "type": "object",
+            "required": ["schema_version", "stream_osd"],
+            "properties": {"schema_version": {"const": 1}}
+          }
+        }
+      },
+      "then": {
+        "required": ["output"],
+        "properties": {
+          "output": {
+            "type": "object",
+            "required": ["contract_version", "fields"],
+            "properties": {
+              "contract_version": {"const": 2},
+              "fields": {
+                "oneOf": [
+                  {
+                    "allOf": [
+                      {"contains": {"$ref": "#/$defs/directPixelNamedBoxField"}},
+                      {"not": {"contains": {"$ref": "#/$defs/nonPixelDirectBoxField"}}}
+                    ]
+                  },
+                  {
+                    "allOf": [
+                      {"contains": {"$ref": "#/$defs/directNormalizedNamedBoxField"}},
+                      {"not": {"contains": {"$ref": "#/$defs/nonNormalizedDirectBoxField"}}}
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "directBoxField": {
+      "type": "object",
+      "required": ["from"],
+      "properties": {"from": {"const": "results[].box"}},
+      "not": {
+        "required": ["derived"],
+        "properties": {"derived": {"const": true}}
+      }
+    },
+    "directPixelNamedBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "required": ["name", "coord"],
+          "properties": {
+            "name": {"const": "box"},
+            "coord": {"const": "pixel_xyxy"}
+          }
+        }
+      ]
+    },
+    "directNormalizedNamedBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "required": ["name", "coord"],
+          "properties": {
+            "name": {"const": "box"},
+            "coord": {"const": "normalized_xyxy"}
+          }
+        }
+      ]
+    },
+    "nonPixelDirectBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "not": {
+            "required": ["coord"],
+            "properties": {"coord": {"const": "pixel_xyxy"}}
+          }
+        }
+      ]
+    },
+    "nonNormalizedDirectBoxField": {
+      "allOf": [
+        {"$ref": "#/$defs/directBoxField"},
+        {
+          "not": {
+            "required": ["coord"],
+            "properties": {"coord": {"const": "normalized_xyxy"}}
+          }
+        }
+      ]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*//).+$"
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$"
+    },
+    "outputFieldV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["name", "from", "type", "description"],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "from": {"type": "string", "minLength": 1, "maxLength": 512},
+        "type": {"type": "string", "minLength": 1, "maxLength": 128},
+        "coord": {
+          "enum": [
+            "pixel_xyxy", "pixel_quad", "pixel_points",
+            "normalized_xyxy", "normalized_quad", "normalized_points"
+          ]
+        },
+        "description": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "event_kind": {"$ref": "#/$defs/token"},
+        "optional": {"type": "boolean"},
+        "derived": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"pattern": "(bbox|quad|keypoint)"}}},
+          "then": {"required": ["coord"]}
+        },
+        {
+          "if": {"properties": {"from": {"const": "geometry[]"}}},
+          "then": {
+            "required": ["coord"],
+            "properties": {
+              "type": {"const": "geometry[]"},
+              "coord": {"enum": ["pixel_points", "normalized_points"]},
+              "derived": {"const": false}
+            }
+          }
+        }
+      ]
+    },
+    "outputMappingV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["source", "target", "topic"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1, "maxLength": 512},
+        "target": {"$ref": "#/$defs/token"},
+        "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+        "task": {"$ref": "#/$defs/token"}
+      }
+    },
+    "outputV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": [
+        "contract_version", "sink", "schema", "default_channel",
+        "default_mode", "fields", "default_mapping"
+      ],
+      "properties": {
+        "contract_version": {"const": 2},
+        "sink": {"const": "ws"},
+        "schema": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "topic": {"type": "string", "minLength": 1, "maxLength": 512},
+        "default_channel": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["ws", "mqtt", "http", "uart"]}
+        },
+        "default_mode": {"enum": ["raw", "custom", "ha"]},
+        "persistent_summary": {"type": "boolean"},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/outputFieldV2"}},
+        "default_mapping": {"type": "array", "items": {"$ref": "#/$defs/outputMappingV2"}}
+      }
+    },
+    "renderEventV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "as": {"enum": ["none", "badge", "toast", "panel", "subtitle"]},
+        "position": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "duration_sec": {"type": "number", "minimum": 0},
+        "max_lines": {"type": "number", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/token"}}
+      }
+    },
+    "geometryStyleV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+        "line_width": {"type": "number", "minimum": 0.25, "maximum": 16},
+        "point_radius": {"type": "number", "minimum": 0.5, "maximum": 32},
+        "fill": {"type": "boolean"},
+        "fill_color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+        "opacity": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "renderGeometryV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["types"],
+      "properties": {
+        "types": {
+          "type": "array", "minItems": 1, "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"enum": ["point", "line", "polyline", "polygon"]}
+        },
+        "max_items": {"type": "integer", "minimum": 1, "maximum": 256},
+        "max_points": {"type": "integer", "minimum": 1, "maximum": 256},
+        "style": {"$ref": "#/$defs/geometryStyleV1"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "types": {
+                "contains": {"enum": ["line", "polyline"]}
+              }
+            }
+          },
+          "then": {
+            "properties": {"max_points": {"minimum": 2}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "types": {"contains": {"const": "polygon"}}
+            }
+          },
+          "then": {
+            "properties": {"max_points": {"minimum": 3}}
+          }
+        }
+      ]
+    },
+    "renderV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["schema_version"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "boxes": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "properties": {
+            "color_by": {"$ref": "#/$defs/token"},
+            "label": {"$ref": "#/$defs/token"},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        "quads": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["points"],
+          "properties": {
+            "points": {"$ref": "#/$defs/token"},
+            "label": {"$ref": "#/$defs/token"},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16}
+          }
+        },
+        "keypoints": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["layout"],
+          "properties": {
+            "layout": {"$ref": "#/$defs/token"},
+            "point_radius": {"type": "integer", "minimum": 1, "maximum": 16},
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16},
+            "conf_min": {"type": "number", "minimum": 0, "maximum": 1},
+            "skeleton": {"type": "array"}
+          }
+        },
+        "geometry": {"$ref": "#/$defs/renderGeometryV1"},
+        "events": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/token"},
+          "additionalProperties": {"$ref": "#/$defs/renderEventV1"}
+        },
+        "stream_osd": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["supported", "default"],
+          "properties": {
+            "supported": {
+              "type": "array", "minItems": 1, "maxItems": 1,
+              "uniqueItems": true, "items": {"const": "boxes"}
+            },
+            "default": {"const": false}
+          }
+        }
+      }
+    },
+    "versionConstraint": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9<>=!~^*][A-Za-z0-9._+,:<>=!~^*-]{0,127}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "wheel": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["name", "version", "filename", "sha256", "size", "tags", "source"],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "version": {"$ref": "#/$defs/token"},
+        "filename": {"type": "string", "pattern": "^[^/\\\\]+\\.whl$"},
+        "file": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 536870912},
+        "tags": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/token"}},
+        "source": {"enum": ["bundled", "catalog"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "bundled"}}},
+          "then": {"required": ["file"]},
+          "else": {"not": {"required": ["file"]}}
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["id", "kind", "source", "sha256", "size", "mount", "required", "share_scope"],
+      "properties": {
+        "id": {"$ref": "#/$defs/token"},
+        "kind": {"enum": ["data", "dictionary", "labels", "onnx", "rknn"]},
+        "source": {"enum": ["bundled", "catalog"]},
+        "file": {"$ref": "#/$defs/relativePath"},
+        "filename": {"type": "string", "pattern": "^[^/\\\\]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 1073741824},
+        "mount": {"$ref": "#/$defs/relativePath"},
+        "required": {"type": "boolean"},
+        "share_scope": {"enum": ["content", "private"]}
+      }
+    },
+    "configGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["key", "title", "items"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+        "title": {"type": "string"},
+        "title_zh": {"type": "string"},
+        "description": {"type": "string"},
+        "description_zh": {"type": "string"},
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "patternProperties": {"^x-": true},
+            "required": ["key", "type", "apply"],
+            "properties": {
+              "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+              "type": {"enum": ["array", "boolean", "enum", "field_mapping", "integer", "line", "number", "object", "output_filters", "password", "select", "string", "zone"]},
+              "apply": {"enum": ["live", "restart", "reschedule"]},
+              "default": {},
+              "min": {"type": "number"},
+              "max": {"type": "number"},
+              "step": {"type": "number"},
+              "maxPoints": {"type": "integer"},
+              "directional": {"type": "boolean"},
+              "options": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "oneOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["value"],
+                      "properties": {
+                        "value": {
+                          "type": ["string", "number", "boolean"]
+                        },
+                        "label": {"type": "string"},
+                        "label_zh": {"type": "string"}
+                      }
+                    }
+                  ]
+                }
+              },
+              "option_labels": {"type": "array"},
+              "option_labels_zh": {"type": "array"},
+              "title": {"type": "string"},
+              "title_zh": {"type": "string"},
+              "help": {"type": "string"},
+              "help_zh": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "patternProperties": {"^x-": true},
+        "required": ["name", "mode", "required"],
+        "properties": {
+          "name": {"enum": ["audio.capture", "camera.frames", "codec.decode", "npu.rknn", "probe.read", "result.publish", "rga"]},
+          "mode": {"enum": ["brokered", "exclusive", "scheduled", "shared"]},
+          "required": {"type": "boolean"},
+          "quantity": {"type": "integer", "minimum": 1, "maximum": 64},
+          "timeout_sec": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "fsScopes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["app", "appdata", "artifacts", "tmp"]}
+    },
+    "endpoints": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,63}$"}
+    }
+  }
+}

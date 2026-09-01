@@ -1,0 +1,19 @@
+Native client licensing notice
+==============================
+
+The following native client material is licensed under the BSD-3-Clause terms
+in sdk/LICENSE, rather than the repository-level Apache-2.0 license:
+
+- sdk/CMakeLists.txt
+- sdk/include/recamera_ext.h
+- sdk/src/**
+- sdk/proto/**
+- sdk/generated/**
+
+This scope includes later modifications and additive native client work in
+those paths.  Generated protobuf-c files retain the license of their canonical
+schemas.  The Python bindings, build/test tooling, documentation and other
+files outside the paths above remain under the repository-level Apache-2.0
+license unless they state otherwise.
+
+Copyright notices present in individual source files must be preserved.

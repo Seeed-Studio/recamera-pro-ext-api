@@ -8,8 +8,10 @@ dev box (used by the zip-slip unit test).
 Device layout (reconciled -- kit is ONE shared copy, apps hold only apps):
 
     /userdata/local/kit/kit/            shared Kit package  (PYTHONPATH parent = /userdata/local/kit)
-    /userdata/local/apps/<id>/          installed app: manifest.json, app.py, models/, run.pid, logs/
-    /userdata/local/apps/state.json     { active_app, active_version }
+    /userdata/local/apps/<id>/          installed app: manifest.json, app.py, models/,
+                                        run.{pid,pgid,boot_id}, logs/
+    /userdata/local/apps/state.json     desired/observed app lifecycle state
+    /userdata/local/appmgr/resources.json  durable resource allocations
     /userdata/local/appmgr/             appmgr code + locks
 """
 from __future__ import annotations
@@ -27,17 +29,23 @@ APPS_DIR = os.environ.get("APPMGR_APPS_DIR", "/userdata/local/apps")
 # (KIT_APP_SHAPE_SPEC §5.1) the wrong value killed all 9 apps with
 # `ModuleNotFoundError: No module named 'kit'`. test_kit_parent_layout.py pins
 # this against the installer so the two cannot drift again.
-KIT_PARENT = os.environ.get("APPMGR_KIT_PARENT", "/userdata/local")
+# Platform code is immutable in the firmware image.  Applications and their
+# desired/config state remain under /userdata, but the shared Kit package is a
+# system Python package.  The environment override keeps sideload/dev layouts
+# possible without making them the production default.
+KIT_PARENT = os.environ.get(
+    "APPMGR_KIT_PARENT", "/usr/lib/python3.11/site-packages")
 KIT_DIR = os.path.join(KIT_PARENT, "kit")     # the package itself
 APPMGR_DIR = os.environ.get("APPMGR_DIR", "/userdata/local/appmgr")
 # The extension SDK's python package (recamera_ext) is installed OUTSIDE the kit
 # tree by the firmware installer, and it is NOT inside /userdata/rknnenv's
 # site-packages -- so an app launched with the venv interpreter cannot import it
 # unless we put this on PYTHONPATH (or a .pth lands in site-packages).
-SDK_PYTHON = os.environ.get("APPMGR_SDK_PYTHON", "/userdata/sdk/python")
-# Per-app virtualenvs (future): apps that ship their own deps get an isolated
-# venv here, keyed by id. Not created yet for vision apps (they share the system
-# python) -- uninstall removes /userdata/local/venvs/<id> only if it exists.
+SDK_PYTHON = os.environ.get(
+    "APPMGR_SDK_PYTHON", "/usr/lib/python3.11/site-packages")
+# Manifest-v2 apps stage immutable per-release virtualenv generations here,
+# keyed first by app id. Platform packages remain inherited read-only through
+# --system-site-packages; app-owned wheels are isolated inside each generation.
 # NOTE: /userdata/local/models is NOT owned here -- models are SHARED across apps
 # (one-gen models[]+target_path), so uninstalling a single app must never touch it.
 VENVS_DIR = os.environ.get("APPMGR_VENVS_DIR", "/userdata/local/venvs")
@@ -76,15 +84,65 @@ LOCK_FILE = os.path.join(APPMGR_DIR, "appmgr.lock")   # single-instance (server)
 BUSY_FILE = os.path.join(APPMGR_DIR, "busy.lock")     # busy-gate for mutations
 AUDIT_LOG = os.path.join(APPMGR_DIR, "audit.log")
 MQTT_CONFIG = os.path.join(APPMGR_DIR, "mqtt.json")    # global MQTT/HA broker cfg
+INFERENCE_CONTROL_SOCK = os.environ.get(
+    "APPMGR_INFERENCE_CONTROL_SOCK", "/run/recamera/inference-control.sock")
+# The multi-app inference path is a scheduled service, deliberately separate
+# from inference-control.sock's single-owner lease.  The service is introduced
+# independently from appmgr; appmgr only validates/declares the endpoint and
+# hands it to applications through RECAMERA_INFERENCE_SERVICE_SOCK.
+INFERENCE_SERVICE_SOCK = os.environ.get(
+    "APPMGR_INFERENCE_SERVICE_SOCK", "/run/recamera/inferenced.sock")
+# Short-lived, appmgr-issued authorizations consumed by the independent
+# inference daemon.  /run is cleared on reboot; each record is additionally
+# bound to the kernel boot id and the process start-time tick to defeat PID
+# reuse.  Keep this separate from durable application state under /userdata.
+INFERENCE_AUTH_DIR = os.environ.get(
+    "RECAMERA_INFERENCE_AUTH_DIR",
+    os.environ.get(
+        "APPMGR_INFERENCE_AUTH_DIR", "/run/recamera/inference-authorizations"
+    ),
+)
+
+# One appmgr-owned result gateway replaces one WebSocket listener per app.
+# Managed apps publish newline-delimited JSON to this UDS; nginx keeps proxying
+# the single WebSocket endpoint on RESULT_GATEWAY_PORT.
+RESULT_GATEWAY_SOCK = os.environ.get(
+    "APPMGR_RESULT_GATEWAY_SOCK", "/run/recamera/appmgr-results.sock")
+RESULT_GATEWAY_HOST = os.environ.get("APPMGR_RESULT_GATEWAY_HOST", "127.0.0.1")
+RESULT_GATEWAY_PORT = int(os.environ.get("APPMGR_RESULT_GATEWAY_PORT", "8124"))
+
+# Canonical Result Hub.  The legacy :8124 endpoint above remains byte-compatible;
+# this second loopback listener exposes the stable v2 envelope and a raw/formatted
+# subscription view.  Built-in inference arrives pre-template on its own strict,
+# authenticated UDS rather than sharing the application identity boundary.
+RESULT_HUB_HOST = os.environ.get("APPMGR_RESULT_HUB_HOST", "127.0.0.1")
+RESULT_HUB_PORT = int(os.environ.get("APPMGR_RESULT_HUB_PORT", "8125"))
+SYSTEM_RESULT_SOCK = os.environ.get(
+    "APPMGR_SYSTEM_RESULT_SOCK", "/run/recamera/ai-system-results.sock")
+# Result Hub only reads this file to build the optional formatted view.  The
+# authoritative notify API remains its sole writer.
+NOTIFY_CONFIG = os.environ.get(
+    "APPMGR_NOTIFY_CONFIG", "/userdata/config/notify.json")
 
 # Release-signing trust anchor (APP_CENTER_PORT_DESIGN §4.9 / TODO #4).
 # The publisher's PUBLIC key is baked into the appmgr deploy; the matching
 # private key never touches repo or device. Packages carry a detached ECDSA
 # (P-256, SHA-256) signature over the raw .tar.gz bytes, verified here with the
 # device's own openssl before install.
+# Writable owner-managed trust material remains state under /userdata.  The
+# vendor release anchor is part of the immutable firmware image and therefore
+# must not default into that writable directory.
 KEYS_DIR = os.environ.get("APPMGR_KEYS_DIR", os.path.join(APPMGR_DIR, "keys"))
 RELEASE_PUBKEY = os.environ.get(
-    "APPMGR_RELEASE_PUBKEY", os.path.join(KEYS_DIR, "release_pub.pem"))
+    "APPMGR_RELEASE_PUBKEY", "/usr/lib/recamera/appmgr/keys/release_pub.pem")
+# Device-owner trust anchors extend (but never replace) the immutable vendor
+# key.  Only direct ``*.pem`` children are considered; signing.py opens this
+# directory and every key without following links and applies the limits below.
+OWNER_KEYS_DIR = os.environ.get(
+    "APPMGR_OWNER_KEYS_DIR", os.path.join(KEYS_DIR, "owners"))
+MAX_OWNER_KEYS = int(os.environ.get("APPMGR_MAX_OWNER_KEYS", "16"))
+MAX_TRUST_KEY_BYTES = int(os.environ.get(
+    "APPMGR_MAX_TRUST_KEY_BYTES", str(64 * 1024)))
 
 # Signature policy switch (backward-compat / migration lever):
 #   1/true  (default) -- a package with NO signature is REFUSED. A package with
@@ -103,6 +161,48 @@ ALLOWED_PKG_ROOTS = tuple(
 MAX_PKG_BYTES = int(os.environ.get("APPMGR_MAX_PKG_BYTES", str(200 * 1024 * 1024)))  # 200 MB
 MAX_UNPACKED_BYTES = int(os.environ.get("APPMGR_MAX_UNPACKED_BYTES", str(400 * 1024 * 1024)))
 MAX_MEMBERS = int(os.environ.get("APPMGR_MAX_MEMBERS", "4096"))
+# Browser uploads are durable only long enough to bridge preflight -> install.
+# Bound the whole staging area as well as each package so retries cannot fill
+# /userdata with individually valid 200 MiB archives.  Keep enough headroom for
+# two maximum-size packages, but reserve space for app code/config and logs.
+MAX_UPLOAD_STAGING_BYTES = int(os.environ.get(
+    "APPMGR_MAX_UPLOAD_STAGING_BYTES", str(512 * 1024 * 1024)))
+MAX_STAGED_UPLOADS = int(os.environ.get("APPMGR_MAX_STAGED_UPLOADS", "8"))
+UPLOAD_TTL_SEC = int(os.environ.get("APPMGR_UPLOAD_TTL_SEC", str(24 * 60 * 60)))
+MIN_UPLOAD_FREE_BYTES = int(os.environ.get(
+    "APPMGR_MIN_UPLOAD_FREE_BYTES", str(128 * 1024 * 1024)))
+# Bound both an idle socket read and the complete multipart receive.  nginx has
+# its own edge timeouts, but appmgr also accepts loopback API clients directly;
+# one stalled client must not retain a reservation forever.
+UPLOAD_SOCKET_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_UPLOAD_SOCKET_TIMEOUT_SEC", "60"))
+UPLOAD_TOTAL_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_UPLOAD_TOTAL_TIMEOUT_SEC", "600"))
+# Keep authenticated UI retries from creating an unbounded backlog of stale
+# lifecycle callbacks or one handler thread per SSE connection.
+MAX_PENDING_OPERATIONS = int(os.environ.get(
+    "APPMGR_MAX_PENDING_OPERATIONS", "32"))
+MAX_SSE_SUBSCRIBERS = int(os.environ.get(
+    "APPMGR_MAX_SSE_SUBSCRIBERS", "16"))
+# A v1 App Center mutation has already been accepted into the daemon's single
+# worker queue, so a short collision with the background lifecycle reconciler
+# must not turn into a random terminal BusyError.  Only those asynchronous jobs
+# opt into this bounded flock wait; the legacy synchronous API keeps the
+# historical fail-fast behaviour.  Fifty-millisecond polling is inexpensive on
+# the device and comfortably covers the sub-second reconciler critical section
+# without spinning.
+V1_OPERATION_BUSY_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_V1_OPERATION_BUSY_TIMEOUT_SEC", "5.0"))
+V1_OPERATION_BUSY_RETRY_SEC = float(os.environ.get(
+    "APPMGR_V1_OPERATION_BUSY_RETRY_SEC", "0.05"))
+
+# Unsigned packages may be inspected, but installing one requires both an
+# explicit request flag and this device-owner policy switch.  Production images
+# leave it disabled; developer firmware can opt in without weakening the
+# default installer/legacy API signature policy.
+DEVELOPER_MODE_ALLOWED = os.environ.get(
+    "APPMGR_DEVELOPER_MODE_ALLOWED", "0").strip().lower() in (
+        "1", "true", "yes", "on")
 
 # ★Package-bundled app icon★ (RENDER_DECLARATION_SPEC §5 P0-1).
 # manifest's `"image": "/appcenter/apps/<id>.png"` is a dead URL on the device:
@@ -183,6 +283,31 @@ def pidfile(app_id: str) -> str:
     return os.path.join(app_dir(app_id), "run.pid")
 
 
+def pgidfile(app_id: str) -> str:
+    """Persisted process-group id for the current app run.
+
+    Every supervised app is launched with ``start_new_session=True``, therefore
+    its leader PID is also its PGID.  Keeping that value separately from
+    ``run.pid`` matters after the leader has crashed: ``getpgid(leader_pid)`` can
+    no longer recover the group id, while ffmpeg/other descendants may still be
+    alive in the original group.  The supervisor validates the invariant
+    ``pid == pgid`` before trusting a dead leader's group; ``run.boot_id`` binds
+    that numeric identity to one kernel boot.  All three files form one logical
+    run record.
+    """
+    return os.path.join(app_dir(app_id), "run.pgid")
+
+
+def bootfile(app_id: str) -> str:
+    """Boot identity paired with ``run.pid``/``run.pgid``.
+
+    Numeric process-group IDs are reusable after a reboot while the app
+    directory survives under /userdata.  A dead leader's saved PGID is therefore
+    trusted only when this file matches the kernel's current boot ID.
+    """
+    return os.path.join(app_dir(app_id), "run.boot_id")
+
+
 def readyfile(app_id: str) -> str:
     """Where a freshly launched app signals it reached its main loop (READY).
 
@@ -208,6 +333,44 @@ def exitfile(app_id: str) -> str:
     return os.path.join(app_dir(app_id), "last_exit.json")
 
 
+def resource_state_file() -> str:
+    """Durable resource-allocation journal.
+
+    This is a function rather than an import-time derived constant so host tests
+    (and recovery tools) that redirect ``APPMGR_DIR`` cannot accidentally write
+    into the real device layout after :mod:`paths` has already been imported.
+    """
+    return os.path.join(APPMGR_DIR, "resources.json")
+
+
+def lock_file() -> str:
+    """Single-instance lock derived from the current (possibly test) layout."""
+    return os.path.join(APPMGR_DIR, "appmgr.lock")
+
+
+def busy_file() -> str:
+    """Mutation lock derived from the current (possibly test) layout."""
+    return os.path.join(APPMGR_DIR, "busy.lock")
+
+
+def audit_log() -> str:
+    return os.path.join(APPMGR_DIR, "audit.log")
+
+
+def operation_state_file() -> str:
+    return os.path.join(APPMGR_DIR, "operations.json")
+
+
+def inference_authorization_dir() -> str:
+    """Runtime-only directory shared by appmgr and ``inferenced``."""
+
+    return INFERENCE_AUTH_DIR
+
+
+def uploads_dir() -> str:
+    return os.path.join(APPSTAGE_DIR, "uploads")
+
+
 def ensure_dirs() -> None:
     for d in (APPS_DIR, APPMGR_DIR):
         os.makedirs(d, exist_ok=True)
@@ -216,3 +379,9 @@ def ensure_dirs() -> None:
 def ensure_appstage() -> str:
     os.makedirs(APPSTAGE_DIR, exist_ok=True)
     return APPSTAGE_DIR
+
+
+def ensure_uploads() -> str:
+    directory = uploads_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    return directory

@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+// reCamera Pro extension-API handshake (spec v0.4 §1.2). Every extension socket
+// (result-in / frame / probe) begins with a Hello -> HelloAck exchange before
+// switching to its per-endpoint protocol. Version negotiation uses interval
+// intersection (NOT min): the server picks the highest version inside the
+// client's [version_min, version_max] that it also supports; empty intersection
+// -> HelloAck.error = EVERSION and the connection is closed.
+
+message Hello {
+  uint32 version_min = 1;   // client-supported version interval (inclusive)
+  uint32 version_max = 2;   // v1 clients set both to 1
+  string client_name = 3;   // diagnostic only, e.g. "face-app"
+  string auth = 4;          // ignored in peercred mode; used in token mode
+}
+
+message Capability {
+  string name = 1;                 // e.g. "result", "frame", "probe"
+  uint32 version = 2;              // capability's own version
+  map<string, uint32> limits = 3;  // e.g. {"max_msg_rate":60,"max_sources":8}
+}
+
+message HelloAck {
+  uint32 api_version = 1;          // highest common version chosen by server
+  uint32 server_build = 2;
+  string auth_mode = 3;            // "peercred" | "token"
+  repeated Capability capabilities = 4;
+  int32 error = 5;                 // 0 = OK; non-zero (EVERSION,...) -> server closes
+  string error_msg = 6;
+}
+
+// --- M2 frame proxy (spec §2.2). After the Hello/HelloAck, a frame client
+// sends one FrameSubscribe; the server answers FrameSubscribeAck and then
+// switches to the raw data plane (96-byte frame_hdr + one dma-buf fd via
+// SCM_RIGHTS, spec §2.3). Release is an 8-byte little-endian uint64 seq, no fd.
+message FrameSubscribe {
+  uint32 width = 1;        // 0 = default (NPU-matched)
+  uint32 height = 2;
+  uint32 fourcc = 3;       // 0 = NV12
+  uint32 fps_divisor = 4;  // 1=every frame, 2=every other, ...; 0 treated as 1
+}
+
+message FrameSubscribeAck {
+  int32 error = 1;
+  string error_msg = 2;
+  uint32 width = 3;            // actual effective values
+  uint32 height = 4;
+  uint32 fourcc = 5;
+  uint32 pool_depth = 6;       // server pool depth
+  uint32 max_outstanding = 7;  // frames this connection may hold at once (§2.4)
+}
+
+// --- M3 observability (spec §4). After the Hello/HelloAck a probe client sends
+// one ProbeSubscribe (stage ids + sample_every); the server answers
+// ProbeSubscribeAck and then PUSHES ProbeData messages for the subscribed
+// stages. Small payloads (metrics / postproc) travel inline in ProbeData.payload
+// (<= 32 KB); large tensors (preproc.out RGB, npu.raw output layers) travel in a
+// memfd carried by SCM_RIGHTS, with ProbeData.fd_size holding its byte length.
+message TensorMeta {
+  repeated uint32 shape = 1;   // e.g. [1,640,640,3] or [1,80,80,84]
+  uint32 dtype = 2;            // 0=uint8 1=int8 2=uint16 3=int16 4=float32 5=float16
+  float  scale = 3;            // quantization scale (0 if not quantized)
+  int32  zero_point = 4;       // quantization zero point
+  uint32 layout = 5;           // 0=unknown 1=NCHW 2=NHWC
+  uint32 fourcc = 6;           // image-like tensors: V4L2 fourcc ('RGB3' for preproc)
+  uint32 width = 7;            // image width in pixels (image-like tensors)
+  uint32 height = 8;           // image height in pixels
+  uint32 stride = 9;           // row stride in bytes (image-like tensors)
+}
+
+message ProbeSubscribe {
+  repeated string stage_ids = 1;  // "preproc.out","npu.raw","postproc.out","metrics"
+  uint32 sample_every = 2;        // sample 1 of every N frames; 0 => 1
+}
+
+message ProbeSubscribeAck {
+  int32 error = 1;
+  string error_msg = 2;
+  uint32 sample_every = 3;     // effective value the server will honour
+  uint32 subscribed_mask = 4;  // bitmask of accepted stages (1=preproc 2=npu 4=post 8=metrics)
+}
+
+message ProbeData {
+  string stage_id = 1;         // which tap produced this sample
+  uint64 seq = 2;              // monotonic inference sequence (gaps => dropped samples)
+  uint64 pts_us = 3;           // CLOCK_MONOTONIC microseconds (same clock as frame pts)
+  bytes  payload = 4;          // inline payload (metrics/postproc); empty when fd_size>0
+  TensorMeta meta = 5;         // tensor descriptor (preproc/npu stages)
+  uint32 fd_size = 6;          // >0: payload is in the SCM_RIGHTS memfd, this many bytes
+  uint32 flags = 7;            // bit0: samples were dropped before this one;
+                               // bits8-15: output index (npu.raw); bits16-23: output count
+}
+// --- External NPU ownership -------------------------------------------------
+// A Python workflow must hold one inference lease before it creates an RKNN
+// context.  The connection itself is the lease: EOF/HUP fences the generation,
+// releases rkipc's external hold and applies the requested crash fallback.
+//
+// The first datagram is still the shared Hello.  Afterwards every datagram is
+// an InferenceControlRequest and receives exactly one matching response, except
+// ACQUIRE: its success response is deferred until the built-in model handle is
+// destroyed and actual_fps is zero.
+enum InferenceControlOp {
+  INFERENCE_CONTROL_STATUS = 0;
+  INFERENCE_CONTROL_ACQUIRE = 1;
+  INFERENCE_CONTROL_READY = 2;
+  INFERENCE_CONTROL_RELEASE = 3;
+  INFERENCE_CONTROL_SET_FALLBACK = 4;
+}
+
+enum InferenceOwnerState {
+  INFERENCE_OWNER_BUILTIN = 0;
+  INFERENCE_OWNER_PREPARING_EXTERNAL = 1;
+  INFERENCE_OWNER_EXTERNAL_ACQUIRED = 2;
+  INFERENCE_OWNER_EXTERNAL_READY = 3;
+  INFERENCE_OWNER_NONE = 4;
+  INFERENCE_OWNER_FAULT = 5;
+}
+
+message InferenceControlRequest {
+  uint64 request_id = 1;       // caller-generated id; echoed by the response
+  InferenceControlOp op = 2;
+  string app_id = 3;           // diagnostic only; peercred remains authoritative
+  string instance_id = 4;      // per-launch UUID, max 64 bytes
+  uint64 lease_id = 5;         // required after ACQUIRE
+  uint64 epoch = 6;            // required after ACQUIRE; changes on rkipc restart
+  uint32 timeout_ms = 7;       // ACQUIRE drain deadline; 0 selects server default
+  bool fallback_builtin = 8;   // restart built-in inference when this lease dies
+}
+
+message InferenceControlResponse {
+  uint64 request_id = 1;
+  InferenceControlOp op = 2;
+  int32 error = 3;             // rc_ext_err_t
+  string error_msg = 4;
+  uint64 lease_id = 5;
+  uint64 epoch = 6;
+  uint64 generation = 7;       // increases for every granted external owner
+  InferenceOwnerState state = 8;
+  bool builtin_enabled = 9;    // persisted configured intent
+  string builtin_state = 10;   // starting/running/stopping/stopped/error
+  uint32 actual_fps = 11;
+  bool handle_present = 12;
+  int32 peer_pid = 13;         // current lease owner, or 0
+  string source_id = 14;       // peercred-derived owner identity
+  bool fallback_builtin = 15;
+}

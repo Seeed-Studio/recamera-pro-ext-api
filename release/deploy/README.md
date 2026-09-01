@@ -1,5 +1,10 @@
 # reCamera Pro v1.3.0 — 一键部署包 (application layer)
 
+> **历史归档，禁止固件部署。** 本目录及其 CDN 链接描述旧 v1.3 包，不含
+> `inference-control@1`，不代表当前源码的一致发布集。不要运行
+> `deploy-firmware.sh`；只有已安装匹配旧 endpoint 固件的历史设备才可把
+> 应用层步骤作为迁移参考。
+
 > 📖 **部署流程总览见 [DEPLOY.md](./DEPLOY.md)**(装什么/用哪个脚本/什么顺序/怎么回滚,不随版本变)。
 > 本文是**本版本包**的清单与校验值。
 

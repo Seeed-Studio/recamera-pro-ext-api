@@ -44,56 +44,14 @@ import signal
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Iterator, Optional
 
 import numpy as np
 
+from kit.frame import Frame
+
 DEFAULT_SUB_STREAM = "rtsp://admin:admin@127.0.0.1:5554/live/1"   # 640x480 H.265
 DEFAULT_MAIN_STREAM = "rtsp://admin:admin@127.0.0.1:5554/live/0"  # 4K H.265
-
-
-@dataclass
-class Frame:
-    """One decoded frame.
-
-    `data` is a contiguous HWC numpy array. For `fmt="RGB"` it is uint8
-    [H, W, 3] ready to hand straight to preprocess.letterbox().  An official
-    broker may set ``model_info`` and put a model-sized, already-letterboxed
-    RGB image in ``data``; in that case ``w``/``h`` remain the *original camera
-    geometry* and the transform is used by post-processing to map detections
-    back to that geometry.  Keeping the original dimensions here is important
-    for the result sink's normalized-coordinate contract.  ``fmt`` may later
-    be "NV12" when a zero-copy backend yields planar YUV; downstream code
-    should branch on ``fmt``.
-    """
-    data: np.ndarray
-    w: int
-    h: int
-    fmt: str            # "RGB" | "NV12"
-    pts: float          # capture timestamp, seconds (monotonic clock)
-    # Optional model-space image/letterbox metadata supplied by an optimized
-    # source.  Kept as ``object`` to avoid importing runtime.preprocess from
-    # this low-level adapter module (and to remain backwards compatible with
-    # callers constructing Frame positionally).
-    model_info: object = None
-    # Optional model-sized, already-letterboxed RGB produced by the source
-    # (hardware path) while ``data`` keeps ORIGINAL-resolution pixels.  This is
-    # what lets an app crop source pixels (ROI/perspective) and still skip the
-    # Python letterbox.  When the source instead letterboxes *into* ``data``
-    # (no original pixels retained) this stays None and only ``model_info`` is
-    # set.  Consumers should prefer ``model_data`` when present, else fall back
-    # to ``data`` + ``model_info``, else letterbox themselves.
-    model_data: object = None
-    # Optional per-frame hardware ROI cropper (``hw-roi`` mode). When a source
-    # keeps the camera's NV12 dma-buf available for on-demand cropping instead of
-    # pre-converting a full-resolution RGB frame, it attaches an object exposing
-    #   crop_square(box, out_size, pad) -> (roi_uint8_HWC_RGB, roi_map)
-    # bound to THIS frame's borrowed buffer (valid only for the current loop
-    # step). Cascade apps reach it through ``App.crop_roi_hw``; None on every
-    # other source (RTSP/snapshot, cpu/hw/hw-direct modes, or after an RGA
-    # latch-off), where ``crop_roi_hw`` falls back to the numpy crop.
-    roi_cropper: object = None
 
 
 class FrameSource(ABC):

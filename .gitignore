@@ -39,6 +39,11 @@ _local_backups/
 # 打包产物(可再生)
 dist/
 .pytest_cache/
+*.egg-info/
+/build/
+/out/
+/release-artifacts/
+kit/build/
 
 # SDK 构建产物(源在 sdk/,build 是编出来的)
 sdk/**/build/

@@ -75,15 +75,7 @@ class RetailVisionApp(App):
         ))
 
         self.zone = ZoneCounter(self.count_zone)
-
-        self.line = LineCounter()
-        line_cfg = self.entry_line
-        if line_cfg and "a" in line_cfg and "b" in line_cfg:
-            # "in" names which side of a->b counts as an entry: a left->right
-            # crossing has cross-product sign +1, i.e. the point moves toward the
-            # RIGHT side. ab_in True means that +1 (left->right) is an entry.
-            ab_in = str(line_cfg.get("in", "right")).lower() != "left"
-            self.line.set_line(line_cfg["a"], line_cfg["b"], ab_in)
+        self.line = self._new_line_counter(self.entry_line)
 
         self.window = RollingWindow(float(self.window_duration))
 
@@ -98,6 +90,24 @@ class RetailVisionApp(App):
               f"assist={self.dwell.cfg.assistance_sec}s "
               f"speed={self.dwell.cfg.speed_threshold}px/s) "
               f"window={self.window.window_sec}s", flush=True)
+
+    @staticmethod
+    def _new_line_counter(line_cfg):
+        """Build one line counter from a normalized manifest value.
+
+        A spatial edit changes the meaning of every accumulated crossing, so a
+        live update intentionally starts a fresh counter at the next frame
+        boundary rather than carrying counts/state across different geometry.
+        """
+
+        line = LineCounter()
+        if line_cfg and "a" in line_cfg and "b" in line_cfg:
+            # "in" names which side of a->b counts as an entry: a left->right
+            # crossing has cross-product sign +1, i.e. the point moves toward the
+            # RIGHT side. ab_in True means that +1 (left->right) is an entry.
+            ab_in = str(line_cfg.get("in", "right")).lower() != "left"
+            line.set_line(line_cfg["a"], line_cfg["b"], ab_in)
+        return line
 
     def on_params_changed(self, changed):
         """★S1 live hot-reload★ -- only what the auto-bind cannot do by itself.
@@ -114,7 +124,17 @@ class RetailVisionApp(App):
             cfg.speed_threshold = float(self.dwell_speed)
             cfg.engaged_sec = float(self.dwell_engaged)
             cfg.assistance_sec = float(self.dwell_assist)
+        if "count_zone" in changed:
+            # tick()/on_params_changed run at a frame boundary, so replacing
+            # the geometry object cannot race the current frame's update.
+            self.zone = ZoneCounter(self.count_zone)
+        if "entry_line" in changed:
+            self.line = self._new_line_counter(self.entry_line)
+            self._entry = 0
+            self._exit = 0
         print(f"[retail] hot-reload conf={self.confidence} iou={self.iou} "
+              f"zone={'on' if self.zone.enabled else 'off'} "
+              f"line={'on' if self.line.enabled else 'off'} "
               f"dwell(engaged={self.dwell.cfg.engaged_sec}s "
               f"assist={self.dwell.cfg.assistance_sec}s "
               f"speed={self.dwell.cfg.speed_threshold}px/s)", flush=True)

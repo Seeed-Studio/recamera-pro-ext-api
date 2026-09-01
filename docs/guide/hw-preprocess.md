@@ -57,7 +57,7 @@ class MyApp(App):
 | `hw-direct` | `fall-detection`、`retail-vision`、`yolo-detector`、`fitness-trainer` |
 | `hw-roi`（dma-buf 裁 ROI，见 §7） | `face-analysis`（已接入示范） |
 | `cpu`（需要原图像素） | `facemesh-reader`、`ppocr-reader`（可按 §7 迁到 `hw-roi`，暂未迁） |
-| 不适用 | `qrcode-reader`、`voice-transcribe`（`needs_model = False`，无模型推理） |
+| 不适用 | `qrcode-reader`（无模型推理）、`voice-transcribe`（无视频帧模型；其默认 RK ASR 仍通过 `ExternalNpuLease`/rkipc broker 使用 NPU） |
 
 ## 2. 坐标契约（三种模式完全一致）
 

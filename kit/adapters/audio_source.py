@@ -79,6 +79,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from kit.errors import ResourceBusyError
+
 
 # --- Contract (canonical; re-exported by official.py) ------------------------ #
 @dataclass
@@ -174,7 +176,7 @@ def _normalize_filter(audio_filter: Optional[str]) -> Optional[str]:
 
 
 # --- Errors ------------------------------------------------------------------ #
-class AudioDeviceBusy(RuntimeError):
+class AudioDeviceBusy(ResourceBusyError):
     """Raised when the ALSA capture device is held exclusively (rkipc)."""
 
 

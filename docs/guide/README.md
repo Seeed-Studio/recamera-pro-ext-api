@@ -8,7 +8,9 @@
 > - 规格：`../api/spec.md`（§1 握手/身份/错误码、§2 帧代理、§3 结果注入、§8 架构）
 > - C ABI：`sdk/include/recamera_ext.h`
 > - Python 封装：`sdk/python/recamera_ext/__init__.py`
-> - proto：`common/vigil/protocol/ext_api.proto`、`common/vigil/protocol/inference.proto`
+> - proto：本仓 `sdk/proto/ext_api.proto`、`sdk/proto/inference.proto`；固件侧
+>   对应 `recamera_ipc/protobufs/`，其中 `inference.proto` 还与嵌套 Vigil
+>   仓的协议副本做构建期哈希校验
 
 ---
 
@@ -16,7 +18,12 @@
 
 reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一组**运行时接口**向第三方进程开放。核心前提贯穿全文：
 
-> **这些 API 都是运行时接口。方案商在设备上运行自己的进程即可对接，不改固件源码、不重编固件、不刷自编固件。** 你交付的是一个跑在设备上的可执行程序（C/C++ 二进制或 Python 脚本），通过 unix domain socket 与固件通信。
+> **这些 API 是运行时接口，但前提是设备已经安装与 SDK 匹配、且包含扩展
+> endpoint 的补丁固件。** 在这种设备上，方案商应用可作为独立进程接入，
+> 无需为每个应用重编固件。当前工作树已经从 v1.6.0 handoff 恢复 native
+> client 与 rkipc 服务端源码，并增加了源码构建门禁；但这些改动尚需提交到
+> manifest 所固定的仓库版本并完成 RV1126B 真机验收。因此仍不能把“仓库里
+> 有预编译文件”理解为任意出厂固件都可直接使用。
 
 扩展 API 能做什么：
 
@@ -31,12 +38,15 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 
 | 能力 | 状态 | 对接方式 | 文档 |
 |---|---|---|---|
-| **帧代理**（零拷贝取帧） | 现成可用（M2） | `FrameSource` / C ABI `rc_ext_frame_*`，`/run/recamera/frame.sock` | 本文 §3 |
-| **结果注入**（OSD+录像+推送） | 现成可用（M1）；全套 `send_*`（检测/分类/分割/跟踪/关键点）已在 SDK | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **Python AI 工作流 API**（typed errors / buffer / RGA / RKNN / lifecycle） | Python + native 源码已接通；host/交叉构建通过，待目标板完整 E2E | `recamera_ext` + `kit` + appmgr managed launch | [python-ai-api.md](./python-ai-api.md) |
+| **帧代理**（零拷贝取帧） | 服务端/client 源码已恢复；重启屏障与 host 测试已补，待目标板回归 | `FrameSource` / C ABI `rc_ext_frame_*`，`/run/recamera/frame.sock` | 本文 §3 |
+| **结果注入**（OSD+录像+推送） | 服务端/client 源码已恢复；Python `send_*` 已封装，待目标板回归 | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **NPU 独占仲裁** | `inference-control@1` broker + Python lease + appmgr 路由已实现；host kill/HUP 测试通过，待目标板压力测试 | `InferenceLease` / `ExternalNpuLease`，`/run/recamera/inference-control.sock` | [python-ai-api.md](./python-ai-api.md#6-externalnpulease-与-rkipc-broker) |
 | **音频 PCM** | 现成可用 | `arecord -D ai_asr`（ALSA dsnoop 共享） | [audio-pcm.md](./audio-pcm.md) |
 | **GPIO 结果触发** | 现成可用（组合现有零件） | notify WS + gmgr API，无需固件新功能 | [gpio-result-trigger.md](./gpio-result-trigger.md) |
 | **前端扩展挂载** | 现成可用 | `ext_<name>.conf` + `/extension/<name>/`（复用 JWT 会话） | [frontend-extension.md](./frontend-extension.md) |
 | **结果推送（notify）** | 现成可用 | 向 `/var/tmp/notify` 写 `InferenceResult`（仅分发，不上 OSD） | [result-push.md](./result-push.md) |
+| **统一 AI Result Hub v2** | 后端协议/订阅/重放已实现 | `/ws/ai/results/v2`（app + builtin，raw/formatted）；legacy 8123/8124 保留 | [result-hub-v2.md](./result-hub-v2.md) |
 | **硬件隐私遮罩**（COVER 增量控制） | 固件 + SDK 就绪；线 B 冷启动真机验证通过 | `MaskControl` / C ABI `rc_ext_mask_*`（rkipc RPC，M4） | [hw-mask-api.md](./hw-mask-api.md) |
 | **输出组件**（声明式结果输出） | 现成可用；真机 + 本地 broker 验证（P3b） | manifest `capabilities:["output"]` + `output` 块，`ConfigurableSink`（零 app 代码） | [output-sink.md](./output-sink.md) |
 | **硬件预处理加速**（RGA letterbox） | `hw-direct` 真机 A/B **+55%**；`hw` 实测无收益（+0.8%），默认不开 | `App.model_frame = "hw-direct"`（一行类属性，零 RGA 代码） | [hw-preprocess.md](./hw-preprocess.md) |
@@ -44,6 +54,13 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **rkipc RPC / 配置类** | 走 HTTP API | entry.cgi HTTP API（`/var/tmp/rkipc` 是内部接口，勿直连） | [rkipc-rpc-status.md](./rkipc-rpc-status.md) |
 | **观测面（M3）** | 已实现（真机验证）；SDK client `ProbeSource`（v1.2.0） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §4.8 与规格 §4 |
 | 控制面（M4）/ 显示（M5）/ 生态（M6）/ 沙箱分发 | 规划中 | — | 见本文 §8 与规格 |
+
+> **当前发布边界**：本工作树现在可以从源码交叉构建
+> `librecamera_ext.so.1` 与带 frame/result/probe/inference-control 服务端的
+> `rkipc`，但 `release/pkg/sdk` 仍是旧的 sideload 快照，不能作为权威输入。
+> 正式发布前还必须提交并锁定 recamera_ipc、Vigil 与本外部仓的匹配 commit，
+> 由顶层固件构建生成产物，再完成真机 kill/restart/OTA 矩阵。详细状态见
+> [Python AI 工作流 API 与生命周期](./python-ai-api.md#0-先读当前可用范围)。
 
 > **帧代理 vs 结果注入 vs notify 的选择**：
 > - 要拿摄像头画面自己推理 → **帧代理**（§3）。
@@ -54,8 +71,8 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 
 扩展 SDK 是**一套 C ABI 契约 + 一层 Python ctypes 薄封装**，不是两套独立实现。
 
-- **C / C++**：include `sdk/include/recamera_ext.h`（带 `extern "C"` 保护，C 与 C++ 都可直接 include），链接 `librecamera_ext.so.1`。函数族 `rc_ext_frame_*` / `rc_ext_result_*` / `rc_ext_probe_*`。
-- **Python**：`import recamera_ext`（ctypes 薄封装，运行时加载**同一个 `.so`**）。类 `FrameSource` / `ResultSink` / `ProbeSource`。
+- **C / C++**：include `sdk/include/recamera_ext.h`（带 `extern "C"` 保护，C 与 C++ 都可直接 include），链接 `librecamera_ext.so.1`。函数族 `rc_ext_frame_*` / `rc_ext_result_*` / `rc_ext_probe_*` / `rc_ext_inference_lease_*`。
+- **Python**：`import recamera_ext`（ctypes 薄封装，运行时加载**同一个 `.so`**）。类 `FrameSource` / `ResultSink` / `ProbeSource` / `InferenceLease`。
 
 二者**同 socket、同 wire 协议、同契约**；Python 不是独立实现，是 C ABI 的封装。选 C/C++ 还是 Python 只取决于你的应用语言。
 
@@ -64,13 +81,16 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | 帧代理 | `rc_ext_frame_*` | `FrameSource` |
 | 结果注入 | `rc_ext_result_*`（`rc_ext_result_send_*`） | `ResultSink`（`send_*`） |
 | 观测面 probe | `rc_ext_probe_*` | `ProbeSource` |
+| NPU 独占租约 | `rc_ext_inference_lease_*` | `InferenceLease`（kit 默认包装为 `ExternalNpuLease`） |
 
 ### 1.2 前置条件（对所有 socket API 通用）
 
 - socket 位于 `/run/recamera/`。**v1 权限模型为 root-only**：目录 `0750 root:root`、socket 文件 `0660`（实测 RV1126B），进程需以 root 运行（麦克风/摄像头/`/dev/mpi` 设备节点均 root 属主，扩展应用经启动脚本以 root 拉起）。
   > 按组隔离的方案（`recamera-ext` 组、socket 0660 组可写）随 P1 沙箱一并落地，v1 未建组——见规格 §1.1 / §6 上机实证。v1 扩展全 root，组隔离无实际意义。
 - C 客户端链接 `librecamera_ext.so.1`；Python 客户端 `import recamera_ext`（ctypes 薄封装，运行时加载同一 `.so`）。
-- 三条 socket（`frame.sock` / `result-in.sock` / `probe.sock`）连接后都先走一次 **Hello/HelloAck 握手**（§5），SDK 内部自动完成，无需手写 protobuf。
+- 四条 socket（`frame.sock` / `result-in.sock` / `probe.sock` /
+  `inference-control.sock`）连接后都先走一次 **Hello/HelloAck 握手**（§5），
+  SDK 内部自动完成，无需手写 protobuf。
 
 ---
 
@@ -557,7 +577,9 @@ with ProbeSource(stages=["metrics"]) as ps:   # 也可 stages=["preproc.out","np
 
 ## 5. 握手与版本协商（规格 §1.2）
 
-三条 socket 连接后都先做一次 protobuf 握手（定义在 `ext_api.proto`），**SDK 内部自动完成**，方案商通常无需手写；这里说明其语义，便于自适应与自实现协议。
+四条 socket 连接后都先做一次 protobuf 握手（定义在 `ext_api.proto`），
+**SDK 内部自动完成**，方案商通常无需手写；这里说明其语义，便于自适应与
+自实现协议。
 
 ```proto
 message Hello {
@@ -584,7 +606,9 @@ message HelloAck {
 - **协商规则**：服务端在客户端 `[version_min, version_max]` 与自身支持集合的**交集**内取最大值；交集为空 → `error = EVERSION` 并关闭连接（不是 `min(client, server)`）。
 - **认证模式**：v1 `auth_mode = "peercred"`（用 `SO_PEERCRED` 取连接 pid/uid/gid 做身份）。将来 app token 作为**新增模式**并行提供，peercred 模式保留，老客户端不断。
 - **按 limits 自适应，不要硬编码**：并发数、速率、池深都在 `Capability.limits` 里返回，可能随固件变化。例如结果注入按 `limits["max_msg_rate"]` 控发送速率、帧代理按 `max_outstanding` 控持帧数。Python 侧 `src.pool_depth` / `src.max_outstanding` 即来自握手回填。
-- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` 一经发布不可移除——只要 `/run/recamera/` 存在，v1 客户端就能工作。
+- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` /
+  `inference-control@1` 一经发布不可移除。socket inode 存在仍不代表兼容，
+  客户端必须完成 Hello/HelloAck。
 
 ---
 
@@ -616,7 +640,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **前端扩展挂载** — [frontend-extension.md](./frontend-extension.md)：放一个 `ext_<name>.conf` 到 nginx 配置目录，把你的页面/后端挂到 `/extension/<name>/`，复用官方 dashboard 的 JWT 登录会话。
 - **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加/录像请改用本文 §4 的结果注入。
 - **rkipc RPC 现状** — [rkipc-rpc-status.md](./rkipc-rpc-status.md)：`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，不承诺稳定、勿直连；配置类需求走 entry.cgi HTTP API，等 M4 版本化控制面。
-- **AI 结果软件叠加** — [ai-result-overlay.md](./ai-result-overlay.md)：自建 app 结果广播到 WS `:8124`（默认，带 `frame:{width,height}` 坐标参考系），官方 React `/preview` 页 canvas 叠加画框；不进码流，OSD 烧流 opt-in。
+- **统一 AI 结果与软件叠加** — [result-hub-v2.md](./result-hub-v2.md) / [ai-result-overlay.md](./ai-result-overlay.md)：`/ws/ai/results/v2` 以稳定 v2 envelope 合并 builtin 与多 app，支持 raw/formatted、latest frame、status 保留与 event 短重放；8123/8124 只作 legacy 兼容。浏览器叠加不进码流。
 - **模型上板（zero-to-deployed）** — [model-onboarding.md](./model-onboarding.md)：方案商把自己的模型跑到设备上的端到端主线——ONNX 导出 → 检查 IR/opset → RKNN 转换（`rknn-toolkit2` 2.3.x，target `rv1126b`）→ 量化校准 → 放进 app `models/` + manifest 声明 → 打包/装/激活/验证。深度转换细节指向 `models/convert/` 项目。
 - **推理即应用** — [inference-as-app.md](./inference-as-app.md)：内建推理经 `builtin.py` driver 变一等 app、`activate` 单活互斥切换、`config_schema` 的 `apply:live|restart` 热更（SIGHUP → kit 自动重绑 + `on_params_changed`）、`SchemaForm` 动态配置面板。
 - **硬件隐私遮罩** — [hw-mask-api.md](./hw-mask-api.md)：`rc_ext_mask_*` / `MaskControl` 控制 VI 层硬件 COVER 遮块，增量移动不闪、不落盘；auto/manual 配额 `[3,6)`/`[0,3)`。
@@ -629,11 +653,12 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 
 | 能力 | 里程碑 | 状态 |
 |---|---|---|
-| 结果注入（OSD+录像+推送） | M1 | 现成可用 |
-| 帧代理（零拷贝取帧 + C ABI） | M2 | 现成可用（塌方级门禁 G1-G4 均真机 PASS，2026-08-11） |
+| 结果注入（OSD+录像+推送） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
+| 帧代理（零拷贝取帧 + C ABI） | M2 | client/server 源码已恢复；runtime video restart 屏障与 host 生命周期测试通过，待真机回归 |
 | 音频 PCM / notify / 前端挂载 / rkipc 文档化 | M0 | 现成可用 |
-| 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | 已实现（真机验证；复用 M1 socket 骨架）；SDK client `ProbeSource` v1.2.0，inline + memfd 双路真机验证 |
-| 控制面（`/api/v1/ext/*` 版本化域 + capabilities + app token） | M4 | 规划中 |
+| 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | client/server 源码已恢复并可构建；历史补丁固件已验证，当前整合版待真机压力测试 |
+| NPU 独占 broker（`inference-control.sock`） | M4 | lease/epoch/generation/READY/HUP fallback 已实现并通过 host kill 测试；数据端点 fencing 待下一版 |
+| 控制面（`/api/v1/ext/*` capabilities） | M4 | capabilities 已接入；CGI 仅查询/配置，不代理 NPU 或媒体数据面 |
 | 显示（M5）/ 生态框架接入 gstreamer/ffmpeg（M6）/ 沙箱与打包签名分发 | M5/M6 | 规划中 |
 
 细节以 `../api/spec.md` 为准（§2 帧代理、§3 结果注入、§4 观测面、§8 架构与扩展模型）。

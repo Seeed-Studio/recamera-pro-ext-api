@@ -10,7 +10,7 @@
 app 产出的每帧结果envelope（`results` / `events` / `frame` / `timestamp` / `seq`）由 kit 统一转成**可配置、可并发的外部输出**。app 只在 manifest 里**声明**要输出什么、默认发到哪，运行时 kit 负责编码 + 发送。**app.py 的 `run()` 里对输出一行代码都不用写。**
 
 与其他输出通路的区别：
-- **软件叠加**（画框到 /preview canvas）→ [ai-result-overlay.md](./ai-result-overlay.md)（WS :8124）。
+- **统一结果查看/软件叠加** → [ai-result-overlay.md](./ai-result-overlay.md)与 [result-hub-v2.md](./result-hub-v2.md)（canonical WS 8125；legacy app WS 8124 保留）。
 - **结果注入 OSD/录像**（框进 RTSP/录像）→ [README.md](./README.md) §4 结果注入。
 - **本文（输出组件）** = 把结构化结果**声明式**发到 MQTT/HTTP/UART/WS 外部消费者，含 Home Assistant 即插即用。
 
@@ -46,10 +46,10 @@ opt-in 只要两件事：`capabilities` 加 `"output"`，并给一个 `output` �
 | 键 | 必填 | 含义 |
 |---|---|---|
 | `fields[].name` | 是 | 字段逻辑名（映射/模板里可引用） |
-| `fields[].from` | 是 | 只读点路径（`results[].box`、`events[kind=detection].label`），带 `[]` 列表投影；**不是任意 Jinja**，是取值路径 |
+| `fields[].from` | 是 | 只读点路径（`results[].box`、`events[kind=detection].label`、`geometry[]`），带 `[]` 列表投影；**不是任意 Jinja**，是取值路径 |
 | `fields[].type` | 是 | 类型标注（`string`/`integer`/`float`/`bbox<float>[4]`/`object<number>` 等） |
 | `fields[].description` | 是 | 人读说明，前端字段选择器展示 |
-| `fields[].coord` | 否 | 坐标系（`pixel_xyxy`/`pixel_quad`/`normalized_xyxy`），格式器不得静默改写 |
+| `fields[].coord` | 否 | 坐标系（如 `pixel_xyxy`、`pixel_quad`；`geometry[]` 只能用 `pixel_points`/`normalized_points`），格式器不得静默改写 |
 | `fields[].event_kind` / `unit` / `optional` | 否 | 事件种类绑定 / 单位 / 可空标注 |
 | `default_channel` | 否 | 默认通道，字符串或列表，载入时归一成列表 |
 | `default_mode` | 否 | `raw` / `custom` / `ha` |
@@ -69,11 +69,17 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
   "seq": 42,                       // 每 app/进程单调递增
   "frame": {"width": 1920, "height": 1080, "pts": 123.456},
   "results": [],                   // app 产出的结果项
-  "events": []                     // app 产出的业务事件
+  "events": [],                    // app 产出的业务事件
+  "geometry": []                   // 可选 canonical 绘制图元
 }
 ```
 
 映射和模板都是对这个 envelope 取值。
+
+`geometry[]` 支持 `point/line/polyline/polygon`，每项统一使用 `points:[[x,y],...]`。
+它随 raw/custom 输出保留；Result Hub 会按严格 manifest v2 声明重新验证并注入可信坐标空间。
+完整字段、style 上限与 manifest `render.geometry` 示例见
+[result-hub-v2.md](./result-hub-v2.md#通用-geometry-primitives)。
 
 ## 3. 通道（可多选并发）
 
@@ -82,7 +88,7 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 | **MQTT** | `dMqtt`（`sURL` broker、`iPort` 默认 1883、`sClientId`、`sUsername`/`sPassword`、`sTopic` base/state topic） | 支持 HA 上下线（§5）。手写最小 MQTT，无 paho 依赖 |
 | **HTTP** | `dHttp`（`sUrl` POST 目标、`sToken` bearer） | stdlib `urllib` POST，有界队列，永不阻塞推理 |
 | **UART** | `dUart`（`sPort` 逻辑选择、`sPortDev` 如 `/dev/ttyS2`） | 换行分隔，路径白名单限 `/dev/ttyS*`。波特率/权限已核实，见 §3.1。仍默认 feature-gate（`RECAMERA_UART_ENABLE`） |
-| **WS** | :8124 `/appcenter/ws/results` | 复用现有 `WsResultSink`，与 /preview 叠加同一路 |
+| **WS** | canonical :8125 `/ws/ai/results/v2`；legacy :8124 `/appcenter/ws/results` | 管理 app 的 primary sink 始终先进 appmgr 8124 gateway，再非阻塞镜像到 Result Hub。`output_channels:["ws"]` 不再为每个 app 建独立端口 |
 
 多个通道可同时激活；一个通道失败被隔离 + 限速日志，不拖累其余通道和推理（复用 `MultiSink` 的扇出失败隔离）。
 
@@ -111,7 +117,7 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 
 ### 4.2 custom（可视化映射 + Jinja2）
 
-两种视图，同一底层格式器，永不产生两份发布：
+两种视图，同一底层格式器，永不产生两份发布。`template_mode` 是显式互斥选择：`mapping` 只使用 `output_mapping`，`template` 只使用 `dTemplate`；不再用“mapping 非空就静默覆盖自由模板”的隐式优先级。旧配置没有该键时仍兼容原行为（有 mapping 选 mapping，否则选 template），manifest 带 `default_mapping` 的既有包默认值为 `mapping`：
 
 **① 可视化映射行**（`default_mapping` / 前端映射表）——`source → target → topic`：
 
@@ -134,12 +140,22 @@ kit 在 sink 入口把每帧规范成一个 envelope（Spec §1）：
 | 命名空间 | 含义 |
 |---|---|
 | `app` / `timestamp` / `seq` / `frame` / `results` / `events` | canonical envelope 值 |
+| `summary` / `metrics` / `render` | 同一批结果的状态、性能与可信渲染声明 |
+| `stream_id` / `inference_time_ms` / `pipeline_ms` | Kit 实际输出中的顶层流与耗时字段 |
 | `detection.count` | 过滤后检测类结果数 |
 | `detection.entries` | 规范化 `{box,score,class_id,label,raw}` 列表，几何保留其声明坐标系 |
 | `keypoints` | 带关键点的结果；`classification` 分类类；`tracking` 跟踪；`segmentation` 带 mask |
 | `events.<kind>` | 某种事件列表，如 `events.fall` / `events.metrics` / `events.transcript`；`events.all` 取全部 |
 
-受限环境：`StrictUndefined`、autoescape off（JSON 非 HTML）、只放 `tojson`/`default`/`length`/`selectattr`/`map`/`min`/`max`/`sum` 等；**无**文件加载器、import/include、Python 内部属性访问、用户可调对象。强制模板长度、渲染载荷、循环/条目、渲染耗时上限。渲染出错只丢那条通道消息，不终止推理。
+受限环境：`StrictUndefined`、autoescape off（JSON 非 HTML）、只放 `tojson`/`default`/`length`/`selectattr`/`map`/`min`/`max`/`sum` 等；**无**文件加载器、import/include、Python 内部属性访问、用户可调对象。强制模板长度、渲染载荷与命名空间条目上限。渲染出错只丢那条通道消息，不终止推理；Result Hub 另用有界异步 worker 隔离慢模板，不阻塞 raw/推理 ingress。
+
+`template_mode` / `dTemplate` / `output_mapping` 的 apply mode 均为 `live`：SIGHUP 后
+`ConfigurableSink` 会用已保存的 manifest/app metadata 与新的 effective config
+重新 resolve/build formatter。编译失败保留上一个已知正常的 formatter，不再依赖
+不存在于 config.json 的私有 `_formatter` 对象。Result Hub 的 formatted
+订阅使用同一受限 formatter，raw v2 envelope 永不被模板替换。Hub 对一个认证 ingress
+batch 的完整 `results + events + summary` 只渲染一次并缓存；frame/status/event 的
+canonical 拆分不会造成多次模板副作用或“最后只剩 event”的预览漂移。
 
 ### 4.3 ha（Home Assistant Discovery）
 
@@ -171,7 +187,9 @@ kit 独占所有 availability 消息，app 和模板不能覆盖：
 - **上下线 LWT**：连上 retained `online`、优雅停 `offline`、断连由 LWT 置 `offline`。
 - **custom jinja2**：可视化映射生成模板 + 自由模板两路渲染并发布通过。
 
-> **已知修复项**：早期存在 init-race——`ConfigurableSink` 与 MQTT 连接初始化竞态，导致 **HA discovery 首次连接时不发**（HA 首连建不出实体，需重连才补）。已修复/修复中。若观察到 HA 首连缺实体，重连一次或核对该修复是否已部署。
+> **已修复的历史问题**：`ConfigurableSink` 现在会在 MQTT 首次连接前完成
+> `on_ready` 绑定，HA discovery/上线状态不再等到下一次重连；模板热更新也会
+> 从普通 effective config 重建 formatter，失败保留旧版。
 
 ## 8. 依赖
 
