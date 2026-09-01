@@ -158,6 +158,206 @@ def do_set_visualization(incoming: dict) -> dict:
         return appvisualization.public_view(_visualization_bridge_instance)
 
 
+_STREAM_BURN_IN_AFFECTS = ["preview", "rtsp", "recording", "snapshot"]
+
+
+def _stream_burn_in_request(incoming: dict) -> bool:
+    """Return the requested per-app burn-in state from the strict v1 body."""
+    if not isinstance(incoming, dict):
+        raise appvisualization.VisualizationError(
+            "visualization config must be an object")
+    unknown = sorted(set(incoming) - {"stream_burn_in"})
+    if unknown:
+        raise appvisualization.VisualizationError(
+            "unknown application visualization field(s): %s" %
+            ", ".join(unknown))
+    block = incoming.get("stream_burn_in")
+    if not isinstance(block, dict):
+        raise appvisualization.VisualizationError(
+            "stream_burn_in must be an object")
+    unknown = sorted(set(block) - {"enabled"})
+    if unknown:
+        raise appvisualization.VisualizationError(
+            "unknown stream_burn_in field(s): %s" % ", ".join(unknown))
+    if not isinstance(block.get("enabled"), bool):
+        raise appvisualization.VisualizationError(
+            "stream_burn_in.enabled must be boolean")
+    return block["enabled"]
+
+
+def _app_visualization_view(app_id: str, *, manifest: dict = None,
+                            config: dict = None) -> dict:
+    """Project the device-global OSD union as one application's setting.
+
+    ``enabled`` is user intent that is currently selected by the effective
+    global policy. ``effective`` additionally requires a live application and
+    bridge. Keeping these concepts separate lets a stopped application retain
+    its setting without claiming that boxes are currently reaching the encoder.
+    """
+    builtin_app = app_id == builtin.BUILTIN_ID
+    if not builtin_app:
+        _require_installed(app_id)
+    trusted_manifest = (
+        builtin.manifest() if builtin_app else
+        (manifest if isinstance(manifest, dict) else (_read_manifest(app_id) or {}))
+    )
+    supported = bool(
+        not builtin_app and _supports_detection_stream_osd(trusted_manifest))
+    policy = config if isinstance(config, dict) else appvisualization.load()
+    osd = policy.get("osd") if isinstance(policy.get("osd"), dict) else {}
+    selected = app_id in (osd.get("sources") or [])
+    enabled = bool(supported and osd.get("enabled") and selected)
+
+    bridge_status = (_visualization_bridge_instance.status()
+                     if _visualization_bridge_instance is not None else {})
+    bridge_running = bool(bridge_status.get("running"))
+    active = app_id in (bridge_status.get("active_sources") or [])
+    running = bool(
+        not builtin_app and supervisor.is_running(app_id) is not None)
+    effective = bool(enabled and running and bridge_running)
+
+    if builtin_app:
+        reason = "builtin_system_controlled"
+        status = "unsupported"
+    elif not supported:
+        reason = "unsupported"
+        status = "unsupported"
+    elif not enabled:
+        reason = "disabled"
+        status = "disabled"
+    elif not running:
+        reason = "app_stopped"
+        status = "configured"
+    elif not bridge_running:
+        reason = "osd_bridge_unavailable"
+        status = "unavailable"
+    elif active:
+        reason = None
+        status = "active"
+    else:
+        reason = None
+        status = "waiting_for_results"
+
+    return {
+        "id": app_id,
+        "stream_burn_in": {
+            "supported": supported,
+            "enabled": enabled,
+            "effective": effective,
+            "reason": reason,
+            "affects": list(_STREAM_BURN_IN_AFFECTS),
+            "max_sources": appvisualization.MAX_OSD_SOURCES,
+            "status": status,
+        },
+    }
+
+
+def do_get_app_visualization(app_id: str) -> dict:
+    return _app_visualization_view(app_id)
+
+
+def _remove_app_visualization_source(app_id: str, *, reason: str) -> bool:
+    """Remove one app from the durable union while already mutation-fenced."""
+    current = appvisualization.load()
+    current_osd = current.get("osd") or {}
+    sources = [source for source in current_osd.get("sources", [])
+               if source != app_id]
+    if len(sources) == len(current_osd.get("sources", [])):
+        return False
+    saved = appvisualization.save({
+        "osd": {
+            "enabled": bool(current_osd.get("enabled") and sources),
+            "sources": sources,
+        },
+    })
+    if _visualization_bridge_instance is not None:
+        _visualization_bridge_instance.reload(saved)
+    _audit("v1_app_visualization", id=app_id, enabled=False,
+           reason=reason, osd_sources=sources)
+    return True
+
+
+def _eligible_app_visualization_sources(sources: list) -> tuple[list, list]:
+    """Return valid installed OSD sources and auditable removals.
+
+    Older firmware did not remove visualization selections on uninstall or
+    capability-changing upgrade.  Treat the durable file as untrusted legacy
+    state whenever an app-scoped write performs its read/modify/write; stale
+    identifiers must not consume the bounded source union forever.
+    """
+    eligible = []
+    removed = []
+    for source in sources:
+        try:
+            _require_installed(source)
+        except (FileNotFoundError, ValueError):
+            removed.append({"id": source, "reason": "not_installed"})
+            continue
+        manifest = _read_manifest(source) or {}
+        if not _supports_detection_stream_osd(manifest):
+            removed.append({"id": source, "reason": "unsupported"})
+            continue
+        eligible.append(source)
+    return eligible, removed
+
+
+def do_set_app_visualization(app_id: str, incoming: dict, *,
+                             _busy_timeout: float = 0.0) -> dict:
+    requested = _stream_burn_in_request(incoming)
+    if app_id == builtin.BUILTIN_ID:
+        if requested:
+            raise appvisualization.VisualizationError(
+                "builtin OSD is controlled by the system AI overlay setting")
+        return _app_visualization_view(app_id)
+
+    with busy_gate(wait_timeout=_busy_timeout):
+        # Re-read both the installed manifest and policy under the lifecycle
+        # mutation fence. An upgrade must not swap capability between validation
+        # and persistence, and two browsers must not overwrite each other's
+        # independently selected applications.
+        _require_installed(app_id)
+        manifest = _read_manifest(app_id) or {}
+        supported = _supports_detection_stream_osd(manifest)
+        if requested and not supported:
+            raise appvisualization.VisualizationError(
+                "application does not support detection stream OSD: %s" % app_id)
+        current = appvisualization.load()
+        current_osd = current.get("osd") or {}
+        # The legacy endpoint could retain selected sources behind a disabled
+        # global master. The first app-scoped edit deliberately starts from the
+        # *effective* union so enabling one app cannot unexpectedly re-enable
+        # every dormant legacy selection.
+        existing = [source for source in current_osd.get("sources", [])
+                    if source != app_id]
+        eligible, removed = _eligible_app_visualization_sources(existing)
+        sources = eligible if current_osd.get("enabled") else []
+        if requested:
+            if len(sources) >= appvisualization.MAX_OSD_SOURCES:
+                raise BusyError(
+                    "stream OSD supports at most %d applications" %
+                    appvisualization.MAX_OSD_SOURCES)
+            sources.append(app_id)
+        saved = appvisualization.save({
+            "osd": {"enabled": bool(sources), "sources": sources},
+        })
+        if _visualization_bridge_instance is not None:
+            _visualization_bridge_instance.reload(saved)
+        if removed:
+            _audit(
+                "v1_app_visualization_reconciled",
+                trigger_id=app_id,
+                removed_sources=removed,
+                osd_sources=sources,
+            )
+        _audit("v1_app_visualization", id=app_id, enabled=requested,
+               osd_sources=sources)
+        _operation_manager().events.publish(
+            "visualization", action="updated", app_id=app_id,
+            stream_burn_in={"enabled": requested})
+        return _app_visualization_view(
+            app_id, manifest=manifest, config=saved)
+
+
 class RequestOriginError(ValueError):
     """An unsafe browser request did not prove a same-origin boundary."""
 
@@ -1213,6 +1413,15 @@ def do_install(pkg_path: str, signature: str = None, *,
             must_stop = bool(
                 running_pid is not None or has_run_record or lifecycle_fence)
 
+            if not pre_installed:
+                # An app id can remain selected after an uninstall performed by
+                # older firmware.  Clear that stale intent before publishing
+                # any files from the new package.  Failure is fatal here: once
+                # a capable new generation is published, retaining the old id
+                # would silently opt it into device-wide video burn-in.
+                _remove_app_visualization_source(
+                    app_id, reason="fresh_install")
+
             installer.begin_install_transaction(
                 candidate, config_snapshot=config_snapshot,
                 lifecycle_snapshot=prior_lifecycle)
@@ -1416,6 +1625,24 @@ def do_install(pkg_path: str, signature: str = None, *,
             installer.clear_install_transaction(candidate)
             if unsigned_install or not pre_installed:
                 state.clear_active_if(app_id)
+            # During an upgrade, retain the user's choice only while the newly
+            # committed manifest still advertises the trusted box contract.
+            # This runs after the transaction commits, so a failed upgrade
+            # rollback keeps the previous release's policy.
+            if pre_installed and not _supports_detection_stream_osd(manifest):
+                try:
+                    _remove_app_visualization_source(
+                        app_id, reason="capability_removed",
+                    )
+                except Exception as exc:
+                    # The data plane independently rejects a generation without
+                    # stream_osd capability. Keep the successfully committed app
+                    # installed and make a rare persistence failure observable.
+                    _audit("v1_app_visualization_cleanup_failed", id=app_id,
+                           reason="capability_removed",
+                           error=str(exc))
+                    print("[appmgr] visualization policy cleanup failed for %s: %r" %
+                          (app_id, exc), flush=True)
             _audit("install", id=app_id, version=manifest.get("version"),
                    pkg=os.path.realpath(pkg_path), upgrade=pre_installed,
                    restarted=restarted,
@@ -1481,6 +1708,17 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         if (_result_hub_instance is not None
                 and hasattr(_result_hub_instance, "invalidate_app_manifest")):
             _result_hub_instance.invalidate_app_manifest(app_id)
+        try:
+            _remove_app_visualization_source(app_id, reason="uninstall")
+        except Exception as exc:
+            # The removed app can no longer publish an authenticated result and
+            # the hub invalidation above clears its cached generation, so stale
+            # durable intent cannot reach OSD. Report the cleanup failure without
+            # turning a completed deletion into a misleading uninstall error.
+            _audit("v1_app_visualization_cleanup_failed", id=app_id,
+                   reason="uninstall", error=str(exc))
+            print("[appmgr] visualization policy cleanup failed for %s: %r" %
+                  (app_id, exc), flush=True)
         _audit("uninstall", id=app_id, stopped=stopped, was_active=was_active)
         return {"id": app_id, "uninstalled": True,
                 "stopped": stopped, "was_active": was_active}
@@ -3179,6 +3417,15 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_events()
             except Exception as exc:
                 return self._v1_error(exc)
+        visualization_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/visualization",
+            path)
+        if visualization_match:
+            try:
+                return self._send(
+                    200, do_get_app_visualization(visualization_match.group(1)))
+            except Exception as exc:
+                return self._v1_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/(config|logs)",
             path)
@@ -3464,6 +3711,16 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 return self._send(
                     200, do_set_visualization(self._body_json_v1()))
+            except Exception as exc:
+                return self._v1_error(exc)
+        visualization_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/visualization",
+            path)
+        if visualization_match:
+            try:
+                return self._send(200, do_set_app_visualization(
+                    visualization_match.group(1), self._body_json_v1(),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
             except Exception as exc:
                 return self._v1_error(exc)
         match = re.fullmatch(

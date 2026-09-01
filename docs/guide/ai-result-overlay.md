@@ -119,9 +119,19 @@ canonical envelope 的 `render` 不是应用运行时数据：Hub 会丢弃 payl
 | legacy App 8124 | 可由旧消费者绘制 | 否 |
 | appmgr detection OSD bridge / `osd-in.sock` | 与浏览器并列消费 raw v2 | 是 |
 
-设备级烧录通过 `PUT /api/app-center/v1/visualization` 配置。启用时
+产品 UI 应在对应应用的配置中通过
+`GET/PUT /api/app-center/v1/apps/<id>/visualization` 管理设备级烧录，写入体为
+`{"stream_burn_in":{"enabled":true|false}}`。服务端在同一个 mutation gate 内原子增删
+该应用，不允许浏览器通过“读全局来源列表再整表覆盖”修改，以免两个应用配置窗口互相丢失
+选择。响应同时区分用户的 `enabled`、当前是否真正生效的 `effective` 和原因；应用停止时
+保留选择但不宣称生效。全新安装会先清除同 ID 的历史选择，卸载会删除选择，升级仅在新
+manifest 仍支持时保留；每次应用级写入还会清理旧固件遗留的已卸载或已失去能力来源。
+
+旧的 `GET/PUT /api/app-center/v1/visualization` 保留给兼容工具和设备级诊断。启用时
 `osd.sources` 至少包含一个应用，不能保存 `enabled=true,sources=[]`；旧固件遗留的这类
-矛盾配置在读取、bridge 启动和 API 展示时统一按 disabled 处理。只有 manifest v2 同时
+矛盾配置在读取、bridge 启动和 API 展示时统一按 disabled 处理。应用级 API 第一次写入时
+会丢弃处于 disabled 全局 master 后面的 dormant selections，避免只启用一个应用却意外恢复
+全部旧选择。只有 manifest v2 同时
 使用 `output.contract_version=2`、`render.schema_version=1`，且
 `render.stream_osd.supported` 明确包含 `boxes`，并直接声明至少一个
 `results[].box` 且所有别名使用同一明确 xyxy 坐标空间的应用可选。对早期严格 v2 契约，仅当

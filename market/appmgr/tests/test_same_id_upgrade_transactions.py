@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 from appmgr import (config as appconfig, installer, paths, pythonenv, server,
-                    state, supervisor)  # noqa: E402
+                    state, supervisor, visualization)  # noqa: E402
 
 
 APP_ID = "upgrade-fence"
@@ -73,6 +73,81 @@ def test_stopped_upgrade_commits_and_clears_journal(layout):
     record = state.get_app(APP_ID)
     assert record["desired_state"] == state.DESIRED_STOPPED
     assert record["restart_history"] == []
+
+
+def test_fresh_install_clears_stale_stream_burn_in_before_publish(
+        layout, monkeypatch):
+    visualization.save({
+        "osd": {"enabled": True, "sources": [APP_ID]},
+    })
+    published_with = []
+    real_commit = installer.commit_prepared
+
+    def observe_commit(candidate):
+        published_with.append(visualization.load())
+        return real_commit(candidate)
+
+    monkeypatch.setattr(installer, "commit_prepared", observe_commit)
+
+    server.do_install(_package(layout, "1.0.0"))
+
+    assert published_with == [visualization.defaults()]
+    assert visualization.load() == visualization.defaults()
+    assert _installed_version() == "1.0.0"
+
+
+def test_fresh_install_visualization_cleanup_failure_prevents_publish(
+        layout, monkeypatch):
+    stale = {"osd": {"enabled": True, "sources": [APP_ID]}}
+    visualization.save(stale)
+    published = []
+    real_commit = installer.commit_prepared
+
+    def observe_commit(candidate):
+        published.append(candidate)
+        return real_commit(candidate)
+
+    monkeypatch.setattr(installer, "commit_prepared", observe_commit)
+    monkeypatch.setattr(
+        visualization, "save",
+        lambda _value: (_ for _ in ()).throw(
+            OSError("injected visualization persistence failure")),
+    )
+
+    with pytest.raises(OSError, match="visualization persistence"):
+        server.do_install(_package(layout, "1.0.0"))
+
+    assert published == []
+    assert not os.path.exists(paths.app_dir(APP_ID))
+    assert visualization.load() == stale
+    assert installer.load_install_transaction() is None
+
+
+def test_upgrade_removes_stream_burn_in_when_capability_disappears(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    visualization.save({
+        "osd": {"enabled": True, "sources": [APP_ID]},
+    })
+    monkeypatch.setattr(
+        server, "_supports_detection_stream_osd", lambda _manifest: False)
+
+    server.do_install(_package(layout, "2.0.0"))
+
+    assert visualization.load() == visualization.defaults()
+
+
+def test_upgrade_preserves_stream_burn_in_while_capability_remains(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    selected = {"osd": {"enabled": True, "sources": [APP_ID]}}
+    visualization.save(selected)
+    monkeypatch.setattr(
+        server, "_supports_detection_stream_osd", lambda _manifest: True)
+
+    server.do_install(_package(layout, "2.0.0"))
+
+    assert visualization.load() == selected
 
 
 def test_prepare_failure_happens_before_old_process_stop(layout, monkeypatch):

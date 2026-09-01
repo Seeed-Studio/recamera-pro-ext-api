@@ -636,6 +636,7 @@ Web-native manifest v2 主流程：
 | GET | `/api/app-center/v1/apps` | 列出多应用状态 |
 | POST | `/api/app-center/v1/apps/<id>/{start,stop,restart}` | 提交异步生命周期操作 |
 | GET/PUT | `/api/app-center/v1/apps/<id>/config` | 读取或更新单应用配置 |
+| GET/PUT | `/api/app-center/v1/apps/<id>/visualization` | 读取或切换该应用结果是否烧录到设备视频流；能力由受信 manifest 判定 |
 | GET | `/api/app-center/v1/apps/<id>/logs` | 读取有界日志尾部 |
 | DELETE | `/api/app-center/v1/apps/<id>` | 提交异步卸载 |
 | GET | `/api/app-center/v1/operations` | 查询异步操作状态 |

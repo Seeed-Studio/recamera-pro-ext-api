@@ -1698,6 +1698,227 @@ def test_visualization_http_policy_is_persisted_and_manifest_gated(
         thread.join(timeout=2)
 
 
+def test_app_scoped_visualization_is_atomic_and_capability_gated(
+        layout, monkeypatch):
+    def write_manifest(app_id, *, supported=True):
+        directory = os.path.join(paths.APPS_DIR, app_id)
+        os.mkdir(directory)
+        manifest = {
+            "manifest_version": 2,
+            "id": app_id,
+            "render": {"schema_version": 1},
+            "output": {"contract_version": 2, "fields": []},
+        }
+        if supported:
+            manifest["render"]["stream_osd"] = {
+                "supported": ["boxes"], "default": False,
+            }
+            manifest["output"]["fields"] = [{
+                "name": "box", "from": "results[].box",
+                "coord": "normalized_xyxy",
+            }]
+        with open(os.path.join(directory, "manifest.json"), "w") as stream:
+            json.dump(manifest, stream)
+
+    write_manifest("alpha")
+    write_manifest("beta")
+    write_manifest("unsupported", supported=False)
+    write_manifest("limit-target")
+    for index in range(visualization.MAX_OSD_SOURCES):
+        write_manifest("source-%d" % index)
+    monkeypatch.setenv(
+        "APPMGR_VISUALIZATION_CONFIG",
+        os.path.join(paths.APPMGR_DIR, "visualization.json"))
+    monkeypatch.setattr(
+        server.supervisor, "is_running",
+        lambda app_id: 4200 if app_id in {"alpha", "beta", "limit-target"} else None)
+    audits = []
+    monkeypatch.setattr(
+        server, "_audit",
+        lambda action, **payload: audits.append({"action": action, **payload}),
+    )
+    server.cache_clear()
+
+    class Bridge:
+        def __init__(self):
+            self.config = visualization.defaults()
+
+        def reload(self, config):
+            self.config = config
+
+        def status(self):
+            osd = self.config["osd"]
+            return {
+                "running": True,
+                "enabled": osd["enabled"],
+                "sources": list(osd["sources"]),
+                "active_sources": list(osd["sources"]),
+                "sent": 0, "send_errors": 0, "dropped": 0,
+                "last_error": "",
+            }
+
+    bridge = Bridge()
+    monkeypatch.setattr(server, "_visualization_bridge_instance", bridge)
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, initial = _json_request(
+            httpd, "GET", "/api/app-center/v1/apps/alpha/visualization", {})
+        assert status == 200
+        assert initial["stream_burn_in"] == {
+            "supported": True,
+            "enabled": False,
+            "effective": False,
+            "reason": "disabled",
+            "affects": ["preview", "rtsp", "recording", "snapshot"],
+            "max_sources": visualization.MAX_OSD_SOURCES,
+            "status": "disabled",
+        }
+
+        status, alpha = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/alpha/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 200
+        assert alpha["stream_burn_in"]["enabled"] is True
+        assert alpha["stream_burn_in"]["effective"] is True
+
+        status, beta = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/beta/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 200
+        assert beta["stream_burn_in"]["enabled"] is True
+        assert visualization.load()["osd"] == {
+            "enabled": True, "sources": ["alpha", "beta"],
+        }
+
+        status, alpha = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/alpha/visualization",
+            {"stream_burn_in": {"enabled": False}})
+        assert status == 200
+        assert alpha["stream_burn_in"]["enabled"] is False
+        assert visualization.load()["osd"] == {
+            "enabled": True, "sources": ["beta"],
+        }
+
+        status, error = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/unsupported/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 400
+        assert "does not support" in error["error"]
+        assert visualization.load()["osd"]["sources"] == ["beta"]
+
+        status, builtin_view = _json_request(
+            httpd, "GET", "/api/app-center/v1/apps/builtin/visualization", {})
+        assert status == 200
+        assert builtin_view["stream_burn_in"]["supported"] is False
+        assert builtin_view["stream_burn_in"]["reason"] == \
+            "builtin_system_controlled"
+
+        # A disabled legacy master may retain dormant selections. Enabling one
+        # app through the scoped endpoint must not revive all of them.
+        visualization.save({
+            "osd": {"enabled": False, "sources": ["alpha", "beta"]},
+        })
+        status, _ = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/alpha/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 200
+        assert visualization.load()["osd"] == {
+            "enabled": True, "sources": ["alpha"],
+        }
+
+        # Old firmware did not clean sources on uninstall or on a release that
+        # lost OSD capability. A scoped edit repairs both without discarding
+        # another valid application's selection.
+        visualization.save({
+            "osd": {
+                "enabled": True,
+                "sources": ["missing-source", "unsupported", "alpha"],
+            },
+        })
+        status, _ = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/beta/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 200
+        assert visualization.load()["osd"] == {
+            "enabled": True, "sources": ["alpha", "beta"],
+        }
+        reconciled = [entry for entry in audits
+                      if entry["action"] == "v1_app_visualization_reconciled"]
+        assert reconciled[-1]["removed_sources"] == [
+            {"id": "missing-source", "reason": "not_installed"},
+            {"id": "unsupported", "reason": "unsupported"},
+        ]
+
+        # The limit still applies when all occupied slots are real installed
+        # applications with trusted stream-OSD capability.
+        visualization.save({
+            "osd": {"enabled": True,
+                    "sources": [
+                        "source-%d" % index
+                        for index in range(visualization.MAX_OSD_SOURCES)
+                    ]},
+        })
+        status, error = _json_request(
+            httpd, "PUT", "/api/app-center/v1/apps/limit-target/visualization",
+            {"stream_burn_in": {"enabled": True}})
+        assert status == 409
+        assert "at most" in error["error"]
+
+        status, error = _json_request(
+            httpd, "GET", "/api/app-center/v1/apps/missing/visualization", {})
+        assert status == 404
+        assert "not installed" in error["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_app_scoped_visualization_rechecks_install_after_mutation_gate(
+        layout, monkeypatch):
+    app_id = "visualization-race"
+    directory = os.path.join(paths.APPS_DIR, app_id)
+    os.mkdir(directory)
+    manifest_path = os.path.join(directory, "manifest.json")
+    with open(manifest_path, "w") as stream:
+        json.dump({
+            "manifest_version": 2,
+            "id": app_id,
+            "render": {
+                "schema_version": 1,
+                "stream_osd": {"supported": ["boxes"], "default": False},
+            },
+            "output": {
+                "contract_version": 2,
+                "fields": [{
+                    "name": "box", "from": "results[].box",
+                    "coord": "normalized_xyxy",
+                }],
+            },
+        }, stream)
+    monkeypatch.setenv(
+        "APPMGR_VISUALIZATION_CONFIG",
+        os.path.join(paths.APPMGR_DIR, "visualization.json"))
+    stale = {"osd": {"enabled": True, "sources": [app_id]}}
+    visualization.save(stale)
+
+    @contextmanager
+    def uninstall_before_lock_body(**_kwargs):
+        os.unlink(manifest_path)
+        os.rmdir(directory)
+        yield
+
+    monkeypatch.setattr(server, "busy_gate", uninstall_before_lock_body)
+
+    with pytest.raises(FileNotFoundError, match="not installed"):
+        server.do_set_app_visualization(
+            app_id, {"stream_burn_in": {"enabled": False}})
+
+    assert visualization.load() == stale
+
+
 def test_http_policy_and_idempotent_upload_delete_contract(layout):
     inactive_body, content_type = _multipart(b"http-inactive-package")
     inactive = uploads.receive(

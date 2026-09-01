@@ -35,7 +35,7 @@ os.environ["APPMGR_MODEL_ROOTS"] = _MODELS
 # Import the package (server.py uses relative imports, so we import it AS a
 # package member, not as a bare top-level module).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from appmgr import server, paths, state, installer  # noqa: E402
+from appmgr import server, paths, state, installer, visualization  # noqa: E402
 
 
 class UninstallTests(unittest.TestCase):
@@ -123,6 +123,33 @@ class UninstallTests(unittest.TestCase):
         self.assertFalse(res["was_active"])
         self.assertEqual(state.get_active(), "some-other-app",
                          "uninstalling a non-active app must not clear active")
+
+    def test_uninstall_removes_only_its_stream_burn_in_source(self):
+        self._make_app("osd-app")
+        visualization.save({
+            "osd": {"enabled": True, "sources": ["osd-app", "other-app"]},
+        })
+        self.addCleanup(lambda: visualization.save(visualization.defaults()))
+
+        class Bridge:
+            def __init__(self):
+                self.reloaded = []
+
+            def reload(self, value):
+                self.reloaded.append(value)
+
+        bridge = Bridge()
+        previous_bridge = server._visualization_bridge_instance
+        server._visualization_bridge_instance = bridge
+        self.addCleanup(
+            lambda: setattr(server, "_visualization_bridge_instance", previous_bridge))
+
+        server.do_uninstall("osd-app")
+
+        self.assertEqual(visualization.load(), {
+            "osd": {"enabled": True, "sources": ["other-app"]},
+        })
+        self.assertEqual(bridge.reloaded[-1], visualization.load())
 
     # -- error / idempotency ------------------------------------------------ #
     def test_uninstall_unknown_app_errors(self):
