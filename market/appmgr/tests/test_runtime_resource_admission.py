@@ -210,14 +210,15 @@ def test_first_request_cannot_exceed_aggregate_platform_cap(
         ({"mem_available_mb": 4096, "storage_free_mb": 151,
           "temperature_c": 50.0}, "storage.available-mb"),
         ({"mem_available_mb": 4096, "storage_free_mb": 9999,
-          "temperature_c": 78.0}, "thermal.start"),
+          "temperature_c": 100.0}, "thermal.start"),
     ],
 )
 def test_live_capacity_is_checked_only_when_reserving_for_start(
         tmp_path, monkeypatch, sample, resource_name):
     monkeypatch.setenv("APPMGR_SYSTEM_MEMORY_HEADROOM_MB", "256")
     monkeypatch.setenv("APPMGR_STORAGE_HEADROOM_MB", "128")
-    monkeypatch.setenv("APPMGR_START_MAX_TEMP_C", "78")
+    monkeypatch.delenv("APPMGR_START_MAX_TEMP_C", raising=False)
+    monkeypatch.delenv("APPMGR_RUNTIME_HARD_TEMP_C", raising=False)
     plan = resources.plan_manifest(_manifest())
     manager = resources.ResourceManager(
         str(tmp_path / "resources.json"), runtime_probe=lambda: sample)
@@ -270,7 +271,7 @@ def test_idempotent_exact_generation_does_not_fail_if_runtime_later_heats_up(
     plan = resources.plan_manifest(_manifest())
     first = manager.reserve("budgeted", "same-instance", 7, plan)
 
-    sample["temperature_c"] = 99.0
+    sample["temperature_c"] = 111.0
     again = manager.reserve("budgeted", "same-instance", 7, plan)
     assert again == first
     with open(tmp_path / "resources.json") as handle:
@@ -288,6 +289,94 @@ def test_runtime_status_reports_both_thermal_thresholds(tmp_path, monkeypatch):
     assert status["sample"]["temperature_c"] == 50.0
     assert status["policy"]["start_max_temp_c"] == 76.5
     assert status["policy"]["runtime_hard_temp_c"] == 84.25
+
+
+def test_runtime_status_reports_new_default_thermal_thresholds(
+        tmp_path, monkeypatch):
+    monkeypatch.delenv("APPMGR_START_MAX_TEMP_C", raising=False)
+    monkeypatch.delenv("APPMGR_RUNTIME_HARD_TEMP_C", raising=False)
+    manager = resources.ResourceManager(
+        str(tmp_path / "resources.json"), runtime_probe=_healthy_probe)
+
+    policy = manager.runtime_status()["policy"]
+
+    assert policy["start_max_temp_c"] == 100.0
+    assert policy["runtime_hard_temp_c"] == 110.0
+
+
+def test_default_start_thermal_boundary_allows_below_100(tmp_path, monkeypatch):
+    monkeypatch.delenv("APPMGR_START_MAX_TEMP_C", raising=False)
+    monkeypatch.delenv("APPMGR_RUNTIME_HARD_TEMP_C", raising=False)
+    sample = {"mem_available_mb": 4096, "storage_free_mb": 9999,
+              "temperature_c": 99.9}
+    manager = resources.ResourceManager(
+        str(tmp_path / "resources.json"), runtime_probe=lambda: sample)
+
+    made = manager.reserve(
+        "below-start-limit", "instance-a", 1,
+        resources.plan_manifest(_manifest("below-start-limit")),
+    )
+
+    assert made
+
+
+@pytest.mark.parametrize(
+    ("temperature", "violated"),
+    [(109.9, False), (110.0, True)],
+)
+def test_default_runtime_hard_thermal_boundary(
+        tmp_path, monkeypatch, temperature, violated):
+    monkeypatch.delenv("APPMGR_START_MAX_TEMP_C", raising=False)
+    monkeypatch.delenv("APPMGR_RUNTIME_HARD_TEMP_C", raising=False)
+    sample = {"mem_available_mb": 4096, "storage_free_mb": 9999,
+              "temperature_c": temperature}
+    manager = resources.ResourceManager(
+        str(tmp_path / "resources.json"), runtime_probe=lambda: sample)
+
+    violation = manager.runtime_guard()
+
+    assert (violation is not None) is violated
+    if violation is not None:
+        assert violation["limit_c"] == 110.0
+
+
+@pytest.mark.parametrize(
+    ("start", "hard", "expected_start", "expected_hard"),
+    [
+        ("not-a-number", "110", 100.0, 110.0),
+        ("nan", "110", 100.0, 110.0),
+        ("100", "inf", 100.0, 110.0),
+        ("110", "110", 100.0, 110.0),
+        ("111", "110", 100.0, 110.0),
+        ("105", "100", 90.0, 100.0),
+    ],
+)
+def test_invalid_thermal_policy_preserves_a_safe_order(
+        tmp_path, monkeypatch, start, hard, expected_start, expected_hard):
+    monkeypatch.setenv("APPMGR_START_MAX_TEMP_C", start)
+    monkeypatch.setenv("APPMGR_RUNTIME_HARD_TEMP_C", hard)
+    manager = resources.ResourceManager(
+        str(tmp_path / "resources.json"), runtime_probe=_healthy_probe)
+
+    policy = manager.runtime_status()["policy"]
+
+    assert policy["start_max_temp_c"] == expected_start
+    assert policy["runtime_hard_temp_c"] == expected_hard
+
+
+def test_invalid_thermal_override_cannot_disable_runtime_hard_stop(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("APPMGR_START_MAX_TEMP_C", "100")
+    monkeypatch.setenv("APPMGR_RUNTIME_HARD_TEMP_C", "nan")
+    sample = {"mem_available_mb": 4096, "storage_free_mb": 9999,
+              "temperature_c": 110.0}
+    manager = resources.ResourceManager(
+        str(tmp_path / "resources.json"), runtime_probe=lambda: sample)
+
+    violation = manager.runtime_guard()
+
+    assert violation["resource"] == "thermal.runtime"
+    assert violation["limit_c"] == 110.0
 
 
 def test_runtime_status_reports_memory_uncapped_but_storage_reserved_by_default(

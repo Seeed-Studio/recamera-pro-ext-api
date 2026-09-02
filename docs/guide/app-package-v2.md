@@ -252,8 +252,8 @@ matching the frame proxy's advertised and enforced lower-layer limit. Immediatel
 `MemAvailable`, app-data free space, and the highest valid thermal-zone
 temperature; it applies only the new generation's declared envelope, keeps
 256 MiB system-memory and 128 MiB storage headroom by default, and defers starts
-at 78 C or above. While an app is
-running, the reconciler applies a separate 85 C hard thermal fence: it stops
+at 100 C or above. While an app is
+running, the reconciler applies a separate 110 C hard thermal fence: it stops
 and releases the exact generation, leaves the desired state running, and only
 retries after the lower start gate is satisfied. All thresholds/capacities are
 reported by `GET /api/app-center/v1/resources.runtime_admission`. Deployments
@@ -261,6 +261,11 @@ may tune them with `APPMGR_MANAGED_MEMORY_CAP_MB`,
 `APPMGR_MANAGED_STORAGE_CAP_MB`, `APPMGR_MANAGED_CPU_CAP_PERCENT`,
 `APPMGR_SYSTEM_MEMORY_HEADROOM_MB`, `APPMGR_STORAGE_HEADROOM_MB`,
 `APPMGR_START_MAX_TEMP_C`, and `APPMGR_RUNTIME_HARD_TEMP_C`.
+The thermal overrides must both be finite and the start threshold must remain
+strictly below the runtime threshold. Invalid individual values use their
+100/110 C defaults. If a configured start threshold is at/above the hard fence,
+appmgr retains the hard fence and lowers the start threshold by 10 C rather
+than raising the safety limit.
 
 If an application declares a memory or storage budget but the corresponding
 live telemetry cannot be read or parsed, start admission fails closed with a

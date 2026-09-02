@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 import socket
 import struct
@@ -21,6 +22,11 @@ from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, List, Optional
 
 from . import paths
+
+
+DEFAULT_START_MAX_TEMP_C = 100.0
+DEFAULT_RUNTIME_HARD_TEMP_C = 110.0
+DEFAULT_THERMAL_RESTART_GAP_C = 10.0
 
 
 class ResourceError(RuntimeError):
@@ -151,6 +157,33 @@ def _env_capacity(name: str, default: int, *, allow_zero: bool = False) -> int:
     except (TypeError, ValueError):
         value = default
     return max(0 if allow_zero else 1, value)
+
+
+def _finite_env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) else default
+
+
+def _thermal_policy() -> tuple[float, float]:
+    """Return one coherent start/runtime policy from operator overrides.
+
+    Invalid or non-finite values fall back individually. If an override places
+    the start gate at/above the runtime stop fence, retain the (safer) hard
+    fence and lower the start gate instead of raising the stop temperature.
+    """
+    start_max_temp = _finite_env_float(
+        "APPMGR_START_MAX_TEMP_C", DEFAULT_START_MAX_TEMP_C)
+    runtime_hard_temp = _finite_env_float(
+        "APPMGR_RUNTIME_HARD_TEMP_C", DEFAULT_RUNTIME_HARD_TEMP_C)
+    if start_max_temp >= runtime_hard_temp:
+        start_max_temp = min(
+            DEFAULT_START_MAX_TEMP_C,
+            runtime_hard_temp - DEFAULT_THERMAL_RESTART_GAP_C,
+        )
+    return start_max_temp, runtime_hard_temp
 
 
 def _append_limit_requests(requests: List[Request], resource_spec: dict) -> None:
@@ -571,11 +604,7 @@ class ResourceManager:
             temperature = float(temperature) if temperature is not None else None
         except (TypeError, ValueError):
             temperature = None
-        try:
-            max_start_temp = float(os.environ.get(
-                "APPMGR_START_MAX_TEMP_C", "78.0"))
-        except (TypeError, ValueError):
-            max_start_temp = 78.0
+        max_start_temp, _ = _thermal_policy()
         if temperature is not None and temperature >= max_start_temp:
             thermal_owners = sorted({
                 str(item.get("app_id")) for item in allocations
@@ -744,16 +773,7 @@ class ResourceManager:
         except Exception as exc:
             sample = {}
             error = str(exc)
-        try:
-            max_start_temp = float(os.environ.get(
-                "APPMGR_START_MAX_TEMP_C", "78.0"))
-        except (TypeError, ValueError):
-            max_start_temp = 78.0
-        try:
-            runtime_hard_temp = float(os.environ.get(
-                "APPMGR_RUNTIME_HARD_TEMP_C", "85.0"))
-        except (TypeError, ValueError):
-            runtime_hard_temp = 85.0
+        max_start_temp, runtime_hard_temp = _thermal_policy()
         return {
             "sample": sample,
             "error": error,
@@ -791,10 +811,9 @@ class ResourceManager:
             return None
         try:
             temperature = float(sample.get("temperature_c"))
-            hard_limit = float(os.environ.get(
-                "APPMGR_RUNTIME_HARD_TEMP_C", "85.0"))
         except (TypeError, ValueError):
             return None
+        _, hard_limit = _thermal_policy()
         if temperature < hard_limit:
             return None
         return {

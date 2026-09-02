@@ -248,7 +248,10 @@ def test_resources_api_exposes_start_admission_telemetry(layout, monkeypatch):
             "temperature_c": 61.5,
         },
         "error": None,
-        "policy": {"start_max_temp_c": 78.0},
+        "policy": {
+            "start_max_temp_c": 100.0,
+            "runtime_hard_temp_c": 110.0,
+        },
     }
     monkeypatch.setattr(
         coordinator.resources, "runtime_status", lambda: runtime)

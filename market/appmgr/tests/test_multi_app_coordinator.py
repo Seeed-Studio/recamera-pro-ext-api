@@ -176,7 +176,9 @@ def test_two_cpu_apps_run_concurrently_and_same_app_is_idempotent(managed):
 
 
 def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
-        managed):
+        managed, monkeypatch):
+    monkeypatch.delenv("APPMGR_START_MAX_TEMP_C", raising=False)
+    monkeypatch.delenv("APPMGR_RUNTIME_HARD_TEMP_C", raising=False)
     coord, fake, manager = managed
     sample = {
         "mem_available_mb": 4096,
@@ -196,7 +198,7 @@ def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
     started = coord.start("thermal-app", manifest=manifest)
     assert started["observed_state"] == "running"
 
-    sample["temperature_c"] = 85.1
+    sample["temperature_c"] = 110.1
     stopped = coord.reconcile_one(
         "thermal-app", manifest=manifest,
         launch=lambda **kwargs: fake.start("thermal-app", **kwargs),
@@ -210,11 +212,20 @@ def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
     assert not [item for item in manager.snapshot()["allocations"]
                 if item["app_id"] == "thermal-app"]
 
-    sample["temperature_c"] = 70.0
-    restored = coord.reconcile_one(
+    sample["temperature_c"] = 100.0
+    held = coord.reconcile_one(
         "thermal-app", manifest=manifest,
         launch=lambda **kwargs: fake.start("thermal-app", **kwargs),
         now=time.time() + 2.0, retry_interval=0.01,
+    )
+    assert held["observed_state"] == "waiting_resource"
+    assert fake.is_running("thermal-app") is None
+
+    sample["temperature_c"] = 99.9
+    restored = coord.reconcile_one(
+        "thermal-app", manifest=manifest,
+        launch=lambda **kwargs: fake.start("thermal-app", **kwargs),
+        now=time.time() + 4.0, retry_interval=0.01,
     )
     assert restored["observed_state"] == "running"
     assert restored["generation"] > started["generation"]
