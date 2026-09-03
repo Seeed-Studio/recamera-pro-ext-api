@@ -8,7 +8,8 @@
 `/var/tmp/notify` 是 notify-server 的入站 unix socket。写入一条 `InferenceResult`，它会被**分发**到 WebSocket / MQTT / HTTP / UART。
 
 - **此通道只做分发。结果不会画进 OSD 叠加、不会进录像。**
-- 要让结果出现在视频叠加与录像中，走 `result-in.sock`（M1 里程碑，规划中，尚未发布）。
+- 要让结果出现在视频叠加中，走 `result-in.sock`；该公开入口也会推送结果，但不进入 Vigil、不会启动录像。OSD 会自然出现在已经进行的录像里。
+- 托管应用要按 AI 结果启动录像，必须在 manifest v2 声明 `record_trigger`，由 appmgr 过滤并桥接到受保护的 `record-in.sock`；应用不能直接使用该内部入口。
 - 该 socket 权限 0666、无鉴权，定位为无特权 legacy 通道；后续固件会对其加全局限速，但格式与路径保持不变。
 
 ## 能干什么
@@ -40,7 +41,8 @@ message InferencePoint { float x=1; float y=2; float score=3; int32 keypoint_id=
 message InferenceDetectionEntry { InferenceBox box=1; float score=2; int32 class_id=3; string class_name=4; }
 message InferenceDetectionResult { repeated InferenceDetectionEntry entries=1; }
 
-message InferenceClassificationEntry { float score=1; int32 class_id=2; string class_name=3; }
+message InferenceClassificationEntry { float score=1; int32 class_id=2;
+  string class_name=3; InferenceBox box=4; } // box 可选
 message InferenceClassificationResult { repeated InferenceClassificationEntry entries=1; }
 
 message InferenceSegmentationEntry { InferenceBox box=1; float score=2; int32 class_id=3;
@@ -60,6 +62,8 @@ message InferenceResult {
   TaskType task_type = 1;
   int64 timestamp_ms = 2;     // epoch 毫秒
   int32 model_id = 3;
+  string source_id = 4;       // 来源；legacy 直写可为空
+  uint64 pts_us = 5;          // 帧的 monotonic PTS；0=不关联帧
   oneof data {
     InferenceDetectionResult      detection      = 10;
     InferenceClassificationResult classification = 11;
@@ -70,7 +74,7 @@ message InferenceResult {
 }
 ```
 
-坐标为 float 像素坐标（与官方内建推理同语义）。规划中的 `source_id`/`pts_us` 字段（tag 4/5）尚未合入当前 proto——不要自行占用这两个 tag。
+`source_id`/`pts_us` 已是当前协议的 tag 4/5；legacy 直写者可以省略，接收端会看到默认值。box 字段本身只规定 float，不由 notify 做坐标转换：内建来源沿用其原生坐标，`result-in.sock` 转发的外部来源使用归一化 `[0,1]`。
 
 > **注**：此为 **notify 出站**（内建推理原生坐标），与 `result-in.sock` 注入的**归一化 [0,1]** 契约不是同一条路径——notify 不经 result-in.sock、不上 OSD、无 clamp。其坐标单位以内建推理为准（需核实），不要照搬 result-in.sock 的归一化约定。
 

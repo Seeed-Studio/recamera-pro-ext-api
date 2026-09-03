@@ -29,8 +29,8 @@
 
 1. **进程边界即契约**。方案商代码与固件代码分属不同进程，交界面是 socket 上的线格式（wire format），不是共享的头文件或链接的库。契约冻结后可跨固件版本演进（§6 扩展五规则）。
 2. **不 fork 固件**。设计文档的出发点：方案商拿不到、也不该 fork 固件源码。交付物是一个跑在设备上的可执行程序（C/C++ 二进制或 Python 脚本），而非一份定制固件。
-3. **复用官方基础设施**。结果回注不新建渲染/编码/推送通路，而是接进官方推理**已经在走**的三路分发（OSD / 录像 / notify）。前端扩展复用 nginx + JWT 会话。观测面复用帧代理的 fd 传递代码。
-4. **官方推理吃自己的狗粮**。内建推理与外部注入走**同一个** `rc_result_dispatch()`（`video.c:656` 内建路径、`rc_result_in.c` 外部路径共同调用）。官方路径先验证了这条分发链，外部注入才可信。
+3. **复用官方基础设施**。公开结果回注复用官方 OSD 与 notify 通路；录像触发则由 appmgr 按 manifest 授权后桥接到 Vigil，使普通应用进程不能直接提交录像来源或绕过应用配置。前端扩展复用 nginx + JWT 会话，观测面复用帧代理的 fd 传递代码。当前所有应用仍以 root 运行，因此这不是对恶意 root 代码的沙箱边界；未签名本地安装的 root-code 风险仍须由安装确认与签名策略承担。
+4. **在分发入口划清信任边界**。内建推理由 `rc_result_dispatch()` 规范化为 `builtin` 后进入 Vigil / notify / OSD；普通外部结果由 `rc_result_dispatch_external_ir()` 只进入 notify / OSD；唯一可把 APP 来源送入 Vigil 的外部入口是经 appmgr 身份认证的 `record-in.sock`。
 
 ---
 
@@ -48,25 +48,28 @@
 │  │                     ├────────→ NPU 推理(rc_model/rc_infer)         │  │
 │  │                     │              │                               │  │
 │  │                     │      rc_result_dispatch()  ← 内建结果         │  │
-│  │                     │        │      │      │      (video.c:656)     │  │
-│  │                     │       OSD   录像   notify                     │  │
+│  │                     │        │      │      │                       │  │
+│  │                     │       OSD   Vigil  notify                     │  │
 │  │                     │                                              │  │
 │  │  扩展端点（新增，main.c:414-416 启动）                              │  │
 │  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐               │  │
-│  │  │ frame_export │ │ rc_result_in │ │  rc_probe    │  ← 端点层      │  │
-│  │  │  (VI chn1)   │ │(→dispatch)   │ │ (infer tap)  │               │  │
+│  │  │ frame_export │ │ rc_result_in │ │ rc_record_in │  ← 端点层      │  │
+│  │  │  (VI chn1)   │ │(→OSD/notify) │ │ (→Vigil)     │               │  │
 │  │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘               │  │
+│  │                         rc_probe (infer tap)                        │  │
 │  │       rc_inference_control（builtin/external NPU 单 owner）         │  │
 │  │         │  common/rc_ext_core（核心库，共用）                       │  │
 │  └─────────┼────────────────┼────────────────┼──────────────────────┘  │
-│            │ frame.sock      │ result-in.sock │ probe.sock              │
-│            │ (SEQPACKET+fd)  │ (SEQPACKET)    │ (SEQPACKET+memfd)       │
+│            │ frame.sock      │ result-in.sock │ record-in.sock           │
+│            │ (SEQPACKET+fd)  │ (SEQPACKET)    │ (appmgr-only)            │
+│            │ probe.sock (SEQPACKET+memfd)                              │
+│            │ osd-in.sock (appmgr-only, OSD-only)                       │
 │            │ inference-control.sock（SEQPACKET，连接即 NPU lease）      │
-│         /run/recamera/  [0750 root:root, sock 0660]                     │
+│ /run/recamera/ [0750 root:root; public 0660; appmgr-only 0600]          │
 │            │                │                 │                         │
 │  ┌─────────┴────────────────┴─────────────────┴──────────────────────┐ │
-│  │              方案商进程（自带模型/GUI，root 运行）                    │ │
-│  │   librecamera_ext.so.1 (C ABI) / recamera_ext (Python ctypes)      │ │
+│  │       方案商应用进程 + appmgr（自带模型/GUI，当前以 root 运行）       │ │
+│  │   应用用 ResultSink；appmgr 独占 OsdSink / RecordSink              │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 │                                                                          │
 │  ┌──────────────── notify-server（独立 Python 进程）──────────────────┐  │
@@ -85,7 +88,7 @@
 
 关键点（源码核实）：
 
-- frame/result/probe 数据面与 inference-control 资源面都在 **rkipc 进程内**
+- frame/result/osd/record/probe 数据面与 inference-control 资源面都在 **rkipc 进程内**
   监听。NPU acquire/release 不经 entry.cgi；CGI 只负责配置与能力查询。
 - **notify-server 是独立进程**：监听 `/var/tmp/notify`（`notify_server.py:209` `socket_path="/var/tmp/notify"`），rkipc 侧 `rc_notify` 是它的**客户端**（`rc_notify_client.c:36-52` `connect(AF_UNIX, SOCK_STREAM)`）。结果注入并不直连 WS——而是经 dispatch → rc_notify → notify-server → WS/MQTT/HTTP/UART。
 - **entry.cgi 是 CGI**（nginx 拉起），承载 HTTP 配置/控制 API 与前端扩展挂载；`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，对方案商标注 internal（`../guide/rkipc-rpc-status.md`）。
@@ -142,7 +145,7 @@
 
 ---
 
-## 4. 五条通路
+## 4. 六条运行通路
 
 ### 4.1 帧代理（相机 → VI chn1 → dma-buf fd → SCM_RIGHTS → 方案商）
 
@@ -167,15 +170,14 @@ Sensor→ISP→VI(pipe0)
 
 **一句话**：帧代理在同一 VI pipe 开一路空闲的 chn1（私有池，与内建 NPU 通道隔离），把每帧导出为一个 dma-buf fd，用 `SCM_RIGHTS` 零拷贝传给订阅者；无订阅者时 chn disable、零常驻开销（`frame_export.c:138 chn_enable` / `:168 chn_disable`）。
 
-### 4.2 结果注入（方案商 → result-in → rc_result_dispatch → OSD/录像/notify）
+### 4.2 结果注入（方案商 → result-in → OSD/notify）
 
 ```mermaid
 sequenceDiagram
     participant App as 方案商进程
     participant RI as rc_result_in (端点)
-    participant D as rc_result_dispatch()
+    participant D as rc_result_dispatch_external_ir()
     participant OSD as rc_result_osd_composite → osd_manager_draw_infer
-    participant Rec as vg_inference_enqueue_protobuf (录像)
     participant N as rc_notify_send_inference
     participant NS as notify-server (独立进程)
 
@@ -183,17 +185,22 @@ sequenceDiagram
     RI-->>App: HelloAck (limits: max_msg_rate=60, max_sources=8)
     App->>RI: InferenceResult (protobuf)
     Note over RI: ratelimit_check → unpack →<br/>拒绝 source_id="builtin" →<br/>钉死 peercred source_id → repack
-    RI->>D: rc_result_dispatch(model_id, packed, size)
-    D->>Rec: 原始字节入录像队列
+    RI->>D: rc_result_dispatch_external_ir(model_id, ir, packed, size)
     D->>N: 原始字节转发
     N->>NS: /var/tmp/notify (SOCK_STREAM)
     NS-->>App: WS(8123)/MQTT/HTTP/UART
     D->>OSD: 单 canvas 合成叠加
 ```
 
-**一句话**：方案商发一条 `InferenceResult` 到 `result-in.sock`；端点校验并把 `source_id` 钉成 peercred 身份（外部禁用 `"builtin"`，`rc_result_in.c handle_result`），再交给 `rc_result_dispatch()`——与内建推理**同一个函数**（`rc_result_dispatch.c`），扇出到录像、notify、OSD 三路。
+**一句话**：方案商发一条 `InferenceResult` 到 `result-in.sock`；端点校验并把 `source_id` 钉成 peercred 身份（外部禁用 `"builtin"`，`rc_result_in.c handle_result`），再交给 `rc_result_dispatch_external_ir()`，仅扇出到 notify 与 OSD。它不会进入 Vigil、不会启动录像；OSD 会自然出现在已经进行的编码录像中。
 
-### 4.3 观测（rc_infer tap → probe worker → memfd → 方案商）
+### 4.3 托管应用触发录像（Result Hub → appmgr → record-in → Vigil）
+
+应用在 manifest v2 的 `record_trigger` 中声明可用于录像规则的 detection、classification 或 event 信号。appmgr 只转发声明过的 label / event kind，并在停止、升级或能力变化时发送带 ACK 的 source reset。`record-in.sock` 使用 `record@1`，由 rkipc 通过 `SO_PEERCRED`、root-owned appmgr pidfile 与 `/proc` 三重核验连接身份；正常启动的普通应用进程不能通过该认证。由于 v1 尚未沙箱化，已取得 root 的恶意代码不属于该进程身份校验能够防御的威胁模型。
+
+Vigil 规则显式保存来源（`builtin` 或稳定 app id）和投递语义（`FRAME` / `EVENT`）：FRAME 沿用逐帧 debounce，EVENT 是单条正事件触发且不跨消息累计。record-in 数据不进入 OSD、notify 或公共 Result Hub，因此“展示结果”和“触发录像”是相互独立的权限。
+
+### 4.4 观测（rc_infer tap → probe worker → memfd → 方案商）
 
 ```
 rc_infer 推理线程（热路径）
@@ -216,7 +223,7 @@ metrics）插 tap；无订阅时只有一次原子 gate。有订阅时当前热�
 低优先级 worker，大张量走 memfd + `SCM_RIGHTS`。因此不会等待慢消费者，
 但样本复制成本仍须通过真机压力门禁，不能宣称严格 non-blocking。
 
-### 4.4 控制（方案商 → nginx / entry.cgi → ext API）
+### 4.5 控制（方案商 → nginx / entry.cgi → ext API）
 
 ```
 方案商前端(浏览器)                方案商后端进程
@@ -236,7 +243,7 @@ metrics）插 tap；无订阅时只有一次原子 gate。有订阅时当前热�
 
 **一句话**：控制/配置走 HTTP，不走数据面 socket——方案商把网页 + 后端用 `ext_<name>.conf` 挂到 nginx 的 `/extension/<name>/`，复用官方 JWT 会话（`auth_request`）；配置类请求经 entry.cgi HTTP API，M4 起提供版本化 `/api/v1/ext/*` 域（`../guide/frontend-extension.md`、`../guide/control-api.md`、规格 §5.1）。
 
-### 4.5 NPU 仲裁（方案商 → inference-control → rc_model）
+### 4.6 NPU 仲裁（方案商 → inference-control → rc_model）
 
 ```text
 ExternalNpuLease / InferenceLease
@@ -319,9 +326,9 @@ struct frame_hdr {
 | 2 | **数量演进走 limits** | 并发/速率/池深变化只改 `Capability.limits` 数值，客户端按握手返回值自适应，不得硬编码 |
 | 3 | **结构演进走保留位** | `frame_hdr` 的 `ver` + `reserved[16]` 承载新字段；重排/删字段才升 `ver`，旧 `ver` 至少再支持两个固件版本 |
 | 4 | **任务类型演进走 oneof 追加** | `InferenceResult` 新任务 = 新 oneof 分支（tag 15+），旧读者跳过未知分支 |
-| 5 | **只增不减** | `/run/recamera/` 存在期间，v1 baseline `frame@1`/`result@1`/`probe@1`/`inference-control@1` 与其线格式永不移除 |
+| 5 | **只增不减** | `/run/recamera/` 存在期间，v1 端点 `frame@1`/`result@1`/`osd@1`/`record@1`/`probe@1`/`inference-control@1` 与其线格式不移除；安全边界调整须在 SDK 版本说明中显式记录 |
 
-配套 schema 纪律：proto tag 永不复用；删字段必 `reserved`；中转组件（notify-server）转发外来 payload **透传原始字节，禁止 decode→re-encode**（`rc_result_dispatch.c` 注释：录像与 notify 拿"ORIGINAL per-source bytes"）。
+配套 schema 纪律：proto tag 永不复用；删字段必 `reserved`；中转组件（notify-server）转发外来 payload **透传原始字节，禁止 decode→re-encode**。公开 result-in 的原始规范化字节只交给 notify/OSD；Vigil 只接收可信 builtin 或 record-in 的规范化消息。
 
 ### 6.2 兼容性工程（CI 化，规格 §8.3）
 
@@ -336,7 +343,8 @@ struct frame_hdr {
 
 | 能力 | 里程碑 | 端点 / 对接方式 | 状态 |
 |---|---|---|---|
-| 结果注入（OSD+录像+推送） | M1 | `result-in.sock` / `rc_ext_result_*` / `ResultSink` | 现成可用 |
+| 结果注入（OSD+推送，不触发录像） | M1 | `result-in.sock` / `rc_ext_result_*` / `ResultSink` | 现成可用 |
+| 托管应用触发录像 | M1.5 | manifest `record_trigger` → appmgr `RecordSink` → `record-in.sock` → source-aware Vigil | host/交叉构建通过，待目标板 E2E |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | `frame.sock` / `rc_ext_frame_*` / `FrameSource` | 现成可用（G1–G4 真机 PASS） |
 | 音频 PCM | M0 | `arecord -D ai_asr`（ALSA dsnoop） | 现成可用 |
 | GPIO 结果触发 | M0 | notify WS + gmgr API（组合现有零件） | 现成可用 |

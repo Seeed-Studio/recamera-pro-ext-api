@@ -1,7 +1,8 @@
 syntax = "proto3";
 
 // reCamera Pro extension-API handshake (spec v0.4 §1.2). Every extension socket
-// (result-in / frame / probe) begins with a Hello -> HelloAck exchange before
+// (frame / result-in / osd-in / record-in / probe / inference-control) begins
+// with a Hello -> HelloAck exchange before
 // switching to its per-endpoint protocol. Version negotiation uses interval
 // intersection (NOT min): the server picks the highest version inside the
 // client's [version_min, version_max] that it also supports; empty intersection

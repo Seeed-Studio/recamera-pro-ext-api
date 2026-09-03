@@ -11,7 +11,8 @@ app 产出的每帧结果envelope（`results` / `events` / `frame` / `timestamp`
 
 与其他输出通路的区别：
 - **统一结果查看/软件叠加** → [ai-result-overlay.md](./ai-result-overlay.md)与 [result-hub-v2.md](./result-hub-v2.md)（canonical WS 8125；legacy app WS 8124 保留）。
-- **结果注入 OSD/录像**（框进 RTSP/录像）→ [README.md](./README.md) §4 结果注入。
+- **结果注入 OSD/推送**（框进 RTSP 与已经进行的录像，但不启动录像）→ [README.md](./README.md) §4 结果注入。
+- **托管应用按 AI 结果启动录像** → manifest v2 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 - **本文（输出组件）** = 把结构化结果**声明式**发到 MQTT/HTTP/UART/WS 外部消费者，含 Home Assistant 即插即用。
 
 ## 1. 接入：manifest 声明，app 零代码

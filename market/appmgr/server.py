@@ -77,6 +77,7 @@ from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
+               recording as apprecording,
                result_hub as canonical_results,
                resources as appresources, state, supervisor,
                signing as appsigning, trust as apptrust,
@@ -89,6 +90,7 @@ _coordinator_layout = None
 _result_gateway_instance = None
 _result_hub_instance = None
 _visualization_bridge_instance = None
+_recording_bridge_instance = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _operation_manager_lock = threading.Lock()
@@ -113,6 +115,42 @@ def add_result_observer(callback):
 def remove_result_observer(callback) -> bool:
     hub = _result_hub_instance
     return bool(hub is not None and hub.remove_observer(callback))
+
+
+def do_get_recording_sources() -> dict:
+    """List trusted recording-rule sources without exposing app payload claims."""
+    listing = do_v1_apps()
+    sources = []
+    for app in listing.get("apps") or []:
+        if app.get("id") == builtin.BUILTIN_ID:
+            sources.append({
+                "id": builtin.BUILTIN_ID,
+                "kind": "builtin",
+                "name": app.get("name") or "Built-in AI",
+                "name_zh": app.get("name_zh") or "内置 AI",
+                "version": app.get("version"),
+                "installed": True,
+                "running": bool(app.get("running")),
+                "status": app.get("status") or "stopped",
+                "supports_roi": True,
+                # Built-in classes follow the currently selected model and are
+                # fetched from rkipc by the recording page itself.
+                "signals": [],
+            })
+            continue
+        source = apprecording.source_view(app)
+        if source is not None:
+            sources.append(source)
+    sources.sort(key=lambda item: (item["kind"] != "builtin", item["id"]))
+    status = (_recording_bridge_instance.status()
+              if _recording_bridge_instance is not None else {
+                  "running": False, "active_sources": [], "queued": 0,
+                  "sent": 0, "frames": 0, "events": 0, "resets": 0,
+                  "dropped": 0, "frame_dropped": 0,
+                  "event_dropped": 0, "frame_coalesced": 0,
+                  "duplicates": 0, "send_errors": 0, "last_error": "",
+              })
+    return {"version": 1, "sources": sources, "status": status}
 
 
 def _supports_detection_stream_osd(manifest: dict) -> bool:
@@ -3404,6 +3442,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_get_visualization())
             except Exception as exc:
                 return self._v1_error(exc)
+        if path == "/api/app-center/v1/recording/sources":
+            try:
+                return self._send(200, do_get_recording_sources())
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/api/app-center/v1/results/status":
             if _result_hub_instance is None:
                 return self._send(503, {
@@ -4080,9 +4123,25 @@ def _stop_reconciler() -> None:
     _reconcile_stop = None
 
 
+def _stop_recording_bridge() -> bool:
+    """Detach and close the recording observer without hiding a stuck worker."""
+    global _recording_bridge_instance
+    bridge = _recording_bridge_instance
+    if bridge is None:
+        return True
+    if _result_hub_instance is not None:
+        _result_hub_instance.remove_observer(bridge.observe)
+    if bridge.close():
+        _recording_bridge_instance = None
+        return True
+    print("[appmgr] recording bridge did not stop cleanly; retaining diagnostics",
+          file=sys.stderr)
+    return False
+
+
 def serve(host: str = None, port: int = None) -> None:
     global _result_gateway_instance, _result_hub_instance
-    global _visualization_bridge_instance
+    global _visualization_bridge_instance, _recording_bridge_instance
     global _operation_manager_instance
     host = host or paths.HTTP_HOST
     port = port or paths.HTTP_PORT
@@ -4149,6 +4208,10 @@ def serve(host: str = None, port: int = None) -> None:
             appvisualization.DetectionOsdBridge().start())
         _result_hub_instance.add_observer(
             _visualization_bridge_instance.observe)
+        _recording_bridge_instance = (
+            apprecording.RecordingTriggerBridge().start())
+        _result_hub_instance.add_observer(
+            _recording_bridge_instance.observe)
         _result_gateway_instance = resultgateway.ResultGateway(
             uds_path=paths.RESULT_GATEWAY_SOCK,
             ws_host=paths.RESULT_GATEWAY_HOST,
@@ -4182,6 +4245,7 @@ def serve(host: str = None, port: int = None) -> None:
                     _visualization_bridge_instance.observe)
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
+        _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
             _result_hub_instance = None
@@ -4216,6 +4280,7 @@ def serve(host: str = None, port: int = None) -> None:
                     _visualization_bridge_instance.observe)
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
+        _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
             _result_hub_instance = None

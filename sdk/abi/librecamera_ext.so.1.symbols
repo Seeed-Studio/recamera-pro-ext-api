@@ -28,6 +28,14 @@ rc_ext_probe_info
 rc_ext_probe_next
 rc_ext_probe_open
 rc_ext_probe_release
+rc_ext_record_close
+rc_ext_record_open
+rc_ext_record_reset
+rc_ext_record_send_classification
+rc_ext_record_send_detections
+rc_ext_record_send_events
+rc_ext_record_send_keypoints
+rc_ext_record_send_tracking
 rc_ext_result_close
 rc_ext_result_open
 rc_ext_result_send_classification

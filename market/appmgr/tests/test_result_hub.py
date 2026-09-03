@@ -31,6 +31,7 @@ from appmgr.result_hub import (  # noqa: E402
     ResultViewFormatter,
     _HubClient,
     _HubWebSocketServer,
+    _ObserverWorker,
     _Subscription,
     normalize_app_payload,
     normalize_system_payload,
@@ -1664,6 +1665,42 @@ def test_ingress_queue_classifies_and_prioritizes_edges(tmp_path):
         hub.stop()
 
 
+def test_ingress_prioritizes_manifest_authorized_state_event(tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter(), ingress_queue=8)
+    hub._ingress_thread = threading.current_thread()
+    identity = _identity("qr-app", "qr", 1)
+    manifest = _manifest("qr-app")
+    manifest["output"] = {
+        "contract_version": 2,
+        "fields": [{
+            "name": "qrcode_kind", "from": "events[kind=qrcode].kind",
+            "type": "string", "event_kind": "qrcode",
+            "description": "QR value",
+        }],
+    }
+    manifest["record_trigger"] = {
+        "version": 1,
+        "signals": [{
+            "id": "qrcode", "type": "event", "event_kind": "qrcode",
+            "supports_roi": False,
+        }],
+    }
+    assert hub.refresh_app_manifest(identity, manifest)
+    try:
+        for index in range(8):
+            assert hub.submit_app(_app_payload(
+                seq=index, results=[{"kind": "frame"}]), identity)
+        assert hub.submit_app(_app_payload(
+            seq=9, events=[{"kind": "qrcode", "text": "same-code"}]),
+            identity)
+        assert len(hub._ingress) == 8
+        assert hub._ingress[-1][3] == "edge"
+        assert sum(item[3] == "data" for item in hub._ingress) == 7
+    finally:
+        hub.stop()
+
+
 def test_observer_is_bounded_async_mutation_safe_and_failure_isolated(tmp_path):
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=NoopFormatter(), observer_queue=2)
@@ -1690,6 +1727,117 @@ def test_observer_is_bounded_async_mutation_safe_and_failure_isolated(tmp_path):
                  if record.raw["type"] == "frame")
     assert frame["source"]["id"] == "demo"
     assert hub.remove_observer(token) is True
+
+
+def test_observer_queue_preserves_edge_and_prioritizes_it_over_frames():
+    started = threading.Event()
+    release = threading.Event()
+    delivered = []
+
+    def observer(envelope):
+        delivered.append(envelope["id"])
+        if envelope["id"] == "frame-inflight":
+            started.set()
+            assert release.wait(2)
+
+    def envelope(message_id, message_type="frame", delivery=""):
+        value = {
+            "id": message_id, "type": message_type,
+            "source": {"kind": "app", "id": "demo", "app_id": "demo"},
+            "extensions": {},
+        }
+        if delivery:
+            value["extensions"]["delivery"] = delivery
+        return value
+
+    worker = _ObserverWorker(observer, max_queue=2)
+    try:
+        worker.offer(envelope("frame-inflight"))
+        assert started.wait(2)
+        worker.offer(envelope("frame-old"))
+        worker.offer(envelope("fall-edge", "event", "edge"))
+        worker.offer(envelope("frame-latest"))
+        release.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and len(delivered) < 3:
+            time.sleep(.01)
+        assert delivered == ["frame-inflight", "fall-edge", "frame-latest"]
+        assert worker.edge_dropped == 0
+        assert worker.non_edge_dropped == 1
+    finally:
+        release.set()
+        worker.close()
+
+
+def test_observer_owner_filter_rejects_before_bounded_queue():
+    delivered = []
+
+    class FilteredObserver:
+        def observer_accepts(self, envelope):
+            return envelope["id"].startswith("keep-")
+
+        def observe(self, envelope):
+            delivered.append(envelope["id"])
+
+    observer = FilteredObserver()
+    worker = _ObserverWorker(observer.observe, max_queue=1)
+    try:
+        worker.offer({"id": "drop-1", "type": "event", "source": {}})
+        worker.offer({"id": "keep-1", "type": "event", "source": {}})
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not delivered:
+            time.sleep(.01)
+        assert delivered == ["keep-1"]
+        assert worker.dropped == 0
+    finally:
+        worker.close()
+
+
+def test_observer_reset_barrier_waits_outside_global_publish_fence(tmp_path):
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
+                    formatter=NoopFormatter(), observer_queue=4)
+    manifest_a = _manifest("app-a", fields=[])
+    manifest_b = _manifest("app-b", fields=[])
+    old_a = _identity("app-a", "old-a", 1)
+    identity_b = _identity("app-b", "b", 1)
+    assert hub.refresh_app_manifest(old_a, manifest_a)
+    assert hub.refresh_app_manifest(identity_b, manifest_b)
+
+    class BarrierObserver:
+        def __init__(self):
+            self.waiting = threading.Event()
+            self.release = threading.Event()
+
+        def observe(self, _envelope):
+            return None
+
+        def invalidate_source(self, source_id, **_details):
+            return source_id
+
+        def wait_invalidation(self, _token, timeout=2):
+            self.waiting.set()
+            return self.release.wait(timeout)
+
+    observer = BarrierObserver()
+    registration = hub.add_observer(observer.observe)
+    refreshed = []
+    thread = threading.Thread(target=lambda: refreshed.append(
+        hub.refresh_app_manifest(
+            _identity("app-a", "new-a", 2), manifest_a)))
+    try:
+        thread.start()
+        assert observer.waiting.wait(2)
+        started = time.monotonic()
+        assert hub.publish_app(_app_payload(seq=77), identity_b)
+        assert time.monotonic() - started < .1
+        assert thread.is_alive()
+        observer.release.set()
+        thread.join(timeout=2)
+        assert refreshed == [True]
+    finally:
+        observer.release.set()
+        thread.join(timeout=2)
+        hub.remove_observer(registration)
 
 
 def test_observer_revoke_orders_inflight_old_generation_before_new(tmp_path):

@@ -1,8 +1,9 @@
 librecamera_ext SDK
-version: 1.4.0 (soname librecamera_ext.so.1)
-api_version: 1  (frame@1 / result@1 / osd@1 / probe@1 / inference-control@1)
-built_from: recamera_ipc 5e4902a89a22233f09b4904f11069d60a01bf980 + Vigil 9592cca6d0dd23b33bd51cfaaade31a3d6dfd9c5 (RV1126B recamera_v2)
+version: 1.5.0 (soname librecamera_ext.so.1)
+api_version: 1  (frame@1 / result@1 / osd@1 / record@1 / probe@1 / inference-control@1)
+built_from: recamera_ipc 132ed887730ab588b6bc700903fa63ec63affabf0 + Vigil 0656cae1f6354bb32262f9dbbe1d87e7b50b93b6 (RV1126B recamera_v2)
 firmware: 需含匹配的 rc_ext_core 与 inference-control broker；当前 host/AArch64 构建通过，正式发布前仍需 RV1126B kill/restart/OTA 矩阵
+changes 1.5.0: 新增 appmgr 专用 recording-only sink（rc_ext_record_open/send_detections/send_classification/send_events/send_tracking/send_keypoints/reset/close、Python RecordSink），连接 /run/recamera/record-in.sock。每个有序 datagram 携带稳定 manifest app id；event 复用 classification oneof 并以公共常量 RC_EXT_RECORD_EVENT_MODEL_ID=INT32_MIN 标识，普通 record 数据 model_id=0。服务端按 SO_PEERCRED + appmgr pidfile + /proc 授权，只送入 source-aware Vigil 录像规则，不进入 OSD、notify 或公共结果流。open 的 connect/Hello/ACK 共用 1 秒 deadline，每次数据 send 有 1 秒 deadline，reset 的 send/HelloAck(error=0) 共用 1 秒 deadline；超时返回现有 EINTERNAL。reset 与数据共用同一 SEQPACKET 顺序流，用于停止/升级时清除 debounce 状态。安全收敛：普通 ResultSink/result@1 保留 OSD + notify/公共结果流，但不再进入 Vigil、不能触发录像；OsdSink/osd@1 仍为 OSD-only。新增的 RecordSink C 符号保持 soname .so.1。
 changes 1.4.0: 新增 appmgr 专用 OSD-only sink（rc_ext_osd_open/send_detections/close、Python OsdSink），连接 /run/recamera/osd-in.sock。服务端以 SO_PEERCRED PID + root-owned appmgr pidfile + /proc 身份授权，只接受 DETECTION（0 entries=clear，最多64框），并仅调用 OSD compositor；不进入 Vigil/录像、notify/规则、legacy WebSocket。普通 ResultSink/result@1 ABI 与三路语义保持不变。全部为新增 C 符号，soname 保持 .so.1。
 changes 1.3.0: 新增 connection-lifetime NPU lease client(rc_ext_inference_lease_open/ready/status/alive/set_fallback/close/abandon_after_fork)，连接 /run/recamera/inference-control.sock。broker 在 builtin RKNN handle 已销毁、state=stopped、actual_fps=0 后才 GRANT；lease 带 epoch/generation，client 崩溃或 SIGKILL 由 socket HUP 回收，fork child 仅 abandon 自己的 fd 副本。全部为新增 C 符号，soname 保持 .so.1；数据端点 generation fencing 留待下一协议版本。
 changes 1.2.0: 新增 probe 观测面 client(ProbeSource / rc_ext_probe_*)连 /run/recamera/probe.sock,订阅 preproc.out/npu.raw/postproc.out/metrics。inline 小样本走 payload,大张量走 memfd(SCM_RIGHTS,普通 mmap 只读,非 dma-buf)。纯新增符号(rc_ext_probe_open/info/next/release/close),soname 不变(.so.1),对旧消费者 ABI 向后兼容。真机验证:metrics 内联(payload_len~326B JSON)+ preproc.out memfd(1228800B,shape[1,640,640,3],640x640 RGB3 stride1920)。
@@ -11,4 +12,4 @@ changes 1.1.0: classification 新增可选 ROI box(rc_ext_class_t: has_box + x1/
 result send methods: detections / classification (可选 box) / segmentation / tracking / keypoints (全套)
 frame source: 输出 VI 原始帧(全分辨率,不预 letterbox);预处理由消费者负责
 probe source: ProbeSource(stages=[...], sample_every, timeout_ms) 迭代出 ProbeSample(.stage_id/.seq/.pts_us/.payload/.meta/.array)
-sockets: /run/recamera/{frame,result-in,osd-in,probe,inference-control}.sock  (单数 frame,/run 不是 /var/run)
+sockets: /run/recamera/{frame,result-in,osd-in,record-in,probe,inference-control}.sock  (单数 frame,/run 不是 /var/run)

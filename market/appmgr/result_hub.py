@@ -58,6 +58,7 @@ from kit.geometry import (
 )
 
 from . import config as appconfig
+from . import manifest as appmanifest
 from . import paths
 from . import visualization as appvisualization
 
@@ -1778,6 +1779,18 @@ class _ObserverWorker:
         if not callable(invalidator) and owner is not None:
             invalidator = getattr(owner, "invalidate_source", None)
         self._invalidator = invalidator if callable(invalidator) else None
+        waiter = getattr(callback, "wait_invalidation", None)
+        if not callable(waiter) and owner is not None:
+            waiter = getattr(owner, "wait_invalidation", None)
+        self._invalidation_waiter = waiter if callable(waiter) else None
+        priority = getattr(callback, "observer_priority", None)
+        if not callable(priority) and owner is not None:
+            priority = getattr(owner, "observer_priority", None)
+        self._priority_classifier = priority if callable(priority) else None
+        accepts = getattr(callback, "observer_accepts", None)
+        if not callable(accepts) and owner is not None:
+            accepts = getattr(owner, "observer_accepts", None)
+        self._acceptance_filter = accepts if callable(accepts) else None
         self._max_queue = max(1, int(max_queue))
         self._condition = threading.Condition()
         # Entries are ("data", envelope).  Source revocation removes matching
@@ -1792,26 +1805,100 @@ class _ObserverWorker:
         self.errors = 0
         self.invalidations = 0
         self.invalidated_queued = 0
+        self.invalidation_wait_errors = 0
+        self.edge_dropped = 0
+        self.event_dropped = 0
+        self.non_edge_dropped = 0
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name="result-hub-observer")
         self._thread.start()
 
     def offer(self, envelope: dict) -> None:
+        if self._acceptance_filter is not None:
+            try:
+                if not self._acceptance_filter(envelope):
+                    return
+            except Exception:
+                # A consumer-owned filter is an isolation boundary just like
+                # its callback: fail this offer closed without affecting other
+                # observers or the canonical Result Hub stream.
+                self.errors += 1
+                return
         with self._condition:
             if self._closed:
                 return
+            incoming_event = self._is_event(envelope)
+            incoming_edge = self._is_edge(envelope)
+            incoming_priority = self._is_priority(envelope)
             if len(self._items) >= self._max_queue:
-                # Drop oldest data under pressure; lifecycle revocation is not
-                # represented as a queue entry and therefore cannot be lost.
-                victim = next((index for index, item in enumerate(self._items)
-                               if item[0] == "data"), None)
+                # Preserve canonical edges and observer-declared priority
+                # events against replaceable snapshots. Prefer reclaiming the
+                # same source's stale work, then any non-priority slot.
+                source_id = self._source_id(envelope)
+                victim = next((
+                    index for index, item in enumerate(self._items)
+                    if item[0] == "data"
+                    and not self._is_priority(item[1])
+                    and self._source_id(item[1]) == source_id
+                ), None)
+                if victim is None:
+                    victim = next((
+                        index for index, item in enumerate(self._items)
+                        if item[0] == "data" and not self._is_priority(item[1])
+                    ), None)
                 if victim is None:
                     self.dropped += 1
+                    if incoming_edge:
+                        self.edge_dropped += 1
+                    if incoming_event:
+                        self.event_dropped += 1
+                    else:
+                        self.non_edge_dropped += 1
                     return
                 del self._items[victim]
                 self.dropped += 1
-            self._items.append(("data", envelope))
+                self.non_edge_dropped += 1
+            if incoming_priority:
+                # Keep event ordering while placing them ahead of replaceable
+                # work already waiting for a slow observer.
+                insert_at = 0
+                for index, item in enumerate(self._items):
+                    if item[0] == "data" and self._is_priority(item[1]):
+                        insert_at = index + 1
+                self._items.insert(insert_at, ("data", envelope))
+            else:
+                self._items.append(("data", envelope))
             self._condition.notify()
+
+    @staticmethod
+    def _source_id(envelope: dict) -> str:
+        source = envelope.get("source") if isinstance(envelope, dict) else None
+        if not isinstance(source, dict):
+            return ""
+        return str(source.get("app_id") or source.get("id") or "")
+
+    @staticmethod
+    def _is_event(envelope: dict) -> bool:
+        return isinstance(envelope, dict) and envelope.get("type") == "event"
+
+    @staticmethod
+    def _is_edge(envelope: dict) -> bool:
+        if not isinstance(envelope, dict) or envelope.get("type") != "event":
+            return False
+        extensions = envelope.get("extensions")
+        return (isinstance(extensions, dict)
+                and extensions.get("delivery") == "edge")
+
+    def _is_priority(self, envelope: dict) -> bool:
+        if self._is_edge(envelope):
+            return True
+        if self._priority_classifier is None:
+            return False
+        try:
+            return bool(self._priority_classifier(envelope))
+        except Exception:
+            self.errors += 1
+            return False
 
     @staticmethod
     def _matches_source(envelope: dict, source_id: str) -> bool:
@@ -1821,7 +1908,7 @@ class _ObserverWorker:
                 == source_id)
 
     def invalidate_source(self, source_id: str, *, identity=None,
-                          capability=None) -> None:
+                          capability=None):
         """Synchronously advance an observer's non-blocking revoke fence.
 
         Queued records for the source are removed.  The observer owner's
@@ -1833,10 +1920,10 @@ class _ObserverWorker:
         """
         source_id = str(source_id or "")
         if not source_id:
-            return
+            return None
         with self._condition:
             if self._closed:
-                return
+                return None
             kept = deque()
             removed = 0
             for kind, value in self._items:
@@ -1847,14 +1934,29 @@ class _ObserverWorker:
             self._items = kept
             self.invalidated_queued += removed
         if self._invalidator is None:
-            return
+            return None
         try:
-            self._invalidator(
+            token = self._invalidator(
                 source_id, identity=copy.deepcopy(identity),
                 capability=copy.deepcopy(capability))
             self.invalidations += 1
+            return token
         except Exception:
             self.errors += 1
+            return None
+
+    def wait_invalidation(self, token, timeout: float = 2.0) -> bool:
+        """Wait for owner I/O only after Result Hub releases publish ordering."""
+        if token is None or self._invalidation_waiter is None:
+            return True
+        try:
+            ok = bool(self._invalidation_waiter(token, timeout=timeout))
+        except Exception:
+            ok = False
+        if not ok:
+            self.invalidation_wait_errors += 1
+            self.errors += 1
+        return ok
 
     def _run(self) -> None:
         while True:
@@ -1884,7 +1986,11 @@ class _ObserverWorker:
         return {"delivered": self.delivered, "dropped": self.dropped,
                 "errors": self.errors, "queued": queued,
                 "invalidations": self.invalidations,
-                "invalidated_queued": self.invalidated_queued}
+                "invalidated_queued": self.invalidated_queued,
+                "invalidation_wait_errors": self.invalidation_wait_errors,
+                "edge_dropped": self.edge_dropped,
+                "event_dropped": self.event_dropped,
+                "non_edge_dropped": self.non_edge_dropped}
 
 
 class ResultHub:
@@ -1953,6 +2059,12 @@ class ResultHub:
         # a manifest, and an old generation cannot inherit a new declaration.
         self._app_render_cache: Dict[
             str, Tuple[str, int, dict, dict, dict]] = {}
+        # Exact-generation event kinds declared for recording.  They receive
+        # ingress queue priority even when Result Hub models their replay form
+        # as state (for example a stable QR value).  The canonical envelope's
+        # own edge/state semantics are unchanged.
+        self._app_record_event_cache: Dict[
+            str, Tuple[str, int, frozenset[str]]] = {}
         self._source_seq: Dict[str, int] = {}
         self._control_seq = 0
         self._batch_seq = 0
@@ -2177,10 +2289,15 @@ class ResultHub:
                 self._system_publishers.discard(conn)
 
     @staticmethod
-    def _ingress_delivery(payload: dict) -> str:
+    def _ingress_delivery(payload: dict,
+                          record_event_kinds=frozenset()) -> str:
         events = payload.get("events")
         if isinstance(events, list) and events:
-            return ("edge" if any(is_edge_event(event) for event in events)
+            return ("edge" if any(
+                is_edge_event(event) or (
+                    isinstance(event, dict)
+                    and _event_kind(event) in record_event_kinds)
+                for event in events)
                     else "state")
         return ("state" if str(payload.get("type") or "").lower() == "event"
                 else "data")
@@ -2188,7 +2305,17 @@ class ResultHub:
     def _submit(self, kind: str, payload: dict, identity: dict) -> bool:
         if self._stop.is_set() or self._ingress_thread is None:
             return False
-        delivery = self._ingress_delivery(payload)
+        record_event_kinds = frozenset()
+        if kind == "app":
+            app_id = str(identity.get("app_id") or identity.get("id") or "")
+            expected = (str(identity.get("instance_id")
+                            or identity.get("instance") or ""),
+                        _as_int(identity.get("generation"), -1))
+            with self._state_lock:
+                cached = self._app_record_event_cache.get(app_id)
+            if cached is not None and cached[:2] == expected:
+                record_event_kinds = cached[2]
+        delivery = self._ingress_delivery(payload, record_event_kinds)
         item = (kind, dict(payload), dict(identity), delivery)
         with self._ingress_condition:
             if len(self._ingress) >= self.ingress_queue:
@@ -2349,6 +2476,14 @@ class ResultHub:
             valid = False
         render = (appvisualization.effective_render(manifest)
                   if valid else None)
+        record_trigger = (appmanifest.effective_record_trigger(manifest)
+                          if valid else {})
+        record_event_kinds = frozenset(
+            str(signal.get("event_kind") or "")
+            for signal in record_trigger.get("signals", [])
+            if isinstance(signal, dict) and signal.get("type") == "event"
+            and signal.get("event_kind")
+        )
         geometry = _compile_geometry_contract(manifest) if valid else {}
         trusted_stream = (_validate_stream_contract(stream_contract)
                           if valid else dict(_NO_STREAM_CONTRACT))
@@ -2358,6 +2493,7 @@ class ResultHub:
         purged_records = 0
         ws = None
         observers = []
+        invalidation_barriers = []
         canonical_identity = (
             {"kind": "app", "id": app_id, "app_id": app_id,
              "instance": instance, "generation": generation}
@@ -2367,6 +2503,7 @@ class ResultHub:
             "render": copy.deepcopy(render or {}) if valid else {},
             "geometry": copy.deepcopy(geometry) if valid else {},
             "stream": copy.deepcopy(trusted_stream),
+            "record_trigger": copy.deepcopy(record_trigger),
         }
         with self._publish_fence:
             with self._state_lock:
@@ -2396,8 +2533,14 @@ class ResultHub:
                     self._app_render_cache[app_id] = (
                         instance, generation, copy.deepcopy(render or {}),
                         copy.deepcopy(geometry), copy.deepcopy(trusted_stream))
+                    if record_trigger:
+                        self._app_record_event_cache[app_id] = (
+                            instance, generation, record_event_kinds)
+                    else:
+                        self._app_record_event_cache.pop(app_id, None)
                 elif app_id:
                     self._app_render_cache.pop(app_id, None)
+                    self._app_record_event_cache.pop(app_id, None)
                 ws = self._ws
                 observers = list(self._observers.values())
                 self._generation_records_purged += purged_records
@@ -2414,9 +2557,16 @@ class ResultHub:
             # this revoke because publish uses the same fence.
             if app_id:
                 for observer in observers:
-                    observer.invalidate_source(
+                    token = observer.invalidate_source(
                         app_id, identity=canonical_identity,
                         capability=capability)
+                    if token is not None:
+                        invalidation_barriers.append((observer, token))
+        # Native reset acknowledgement may wait on a bounded socket operation.
+        # It is deliberately outside _publish_fence so unrelated apps keep
+        # publishing while this lifecycle barrier drains the old generation.
+        for observer, token in invalidation_barriers:
+            observer.wait_invalidation(token, timeout=2.0)
         if purged_ingress or purged_clients:
             with self._state_lock:
                 self._generation_ingress_purged += purged_ingress
@@ -2435,6 +2585,7 @@ class ResultHub:
         purged_apps = []
         retired_identities = {}
         observers = []
+        invalidation_barriers = []
         with self._publish_fence:
             with self._state_lock:
                 if app_id is None:
@@ -2443,6 +2594,7 @@ class ResultHub:
                     for source_id, current in retired_identities.items():
                         self._retire_app_generation_locked(source_id, current)
                     self._app_render_cache.clear()
+                    self._app_record_event_cache.clear()
                     self._app_generations.clear()
                     for source_id in purged_apps:
                         self._generation_records_purged += \
@@ -2459,6 +2611,7 @@ class ResultHub:
                             return False
                     purged_apps = [source_id]
                     self._app_render_cache.pop(source_id, None)
+                    self._app_record_event_cache.pop(source_id, None)
                     retired_identities[source_id] = \
                         self._app_generations.pop(source_id, None)
                     self._retire_app_generation_locked(
@@ -2477,10 +2630,15 @@ class ResultHub:
                     ws.broadcast_control(self.source_invalidated_envelope(
                         source_id, retired_identities.get(source_id)))
                 for observer in observers:
-                    observer.invalidate_source(
+                    token = observer.invalidate_source(
                         source_id, identity=None,
                         capability={"valid": False, "render": {},
-                                    "geometry": {}, "stream": {}})
+                                    "geometry": {}, "stream": {},
+                                    "record_trigger": {}})
+                    if token is not None:
+                        invalidation_barriers.append((observer, token))
+        for observer, token in invalidation_barriers:
+            observer.wait_invalidation(token, timeout=2.0)
         with self._state_lock:
             self._generation_ingress_purged += ingress
             self._generation_client_purged += clients
@@ -2869,6 +3027,7 @@ class ResultHub:
                 for _timestamp, record in self._events)
             replay_states = replay_events - replay_edges
             trusted_app_renders = len(self._app_render_cache)
+            trusted_record_sources = len(self._app_record_event_cache)
             active_app_generations = len(self._app_generations)
             retired_app_generations = len(self._retired_app_generations)
             published = dict(self._published)
@@ -2897,6 +3056,7 @@ class ResultHub:
             "published": published,
             "latest": {"frames": latest_frames, "status": latest_status},
             "trusted_app_renders": trusted_app_renders,
+            "trusted_record_sources": trusted_record_sources,
             "active_app_generations": active_app_generations,
             "generation_fence": {
                 "stale_rejected": self._stale_app_rejected,
@@ -2933,10 +3093,19 @@ class ResultHub:
             "observers": {"count": len(observers),
                           "delivered": sum(item["delivered"] for item in observer_status),
                           "dropped": sum(item["dropped"] for item in observer_status),
+                          "event_dropped": sum(
+                              item["event_dropped"] for item in observer_status),
+                          "edge_dropped": sum(
+                              item["edge_dropped"] for item in observer_status),
+                          "non_edge_dropped": sum(
+                              item["non_edge_dropped"] for item in observer_status),
                           "invalidations": sum(
                               item["invalidations"] for item in observer_status),
                           "invalidated_queued": sum(
                               item["invalidated_queued"] for item in observer_status),
+                          "invalidation_wait_errors": sum(
+                              item["invalidation_wait_errors"]
+                              for item in observer_status),
                           "errors": (self._observer_errors
                                      + sum(item["errors"] for item in observer_status))},
             **ws_status,

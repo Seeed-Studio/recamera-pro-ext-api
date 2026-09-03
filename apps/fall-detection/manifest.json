@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
+  "release": {"sequence": 5, "channel": "stable"},
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64", "python": "==3.11.*",
@@ -53,7 +53,7 @@
   "id": "fall-detection",
   "name": "Fall Detection",
   "name_zh": "跌倒检测",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "image": "/appcenter/apps/fall-detection.png",
   "icon": {"path": "icon.png", "media_type": "image/png"},
   "type": "self-hosted",
@@ -69,6 +69,13 @@
   "capabilities": [
     "output"
   ],
+  "record_trigger": {
+    "version": 1,
+    "signals": [
+      {"id": "person", "type": "detection", "classes": ["person"], "supports_roi": true},
+      {"id": "fall", "type": "event", "event_kind": "fall", "supports_roi": false}
+    ]
+  },
   "models": [
     {
       "id": "yolo11n_pose_rawhead_int8",

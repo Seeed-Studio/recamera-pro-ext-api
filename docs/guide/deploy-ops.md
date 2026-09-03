@@ -28,10 +28,12 @@
 | `recamera_ext/`（Python ctypes 绑定）| `/userdata/sdk/python/` | — | — | 给方案商，可选（`/userdata` 不受 OTA 影响）|
 | `recamera_ext.h`（C 头）| `/userdata/sdk/` | — | — | 给方案商，可选 |
 
-安装后重启，`/run/recamera/` 下出现四个 socket 和应用身份目录：
+安装后重启，`/run/recamera/` 下出现六个 socket 和应用身份目录：
 
 - `frame.sock` — 帧代理（零拷贝 dma-buf 帧交接，SCM_RIGHTS 传 fd + 96 字节定长头）
-- `result-in.sock` — 结果回注（检测 / 分类 / 分割 / 跟踪 / 关键点注入回官方 OSD / 录像 / WS 分发）
+- `result-in.sock` — 公开结果回注（检测 / 分类 / 分割 / 跟踪 / 关键点送入官方 OSD 与 notify/WS；不进入 Vigil、不触发录像）
+- `osd-in.sock` — appmgr 专用 OSD-only 入口（只叠加，不分发、不触发录像）
+- `record-in.sock` — appmgr 专用 recording-only 入口（只进入 source-aware Vigil，不叠加、不分发）
 - `probe.sock` — 观测面（preproc / npu.raw / postproc / metrics tap）；SDK client `ProbeSource`（v1.2.0）已发布可用，见 `README.md` §4.8。metrics（inline）+ preproc.out（大张量走 memfd）双路已真机验证。
 - `inference-control.sock` — 内建/外部 RKNN 所有权协调（connection-lifetime lease）
 - `apps.d/` — 每 app 控制目录
@@ -69,7 +71,7 @@ adb push ./ /userdata/ext-pkg/                    # push 整个 release/pkg 目�
 adb shell "sh /userdata/ext-pkg/install.sh"       # 备份原厂 + md5 校验 + 覆盖 /oem
 adb reboot                                         # 或 install.sh 传 --reboot
 # 等 ~1-2 分钟自检：
-adb shell "ls -l /run/recamera/"                  # 期望 frame.sock result-in.sock probe.sock apps.d/
+adb shell "ls -l /run/recamera/"                  # 期望六个 *.sock（见 §1）及 apps.d/
 adb shell "md5sum /oem/usr/bin/rkipc"             # 期望 9826e9ecf8ed543a6dc78e3731102e0f
 ```
 
@@ -161,7 +163,7 @@ adb reboot
 
 # 4. 验证（等 1-2 分钟）
 adb shell "md5sum /oem/usr/bin/rkipc"     # 对上目标 md5
-adb shell "ls -l /run/recamera/"          # 三 socket + apps.d/
+adb shell "ls -l /run/recamera/"          # 六个 *.sock（见 §1）+ apps.d/
 adb shell "dmesg | grep -iE 'vpss|fifo|Oops' | tail"   # 无 VPSS 崩溃
 # RTSP：rtsp://<ip>:554/...   结果 WS（本机免 JWT）：ws://127.0.0.1:8123
 ```
@@ -304,10 +306,11 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 reboot / 部署后依次核对：
 
 - [ ] **rkipc md5**：`md5sum /oem/usr/bin/rkipc` = `9826e9ecf8ed543a6dc78e3731102e0f`（或热替换目标值）
-- [ ] **三 socket**：`ls -l /run/recamera/` 有 `frame.sock` `result-in.sock` `probe.sock`（+ `apps.d/`）
+- [ ] **六 socket**：`ls -l /run/recamera/` 有 `frame.sock` `result-in.sock` `osd-in.sock` `record-in.sock` `probe.sock` `inference-control.sock`（+ `apps.d/`）
 - [ ] **RTSP 出流**：`rtsp://<ip>:554/...` 有画面
 - [ ] **内建推理**：官方检测框正常上 OSD / RTSP（内建走同一条 `rc_result_dispatch`）
-- [ ] **结果回注端到端**：外部脚本 / SDK 向 `result-in.sock` 注入高辨识度检测 → RTSP 看到框+标签 → WS 收到 `source_id≠"builtin"` 的结果；冒充 `"builtin"` 被拒；超速被丢+计数
+- [ ] **结果回注端到端**：外部脚本 / SDK 向 `result-in.sock` 注入高辨识度检测 → RTSP 看到框+标签 → WS 收到 `source_id≠"builtin"` 的结果；确认它不会启动 Vigil 录像；冒充 `"builtin"` 被拒；超速被丢+计数
+- [ ] **托管应用录像触发**：安装带 `record_trigger` 的 app → `/api/app-center/v1/recording/sources` 可见其来源 → Vigil 选择该信号后，匹配结果能启动录像；停止/升级 app 后旧 debounce 状态已清除
 - [ ] **SDK 握手**（任何人可连）：
   ```sh
   export LD_LIBRARY_PATH=/oem/usr/lib:$LD_LIBRARY_PATH

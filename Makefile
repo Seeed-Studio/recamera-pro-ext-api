@@ -157,6 +157,7 @@ verify: sdk-install python-install rknn-runtime-install platform-services-instal
 	@test -f "$(PYTHON_SITE)/_ruamel_yaml.cpython-311-aarch64-linux-gnu.so"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/server.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/result_hub.py"
+	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/recording.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/visualization.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/trust.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/schema/manifest-v2.schema.json"

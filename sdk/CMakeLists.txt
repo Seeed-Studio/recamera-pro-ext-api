@@ -74,9 +74,11 @@ set(RECAMERA_EXT_PROTOC_C "" CACHE FILEPATH
 if(RECAMERA_EXT_BUILD_TESTS)
 	enable_testing()
 
-	# These tests inspect source/generated files and the target ELF on the build
-	# host. They never execute the target library, so the same test set works for
-	# native host builds and aarch64 cross builds.
+	# Source/generated/ELF tests never execute the target library, so they work
+	# for both host and aarch64 builds. Runtime socket tests are registered only
+	# when a compiler probe proves target executables run on this host. This also
+	# handles SDK scripts that select an aarch64 compiler without a toolchain file
+	# (and therefore leave CMAKE_CROSSCOMPILING incorrectly false).
 	find_program(RECAMERA_EXT_TEST_PYTHON NAMES python3 python
 		NO_CMAKE_FIND_ROOT_PATH)
 	if(NOT RECAMERA_EXT_TEST_PYTHON)
@@ -104,6 +106,59 @@ if(RECAMERA_EXT_BUILD_TESTS)
 	add_library(recamera_ext_abi_layout OBJECT tests/native_abi_layout.c)
 	target_include_directories(recamera_ext_abi_layout PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+	unset(RECAMERA_EXT_TARGET_RUNNABLE CACHE)
+	if(NOT CMAKE_CROSSCOMPILING)
+		include(CheckCSourceRuns)
+		check_c_source_runs(
+			"int main(void) { return 0; }"
+			RECAMERA_EXT_TARGET_RUNNABLE)
+	else()
+		set(RECAMERA_EXT_TARGET_RUNNABLE FALSE)
+	endif()
+
+	if(RECAMERA_EXT_TARGET_RUNNABLE)
+		# Exercise record@1 protobuf datagrams through a socketpair. The test
+		# supplies a handshake stub, so it never touches the privileged device
+		# endpoint and remains deterministic on build hosts.
+		add_executable(recamera_ext_record_wire
+			tests/native_record_wire.c
+			generated/inference.pb-c.c)
+		target_include_directories(recamera_ext_record_wire PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/include
+			${CMAKE_CURRENT_SOURCE_DIR}/src
+			${CMAKE_CURRENT_SOURCE_DIR}/generated
+			${PROTOBUF_C_HEADER_DIR})
+		target_link_libraries(recamera_ext_record_wire PRIVATE
+			${PROTOBUF_C_LIBRARY})
+		target_compile_options(recamera_ext_record_wire PRIVATE
+			-Wall -Wextra -Wformat=2 -Werror)
+		add_test(NAME recamera_ext.record_wire
+			COMMAND recamera_ext_record_wire)
+
+		# Exercise the production non-blocking poll/deadline implementation with
+		# a local Hello server and a deliberately saturated socketpair.
+		add_executable(recamera_ext_bounded_io
+			tests/native_bounded_io.c
+			src/ext_client_common.c
+			generated/ext_api.pb-c.c)
+		target_include_directories(recamera_ext_bounded_io PRIVATE
+			${CMAKE_CURRENT_SOURCE_DIR}/include
+			${CMAKE_CURRENT_SOURCE_DIR}/src
+			${CMAKE_CURRENT_SOURCE_DIR}/generated
+			${PROTOBUF_C_HEADER_DIR})
+		target_link_libraries(recamera_ext_bounded_io PRIVATE
+			${PROTOBUF_C_LIBRARY})
+		target_compile_options(recamera_ext_bounded_io PRIVATE
+			-Wall -Wextra -Wformat=2 -Werror)
+		add_test(NAME recamera_ext.bounded_io
+			COMMAND recamera_ext_bounded_io)
+
+		set_tests_properties(
+			recamera_ext.record_wire
+			recamera_ext.bounded_io
+			PROPERTIES LABELS "native-sdk")
+	endif()
 
 	add_test(NAME recamera_ext.source_closure
 		COMMAND ${RECAMERA_EXT_TEST_PYTHON}

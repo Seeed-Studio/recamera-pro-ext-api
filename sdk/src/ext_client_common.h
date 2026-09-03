@@ -35,7 +35,7 @@ extern "C" {
 
 // These helpers are internal to the DSO (they replace what used to be static
 // functions in each source file). Hide them from the dynamic symbol table so
-// the public export surface stays exactly the rc_ext_frame/result/probe ABI.
+// the public export surface stays exactly the declared rc_ext_* ABI.
 #if defined(__GNUC__) || defined(__clang__)
 #define RC_EXT_INTERNAL __attribute__((visibility("hidden")))
 #else
@@ -54,6 +54,31 @@ RC_EXT_INTERNAL int rc_ext_set_err(int *err, rc_ext_err_t code);
 // server-reported error), and returns -1.
 RC_EXT_INTERNAL int rc_ext_connect_hello(const char *path, const char *client_name,
                          uint32_t *api_version, int *err);
+
+// Bounded variant used by the appmgr record@1 bridge worker. Connection,
+// Hello send, and HelloAck receive share one monotonic timeout budget. The
+// returned socket stays non-blocking so subsequent record sends can also be
+// bounded. Transport/timeout failures map to EINTERNAL; protocol and
+// server-reported errors use the same rc_ext_err_t values as the ordinary
+// helper. This is intentionally not used by existing SDK endpoints.
+RC_EXT_INTERNAL int rc_ext_connect_hello_bounded(
+    const char *path, const char *client_name, uint32_t *api_version, int *err,
+    unsigned int timeout_ms);
+
+// Sends exactly one SEQPACKET datagram without allowing kernel backpressure
+// to block the caller beyond timeout_ms. Returns 0 on success or -1 with errno
+// set on transport/timeout failure. The caller maps that failure to its public
+// rc_ext_err_t contract.
+RC_EXT_INTERNAL int rc_ext_send_packet_bounded(
+    int fd, const void *buffer, size_t size, unsigned int timeout_ms);
+
+// Sends one request datagram and requires a subsequent HelloAck(error=0),
+// sharing one monotonic timeout budget across both operations. Returns 0 on a
+// successful version-1 ACK or a negative rc_ext_err_t (including EVERSION for
+// a success-shaped ACK with the wrong version, and EINTERNAL on timeout).
+// record@1 reset uses this request/ACK fence; ordinary data sends do not.
+RC_EXT_INTERNAL int rc_ext_send_packet_ack_bounded(
+    int fd, const void *buffer, size_t size, unsigned int timeout_ms);
 
 // Receives one SEQPACKET datagram into buf plus any SCM_RIGHTS fds.
 // require_exactly_one: 1 -> exactly one fd is required (frame proxy); 0 -> 0 or

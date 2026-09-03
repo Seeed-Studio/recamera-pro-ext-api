@@ -168,6 +168,47 @@ int rc_ext_osd_send_detections(rc_ext_osd_t *h, uint64_t pts_us,
 void rc_ext_osd_close(rc_ext_osd_t *h);
 
 // ===========================================================================
+// Platform recording-only sink (additive ABI)
+// ===========================================================================
+// Reserved for the authenticated appmgr Result Hub bridge. Accepted messages
+// enter only source-aware Vigil recording rules; they do not reach OSD,
+// notifications, or public result streams. app_id must be the stable manifest
+// id (`[a-z0-9-]{1,64}`, excluding reserved id `builtin`) and is supplied for
+// every ordered datagram. Open/Hello/ACK and each send/reset use an internal
+// one-second socket-I/O timeout so a stalled server cannot indefinitely hold
+// the appmgr recording worker. Callers must serialize send/reset/close on a handle.
+
+typedef struct rc_ext_record rc_ext_record_t;
+
+// record@1 wire discriminator for application events. Events reuse the
+// classification oneof but cannot be confused with frame classifications.
+#define RC_EXT_RECORD_EVENT_MODEL_ID INT32_MIN
+
+// Connects to /run/recamera/record-in.sock and performs a bounded record@1
+// handshake. Transport/timeout failures report RC_EXT_EINTERNAL via err.
+rc_ext_record_t *rc_ext_record_open(int *err);
+
+int rc_ext_record_send_detections(rc_ext_record_t *h, const char *app_id,
+                                  uint64_t pts_us, const rc_ext_box_t *boxes, size_t n);
+int rc_ext_record_send_classification(rc_ext_record_t *h, const char *app_id,
+                                      uint64_t pts_us, const rc_ext_class_t *items, size_t n);
+int rc_ext_record_send_events(rc_ext_record_t *h, const char *app_id,
+                              uint64_t pts_us, const rc_ext_class_t *items, size_t n);
+int rc_ext_record_send_tracking(rc_ext_record_t *h, const char *app_id,
+                                uint64_t pts_us, const rc_ext_track_t *items, size_t n);
+int rc_ext_record_send_keypoints(rc_ext_record_t *h, const char *app_id,
+                                 uint64_t pts_us, const rc_ext_kpinstance_t *instances,
+                                 size_t n);
+
+// Ordered lifecycle invalidation. Clears debounce state for app_id and returns
+// success only after receiving a bounded HelloAck(error=0) from the server.
+// appmgr calls this when an app stops/upgrades; the server also resets all
+// sources observed on a connection if that connection is lost. Any reset
+// error invalidates the handle; close it and open a new one before retrying.
+int rc_ext_record_reset(rc_ext_record_t *h, const char *app_id);
+void rc_ext_record_close(rc_ext_record_t *h);
+
+// ===========================================================================
 // M2 frame proxy -- zero-copy frame receiver (spec §2.5)
 // ===========================================================================
 //

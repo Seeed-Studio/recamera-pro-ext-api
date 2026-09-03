@@ -62,7 +62,7 @@ _V2_REQUIRED = frozenset((
 _V2_ALLOWED = _V2_REQUIRED | frozenset((
     "name_zh", "description", "description_zh", "author", "image", "icon", "scene",
     "scene_zh", "tags", "models", "needs_model", "postproc", "render",
-    "output", "ha_entities", "package",
+    "output", "record_trigger", "ha_entities", "package",
 ))
 
 _CONFIG_TYPES = frozenset((
@@ -86,6 +86,9 @@ _COORD_SPACES = frozenset((
     "pixel_xyxy", "pixel_quad", "pixel_points",
     "normalized_xyxy", "normalized_quad", "normalized_points",
 ))
+_RECORD_TRIGGER_TYPES = frozenset(("detection", "classification", "event"))
+_MAX_RECORD_TRIGGER_SIGNALS = 32
+_MAX_RECORD_TRIGGER_CLASSES = 256
 
 
 class ManifestValidationError(ValueError):
@@ -574,6 +577,155 @@ def _validate_output_contract(value: Any) -> None:
         _string(row["topic"], path + ".topic", max_len=512)
         if "task" in row:
             _safe_token(row["task"], path + ".task")
+
+
+def _validate_record_trigger(value: Any, output_value: Any) -> None:
+    """Validate the signed contract used by the managed-app recording bridge.
+
+    This declaration is an authorization boundary, not presentation metadata:
+    only fields explicitly listed here may be projected into Vigil.  Runtime
+    payloads cannot add signals or widen the advertised class set.
+    """
+    root = _expect_object(value, "record_trigger")
+    _closed(root, frozenset(("version", "signals")), "record_trigger")
+    _required(root, frozenset(("version", "signals")), "record_trigger")
+    if isinstance(root["version"], bool) or root["version"] != 1:
+        _fail("record_trigger.version", "must equal 1")
+    signals = _expect_list(root["signals"], "record_trigger.signals")
+    if not signals or len(signals) > _MAX_RECORD_TRIGGER_SIGNALS:
+        _fail("record_trigger.signals", "must contain 1..%d signals" %
+              _MAX_RECORD_TRIGGER_SIGNALS)
+
+    output = output_value if isinstance(output_value, dict) else {}
+    if output.get("contract_version") != 2:
+        _fail("record_trigger", "requires output.contract_version=2")
+    fields = output.get("fields") if isinstance(output.get("fields"), list) else []
+    direct_result_fields = {}
+    for field in fields:
+        if (not isinstance(field, dict) or field.get("derived") is True
+                or not isinstance(field.get("from"), str)):
+            continue
+        match = re.fullmatch(
+            r"results\[\]\.([A-Za-z_][A-Za-z0-9_]*)", field["from"])
+        if match is None:
+            continue
+        direct_name = match.group(1)
+        if direct_name in direct_result_fields:
+            _fail("record_trigger",
+                  f"requires an unambiguous direct {direct_name!r} output field")
+        direct_result_fields[direct_name] = field
+    declared_event_kinds = {
+        str(match.group(1) or field.get("event_kind") or "")
+        for field in fields
+        if isinstance(field, dict) and field.get("derived") is not True
+        and isinstance(field.get("from"), str)
+        and (match := re.fullmatch(
+            r"events\[(?:kind=([A-Za-z0-9_.-]+))?\]\."
+            r"[A-Za-z_][A-Za-z0-9_]*", field["from"]))
+    }
+    has_label = any(name in direct_result_fields
+                    for name in ("cls_name", "label", "kind"))
+    has_score = any(name in direct_result_fields
+                    for name in ("score", "confidence"))
+    box = direct_result_fields.get("box")
+    has_box = (isinstance(box, dict)
+               and box.get("coord") in ("pixel_xyxy", "normalized_xyxy"))
+
+    ids: set[str] = set()
+    event_kinds: set[str] = set()
+    authorized_labels: set[str] = set()
+    frame_kinds: set[str] = set()
+    allowed = frozenset((
+        "id", "type", "classes", "supports_roi", "event_kind",
+    ))
+    for index, raw in enumerate(signals):
+        path = f"record_trigger.signals[{index}]"
+        signal = _expect_object(raw, path)
+        _closed(signal, allowed, path)
+        _required(signal, frozenset(("id", "type", "supports_roi")), path)
+        signal_id = _safe_token(signal["id"], path + ".id")
+        if signal_id in ids:
+            _fail(path + ".id", "must be unique")
+        ids.add(signal_id)
+        kind = signal["type"]
+        if kind not in _RECORD_TRIGGER_TYPES:
+            _fail(path + ".type", "must be detection, classification or event")
+        if not isinstance(signal["supports_roi"], bool):
+            _fail(path + ".supports_roi", "must be boolean")
+
+        if kind in ("detection", "classification"):
+            frame_kinds.add(kind)
+            if len(frame_kinds) > 1:
+                _fail("record_trigger.signals",
+                      "cannot mix detection and classification signals")
+            _required(signal, frozenset(("classes",)), path)
+            if "event_kind" in signal:
+                _fail(path + ".event_kind", "is only valid for event signals")
+            classes = _expect_list(signal["classes"], path + ".classes")
+            if not classes or len(classes) > _MAX_RECORD_TRIGGER_CLASSES:
+                _fail(path + ".classes", "must contain 1..%d labels" %
+                      _MAX_RECORD_TRIGGER_CLASSES)
+            seen: set[str] = set()
+            for class_index, label_value in enumerate(classes):
+                label_path = f"{path}.classes[{class_index}]"
+                label = _string(label_value, label_path, max_len=128)
+                if label != label.strip() or any(
+                        ord(character) < 0x20 or ord(character) == 0x7f
+                        for character in label):
+                    _fail(label_path,
+                          "must not have surrounding whitespace or control characters")
+                if label in seen:
+                    _fail(label_path, "must be unique")
+                if label in authorized_labels:
+                    _fail(label_path,
+                          "must be unique across all recording signals")
+                seen.add(label)
+                authorized_labels.add(label)
+            if not has_label or not has_score:
+                _fail(path, "requires direct result label and score fields")
+            if kind == "detection" and not has_box:
+                _fail(path, "detection requires a direct normalized/pixel box field")
+            if kind == "classification" and signal["supports_roi"]:
+                _fail(path + ".supports_roi",
+                      "classification signals cannot support ROI")
+            continue
+
+        _required(signal, frozenset(("event_kind",)), path)
+        if "classes" in signal:
+            _fail(path + ".classes", "is not valid for event signals")
+        if signal["supports_roi"]:
+            _fail(path + ".supports_roi", "event signals cannot support ROI")
+        event_kind = _safe_token(signal["event_kind"], path + ".event_kind")
+        if len(event_kind) > 96:
+            _fail(path + ".event_kind",
+                  "must not exceed the canonical Result Hub 96-character limit")
+        if event_kind != event_kind.lower():
+            _fail(path + ".event_kind",
+                  "must be lowercase to match canonical Result Hub events")
+        if event_kind in event_kinds:
+            _fail(path + ".event_kind", "must be unique")
+        if event_kind in authorized_labels:
+            _fail(path + ".event_kind",
+                  "must be unique across all recording signals")
+        event_kinds.add(event_kind)
+        authorized_labels.add(event_kind)
+        if event_kind not in declared_event_kinds:
+            _fail(path + ".event_kind",
+                  "must reference a declared output event kind")
+
+
+def effective_record_trigger(manifest: Any) -> dict:
+    """Return a defensive copy of one validated recording capability."""
+    if not isinstance(manifest, dict) or manifest.get("manifest_version") != 2:
+        return {}
+    value = manifest.get("record_trigger")
+    if value is None:
+        return {}
+    try:
+        _validate_record_trigger(value, manifest.get("output"))
+    except ManifestValidationError:
+        return {}
+    return json.loads(json.dumps(value))
 
 
 _GEOMETRY_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?\Z")
@@ -1190,6 +1342,8 @@ def validate_manifest(manifest: Any, *, allow_v1: bool = True) -> int:
         _validate_package(obj["package"])
     if "output" in obj:
         _validate_output_contract(obj["output"])
+    if "record_trigger" in obj:
+        _validate_record_trigger(obj["record_trigger"], obj.get("output"))
     if "render" in obj:
         _validate_render_contract(obj["render"])
     # Invoke even when either section is absent/legacy: strict geometry is a

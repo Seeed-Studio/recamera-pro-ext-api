@@ -85,10 +85,12 @@ POST /cgi-bin/entry.cgi/system/login          body {"sUserName":"admin","sPasswo
 | `server_build` | 构建标识（yyyymmdd） | §1.2 HelloAck.server_build |
 | `frame@1.limits` | 帧代理：池深 / 最大订阅者 / 每连接同时持帧上限 | §2.4 |
 | `result@1.limits` | 结果回注：每连接 60 msg/s、≤8 source、≤4 连接、单条 ≤64KB | §3.3 |
+| `osd@1.limits` | appmgr 专用 OSD-only 入口配额 | app-package-v2 / SDK README |
+| `record@1.limits` | appmgr 专用 recording-only 入口配额 | app-package-v2 / SDK README |
 | `probe@1.stages` | 观测面 tap 点 | §4.1 |
 
-> **v1 baseline 承诺**：`frame@1`/`result@1`/`probe@1`/
-> `inference-control@1` 一经发布不可移除；能力演进 = 新增 Capability 或提升
+> **v1 baseline 承诺**：`frame@1`/`result@1`/`osd@1`/`record@1`/
+> `probe@1`/`inference-control@1` 一经发布不可移除；能力演进 = 新增 Capability 或提升
 > version；limits 数值可变，客户端必须按握手/本端点返回值自适应，
 > **不得硬编码**（§1.2 / §8.2 扩展五规则）。
 
@@ -186,7 +188,7 @@ curl -k -b "token=<JWT>" https://<设备>/cgi-bin/entry.cgi/api/v1/ext/capabilit
 | GET | `/osd/cfg` | 读 OSD 配置（`osd_manager_get_cfg`） | **冻结** |
 | POST/PUT | `/osd/cfg` | 写 OSD 配置（校验后 `osd_manager_set_cfg`；含 privacyMask 等，坐标归一化 [0,1]） | **冻结** |
 
-> 仅 `cfg` 资源；其余子路径返回 501（`osd_api.cpp:274`）。OSD 叠加是结果上屏/录像的官方通道，方案商需要"结果上 OSD"应优先走 M1 `result-in.sock`（见 result-push.md），`/osd/cfg` 用于配置固定叠加项。
+> 仅 `cfg` 资源；其余子路径返回 501（`osd_api.cpp:274`）。OSD 是结果上屏的官方通道，方案商需要“结果上 OSD”应优先走 M1 `result-in.sock`（见 result-push.md），`/osd/cfg` 用于配置固定叠加项。OSD 会出现在已经进行的录像中，但 `result-in.sock` 本身不启动录像；托管应用的录像触发由 manifest `record_trigger` 配置。
 
 ### 2.5 notify 域 `/notify/*`（`notify_api.cpp`）
 

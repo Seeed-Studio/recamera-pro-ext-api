@@ -28,7 +28,8 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 扩展 API 能做什么：
 
 - **拿帧（帧代理）**：从摄像头零拷贝取到 NV12 帧，喂给你自己的模型/算法。
-- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到 RTSP/录像的 OSD，并分发到 WS/MQTT/HTTP/UART。
+- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到编码视频（RTSP 与正在进行的录像），并分发到 WS/MQTT/HTTP/UART；它本身不启动录像。
+- **应用触发录像**：托管应用在 manifest v2 声明 `record_trigger`，由 appmgr 将获准的结果送入受保护的 Vigil 录制入口。
 - **音频**：从预留的 ALSA PCM 通道取麦克风原始音频。
 - **GPIO 触发**：用推理结果驱动引脚（继电器/LED/告警）。
 - **前端扩展**：把自己的网页和后端挂到官方 Web 入口下，复用官方登录会话。
@@ -40,7 +41,8 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 |---|---|---|---|
 | **Python AI 工作流 API**（typed errors / buffer / RGA / RKNN / lifecycle） | Python + native 源码已接通；host/交叉构建通过，待目标板完整 E2E | `recamera_ext` + `kit` + appmgr managed launch | [python-ai-api.md](./python-ai-api.md) |
 | **帧代理**（零拷贝取帧） | 服务端/client 源码已恢复；重启屏障与 host 测试已补，待目标板回归 | `FrameSource` / C ABI `rc_ext_frame_*`，`/run/recamera/frame.sock` | 本文 §3 |
-| **结果注入**（OSD+录像+推送） | 服务端/client 源码已恢复；Python `send_*` 已封装，待目标板回归 | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **结果注入**（OSD+推送，不触发录像） | 服务端/client 源码已恢复；Python `send_*` 已封装，待目标板回归 | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **托管应用触发录像** | manifest 校验、appmgr 过滤桥接、Vigil 按来源规则已实现，待目标板回归 | manifest v2 `record_trigger` → appmgr → 受保护的 `/run/recamera/record-in.sock` | [app-package-v2.md](./app-package-v2.md#managed-recording-triggers) |
 | **NPU 独占仲裁** | `inference-control@1` broker + Python lease + appmgr 路由已实现；host kill/HUP 测试通过，待目标板压力测试 | `InferenceLease` / `ExternalNpuLease`，`/run/recamera/inference-control.sock` | [python-ai-api.md](./python-ai-api.md#6-externalnpulease-与-rkipc-broker) |
 | **音频 PCM** | 现成可用 | `arecord -D ai_asr`（ALSA dsnoop 共享） | [audio-pcm.md](./audio-pcm.md) |
 | **GPIO 结果触发** | 现成可用（组合现有零件） | notify WS + gmgr API，无需固件新功能 | [gpio-result-trigger.md](./gpio-result-trigger.md) |
@@ -62,9 +64,10 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 > 由顶层固件构建生成产物，再完成真机 kill/restart/OTA 矩阵。详细状态见
 > [Python AI 工作流 API 与生命周期](./python-ai-api.md#0-先读当前可用范围)。
 
-> **帧代理 vs 结果注入 vs notify 的选择**：
+> **帧代理 vs 结果注入 vs 应用触发录像 vs notify 的选择**：
 > - 要拿摄像头画面自己推理 → **帧代理**（§3）。
-> - 要让你的结果出现在视频叠加 + 录像 + 推送 → **结果注入**（§4，`result-in.sock`）。
+> - 要让你的结果出现在视频叠加 + 推送 → **结果注入**（§4，`result-in.sock`）；叠加也会出现在已经进行的录像中，但不会据此启动录像。
+> - 要让已安装的托管应用按 AI 结果启动录像 → 在 manifest 声明 **`record_trigger`**；应用不能直接访问内部录制 socket。
 > - 只要把结果推给外部消费者、不需要叠加/录像 → **notify**（`result-push.md`）。
 
 ### 接入方式：两种，同一套契约
@@ -85,11 +88,15 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 
 ### 1.2 前置条件（对所有 socket API 通用）
 
-- socket 位于 `/run/recamera/`。**v1 权限模型为 root-only**：目录 `0750 root:root`、socket 文件 `0660`（实测 RV1126B），进程需以 root 运行（麦克风/摄像头/`/dev/mpi` 设备节点均 root 属主，扩展应用经启动脚本以 root 拉起）。
+- socket 位于 `/run/recamera/`。**v1 权限模型为 root-only**：目录
+  `0750 root:root`；公开的 frame/result/probe/inference-control socket 为
+  `0660`，appmgr 专用的 osd-in/record-in socket 为 `0600`。进程需以 root
+  运行（麦克风/摄像头/`/dev/mpi` 设备节点均 root 属主，扩展应用经启动脚本以 root 拉起）。
   > 按组隔离的方案（`recamera-ext` 组、socket 0660 组可写）随 P1 沙箱一并落地，v1 未建组——见规格 §1.1 / §6 上机实证。v1 扩展全 root，组隔离无实际意义。
 - C 客户端链接 `librecamera_ext.so.1`；Python 客户端 `import recamera_ext`（ctypes 薄封装，运行时加载同一 `.so`）。
-- 四条 socket（`frame.sock` / `result-in.sock` / `probe.sock` /
-  `inference-control.sock`）连接后都先走一次 **Hello/HelloAck 握手**（§5），
+- 六条 socket（`frame.sock` / `result-in.sock` / `osd-in.sock` /
+  `record-in.sock` / `probe.sock` / `inference-control.sock`）连接后都先走一次
+  **Hello/HelloAck 握手**（§5），
   SDK 内部自动完成，无需手写 protobuf。
 
 ---
@@ -280,11 +287,16 @@ with FrameSource(FrameConfig(fps_divisor=2)) as src:
 
 ## 4. 结果注入 API（M1 — `result-in.sock`）
 
-把你算出的推理结果（检测 / 分类 / 分割 / 跟踪 / 关键点）送回 rkipc，走**与内建推理完全相同的三路分发**（规格 §3.3）：
+把你算出的推理结果（检测 / 分类 / 分割 / 跟踪 / 关键点）送回 rkipc，进入公开结果链路的两类下游：
 
 1. **OSD 叠加**：`osd_manager_draw_infer()` 画进 RTSP/预览叠加层，按 `source_id` 哈希分配颜色；
-2. **录像**：结果进 vigil 录像队列，回放可见；
-3. **推送**：`rc_notify_send_inference()` 转发 WS（本机 `127.0.0.1:8123` / 外部 `/ws/inference/results`）/ MQTT / HTTP / UART。
+2. **推送**：`rc_notify_send_inference()` 转发 WS（本机 `127.0.0.1:8123` / 外部 `/ws/inference/results`）/ MQTT / HTTP / UART。
+
+> **安全边界**：公开的 `result-in.sock` 不进入 Vigil，也不会启动录像。OSD 已经
+> 画进编码视频，因此会自然出现在一段已经开始的录像中，这与“由该结果触发
+> 录像”是两回事。托管应用需要触发录像时，应在 manifest v2 声明
+> `record_trigger`，由 appmgr 过滤后桥接到仅 appmgr 可访问的
+> `record-in.sock`；应用进程不得直接连接该内部端点。
 
 SDK 覆盖全部五种任务类型：`send_detections` / `send_classification` / `send_segmentation` / `send_tracking` / `send_keypoints`（C ABI 与 Python 一一对应）。每个 `send_*` 打包对应的 `InferenceResult` oneof 分支，发一条 datagram；`pts_us` 语义一致（`CLOCK_MONOTONIC` 微秒，`0` = 不关联帧）；返回 0 成功，负值 = `-rc_ext_err_t`。所有 `const char *label` 均接受 `NULL`（当 `""`）。
 
@@ -316,13 +328,15 @@ int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
                                   const rc_ext_box_t *boxes, size_t n);
 ```
 
-**分类（CLASSIFICATION）** — `recamera_ext.h:51-59`。分类条目**无位置字段**（见 §4.5 分类通道 box 缺口）：
+**分类（CLASSIFICATION）** — 可表示整幅分类，也可附一个来源 ROI（见 §4.5）：
 
 ```c
 typedef struct {
     float score;       // 置信度 0..1
     int class_id;
     const char *label; // 类名；NULL -> ""
+    int has_box;       // 0=整幅分类；1=x1/y1/x2/y2 有效
+    float x1, y1, x2, y2; // 可选 ROI，归一化 [0,1]
 } rc_ext_class_t;
 
 int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
@@ -394,7 +408,8 @@ ResultSink(source_id, lib_path=None)
 # 检测：boxes 每条 (x1, y1, x2, y2, score, label[, class_id])   __init__.py:241
 sink.send_detections(pts_us, boxes)
 
-# 分类：items 每条 (score, class_id, label)                      __init__.py:264
+# 分类：items 每条 (score, class_id, label)，或附 ROI：
+#       (score, class_id, label, (x1, y1, x2, y2))
 sink.send_classification(pts_us, items)
 
 # 分割：items 每条 (x1, y1, x2, y2, score, class_id, label,
@@ -447,7 +462,7 @@ with ResultSink(source_id="my-app") as sink:
 
 > ⚠️ **坐标契约（务必遵守）：所有 box 坐标与 keypoint 点坐标均为归一化 `[0,1]`（相对画面宽高的比例），不是像素。** 设备 OSD 渲染器（`osd_infer.c`：`osd_infer_box_to_rect` / `osd_infer_norm_to_pixel`）对坐标 `clamp(0,1)` 后再乘画面宽高。**若传像素值（如 240、300），会被 clamp 到 1.0 → 框缩成右下角 1 像素 → 画面上看不见框。** 早期 header 曾误标"pixels"（v1.2.0 已更正），按像素接入的框不显示即此原因。把你的像素结果除以画面宽高转成 `[0,1]` 再注入。
 
-各任务类型注入后的三路分发（OSD 叠加 / 录像 / WS·MQTT·HTTP·UART 推送）走同一 `rc_result_dispatch()`。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；OSD 画面渲染的真机端到端验证程度不同：
+各任务类型注入后进入 OSD 叠加与 WS·MQTT·HTTP·UART 推送。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；公开结果注入不进入 Vigil。OSD 画面渲染的真机端到端验证程度不同：
 
 | 任务类型 | 注入 + WS 推送 | OSD 画面渲染 | 端到端真机验证 |
 |---|---|---|---|
@@ -455,7 +470,7 @@ with ResultSink(source_id="my-app") as sink:
 | 跟踪 | 是 | 画框 + `track_id`（复用同一 `osd_infer_box_to_rect`） | 渲染走已验证的 `osd_infer_box_to_rect`（检测/关键点框均真机验证同一函数）；跟踪单类型专项截图未单独抓（多类型同注时被单槽覆盖，见下） |
 | 关键点 | 是 | 画对象框 + 关键点圆点（`osd_infer.c` TASK_TYPE_KEYPOINTS，`osd_infer_norm_to_pixel`，点坐标同为归一化） | **已验证**（2026-08-12 内建关闭下真机：KPINST 对象框 + 关键点圆点按归一化坐标精确上屏） |
 | 分类 | 是 | 画标签文本 + 可选 ROI 框（见 §4.5，box 可选，走 `osd_infer_box_to_rect`） | 渲染走已验证的 `osd_infer_box_to_rect`；带 box 的分类单类型专项截图未单独抓（同上单槽覆盖） |
-| 分割 | 是（注入/WS/录像可用） | **不上 OSD** —— `osd_infer.c` 的 task_type switch 只枚举 检测/分类/跟踪/关键点四类，SEGMENTATION 命中 `default` 返回 `-EOPNOTSUPP`，不写任何像素（`osd_infer.h` 标 `segmentation // future` 未实现） | **OSD 不渲染 seg**（源码确认 2026-08-12）；seg 结果仍走 WS/录像分发 |
+| 分割 | 是（注入/WS 可用） | **不上 OSD** —— `osd_infer.c` 的 task_type switch 只枚举 检测/分类/跟踪/关键点四类，SEGMENTATION 命中 `default` 返回 `-EOPNOTSUPP`，不写任何像素（`osd_infer.h` 标 `segmentation // future` 未实现） | **OSD 不渲染 seg**（源码确认 2026-08-12）；seg 结果仍走 WS 推送，但不触发录像 |
 
 诚实结论：**注入能通、WS 能收,对全部五种任务成立**；OSD 画面渲染方面,**检测框（INJTEST）与关键点（KPINST 框+圆点）均已真机端到端复验（2026-08-12，坐标修正后确认按归一化坐标上屏）**；跟踪/分类走同一套已验证的 `osd_infer_box_to_rect`（单类型专项截图未单独抓）；**分割不上 OSD**（渲染器无 seg 分支）。
 
@@ -480,7 +495,7 @@ with ResultSink(source_id="my-app") as sink:
 
 ### 4.7 结果去向 vs notify 的区别
 
-`result-in.sock`（本 API）= OSD + 录像 + 推送三路；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API。
+`result-in.sock`（本 API）= OSD + 推送，**不触发录像**；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API；托管应用要按结果启动录像则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 
 ### 4.8 观测面 probe（`rc_ext_probe_*` / `ProbeSource`，v1.2.0）
 
@@ -577,7 +592,7 @@ with ProbeSource(stages=["metrics"]) as ps:   # 也可 stages=["preproc.out","np
 
 ## 5. 握手与版本协商（规格 §1.2）
 
-四条 socket 连接后都先做一次 protobuf 握手（定义在 `ext_api.proto`），
+六条 socket 连接后都先做一次 protobuf 握手（定义在 `ext_api.proto`），
 **SDK 内部自动完成**，方案商通常无需手写；这里说明其语义，便于自适应与
 自实现协议。
 
@@ -589,7 +604,7 @@ message Hello {
   string auth = 4;          // peercred 模式忽略；token 模式启用
 }
 message Capability {
-  string name = 1;                 // "frame" / "result" / "probe"
+  string name = 1;                 // frame/result/osd/record/probe/inference-control
   uint32 version = 2;
   map<string, uint32> limits = 3;  // 如 {"max_msg_rate":60,"max_sources":8,"pool_depth":6}
 }
@@ -606,8 +621,8 @@ message HelloAck {
 - **协商规则**：服务端在客户端 `[version_min, version_max]` 与自身支持集合的**交集**内取最大值；交集为空 → `error = EVERSION` 并关闭连接（不是 `min(client, server)`）。
 - **认证模式**：v1 `auth_mode = "peercred"`（用 `SO_PEERCRED` 取连接 pid/uid/gid 做身份）。将来 app token 作为**新增模式**并行提供，peercred 模式保留，老客户端不断。
 - **按 limits 自适应，不要硬编码**：并发数、速率、池深都在 `Capability.limits` 里返回，可能随固件变化。例如结果注入按 `limits["max_msg_rate"]` 控发送速率、帧代理按 `max_outstanding` 控持帧数。Python 侧 `src.pool_depth` / `src.max_outstanding` 即来自握手回填。
-- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` /
-  `inference-control@1` 一经发布不可移除。socket inode 存在仍不代表兼容，
+- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `osd@1` / `record@1` /
+  `probe@1` / `inference-control@1` 一经发布不可移除。socket inode 存在仍不代表兼容，
   客户端必须完成 Hello/HelloAck。
 
 ---
@@ -638,7 +653,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **音频 PCM** — [audio-pcm.md](./audio-pcm.md)：`arecord -D ai_asr -r 16000 -c 4 -f S16_LE` 从预留的 ALSA `ai_asr` 通道取 4 通道麦克风原始 PCM（软件取 ch0，勿用 `-c 1`），dsnoop 共享、不与 rkipc 音频冲突、无 VQE（AEC/NS 自理）。
 - **GPIO 结果触发** — [gpio-result-trigger.md](./gpio-result-trigger.md)：订阅 notify WS 拿结果 + gmgr API 写引脚（`GPIO3_B2`=pin106 / `GPIO3_B3`=pin107），检测到目标即拉高/拉低引脚。仅数字 0/1，无 PWM。不需改固件。
 - **前端扩展挂载** — [frontend-extension.md](./frontend-extension.md)：放一个 `ext_<name>.conf` 到 nginx 配置目录，把你的页面/后端挂到 `/extension/<name>/`，复用官方 dashboard 的 JWT 登录会话。
-- **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加/录像请改用本文 §4 的结果注入。
+- **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加请改用本文 §4 的结果注入；托管应用要按结果启动录像则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 - **rkipc RPC 现状** — [rkipc-rpc-status.md](./rkipc-rpc-status.md)：`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，不承诺稳定、勿直连；配置类需求走 entry.cgi HTTP API，等 M4 版本化控制面。
 - **统一 AI 结果与软件叠加** — [result-hub-v2.md](./result-hub-v2.md) / [ai-result-overlay.md](./ai-result-overlay.md)：`/ws/ai/results/v2` 以稳定 v2 envelope 合并 builtin 与多 app，支持 raw/formatted、latest frame、status 保留与 event 短重放；8123/8124 只作 legacy 兼容。浏览器叠加不进码流。
 - **模型上板（zero-to-deployed）** — [model-onboarding.md](./model-onboarding.md)：方案商把自己的模型跑到设备上的端到端主线——ONNX 导出 → 检查 IR/opset → RKNN 转换（`rknn-toolkit2` 2.3.x，target `rv1126b`）→ 量化校准 → 放进 app `models/` + manifest 声明 → 打包/装/激活/验证。深度转换细节指向 `models/convert/` 项目。
@@ -653,7 +668,8 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 
 | 能力 | 里程碑 | 状态 |
 |---|---|---|
-| 结果注入（OSD+录像+推送） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
+| 结果注入（OSD+推送，不触发录像） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
+| 托管应用触发录像（manifest + appmgr + source-aware Vigil） | M1.5 | host/交叉构建与自动化测试通过，待目标板端到端回归 |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | client/server 源码已恢复；runtime video restart 屏障与 host 生命周期测试通过，待真机回归 |
 | 音频 PCM / notify / 前端挂载 / rkipc 文档化 | M0 | 现成可用 |
 | 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | client/server 源码已恢复并可构建；历史补丁固件已验证，当前整合版待真机压力测试 |

@@ -5,12 +5,14 @@ reCamera Pro（RV1126B / recamera_v2）扩展 API：设备先安装包含扩展 
 作为独立进程运行，通过 `/run/recamera/` 下的 Unix domain socket 拿帧、取得
 NPU 租约、回注结果并观测流水线。进程边界即契约。
 
-四条 socket 端点：
+六条 socket 端点：
 
 | 端点 | socket | 作用 |
 |------|--------|------|
 | 帧代理 | `/run/recamera/frame.sock` | 零拷贝拿相机原始帧，自己推理 |
-| 结果注入 | `/run/recamera/result-in.sock` | 把结果回注官方 OSD / 录像 / WS 三路分发 |
+| 结果注入 | `/run/recamera/result-in.sock` | 把结果回注官方 OSD / 通知 / 公共结果流，不直接触发录像 |
+| 平台 OSD | `/run/recamera/osd-in.sock` | appmgr 专用，只把已授权的应用结果绘制到视频流 |
+| 平台录像触发 | `/run/recamera/record-in.sock` | appmgr 专用，把已安装且由 manifest 声明的应用信号交给 Vigil 录像规则 |
 | 观测面 | `/run/recamera/probe.sock` | 采样内建推理流水线各级张量 |
 | NPU 仲裁 | `/run/recamera/inference-control.sock` | 停妥内建模型后授予单 external owner 的连接生命周期租约 |
 
@@ -77,10 +79,12 @@ assembler，不能作为“源码可复现”证明。
 两条版本轴，勿混淆：
 
 - **产品发布 train**：当前工作树尚未生成可部署的新 train；历史 v1.x 包已归档禁用。
-- **Python distribution**：`recamera-ext 1.4.0`，包含 broker-backed `InferenceLease`。
-- **native SDK / C ABI**：`sdk/VERSION` 为 **1.3.0**，soname 仍为
-  `librecamera_ext.so.1`；能力为 `frame@1 / result@1 / probe@1 /
-  inference-control@1`。Python 包版本与 C ABI/SONAME 是不同版本轴。
+- **Python distribution**：`recamera-ext 1.5.0`，包含 broker-backed
+  `InferenceLease` 以及 appmgr 专用 `OsdSink` / `RecordSink`。
+- **native SDK / C ABI**：`sdk/VERSION` 为 **1.5.0**，soname 仍为
+  `librecamera_ext.so.1`；能力为 `frame@1 / result@1 / osd@1 /
+  record@1 / probe@1 / inference-control@1`。Python 包版本与
+  C ABI/SONAME 是不同版本轴。
 
 ## License
 

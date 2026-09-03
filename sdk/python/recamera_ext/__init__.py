@@ -5,6 +5,7 @@ Core facilities mirror the C ABI v1 without reimplementing wire protocols
 
   ResultSink     -- inject inference results        (rc_ext_result_*)
   OsdSink        -- appmgr-only OSD snapshots       (rc_ext_osd_*)
+  RecordSink     -- appmgr-only recording triggers  (rc_ext_record_*)
   FrameSource    -- receive zero-copy camera frames (rc_ext_frame_*)
   ProbeSource    -- observe built-in pipeline data  (rc_ext_probe_*)
   InferenceLease -- arbitrate external RKNN ownership
@@ -29,6 +30,7 @@ import logging
 import math
 import operator
 import os
+import re
 import threading
 import weakref
 from collections.abc import Mapping
@@ -129,6 +131,7 @@ _LOG.addHandler(logging.NullHandler())
 __all__ = [
     "ResultSink",
     "OsdSink",
+    "RecordSink",
     "ResultTooLarge",
     "ErrorCode",
     "RecameraError",
@@ -585,6 +588,36 @@ def _bind(lib):
         ]
         lib.rc_ext_osd_close.restype = None
         lib.rc_ext_osd_close.argtypes = [c_void_p]
+    # Platform recording-only sink (optional -- matching appmgr/rkipc only).
+    # Presence of the opener marks the capability; every operation is then
+    # mandatory so a partially updated DSO is rejected during binding.
+    if hasattr(lib, "rc_ext_record_open"):
+        lib.rc_ext_record_open.restype = c_void_p
+        lib.rc_ext_record_open.argtypes = [POINTER(c_int)]
+        lib.rc_ext_record_send_detections.restype = c_int
+        lib.rc_ext_record_send_detections.argtypes = [
+            c_void_p, c_char_p, c_uint64, POINTER(Box), c_size_t,
+        ]
+        lib.rc_ext_record_send_classification.restype = c_int
+        lib.rc_ext_record_send_classification.argtypes = [
+            c_void_p, c_char_p, c_uint64, POINTER(Classification), c_size_t,
+        ]
+        lib.rc_ext_record_send_events.restype = c_int
+        lib.rc_ext_record_send_events.argtypes = [
+            c_void_p, c_char_p, c_uint64, POINTER(Classification), c_size_t,
+        ]
+        lib.rc_ext_record_send_tracking.restype = c_int
+        lib.rc_ext_record_send_tracking.argtypes = [
+            c_void_p, c_char_p, c_uint64, POINTER(Tracking), c_size_t,
+        ]
+        lib.rc_ext_record_send_keypoints.restype = c_int
+        lib.rc_ext_record_send_keypoints.argtypes = [
+            c_void_p, c_char_p, c_uint64, POINTER(KeypointInstance), c_size_t,
+        ]
+        lib.rc_ext_record_reset.restype = c_int
+        lib.rc_ext_record_reset.argtypes = [c_void_p, c_char_p]
+        lib.rc_ext_record_close.restype = None
+        lib.rc_ext_record_close.argtypes = [c_void_p]
     # Frame source.
     lib.rc_ext_frame_open.restype = c_void_p
     lib.rc_ext_frame_open.argtypes = [POINTER(_Cfg), POINTER(c_int)]
@@ -1320,7 +1353,16 @@ class ResultSink(_Handle):
             )
         return encoded
 
-    def _send(self, cfn, ArrayT, name, pts_us, items, fill_item):
+    def _send(
+        self,
+        cfn,
+        ArrayT,
+        name,
+        pts_us,
+        items,
+        fill_item,
+        call_prefix=(),
+    ):
         """Shared send scaffold: materialise ``items`` into a ``(ArrayT * n)``
         C array via ``fill_item(i, item, arr)``, call ``self._lib.<cfn>``, and
         raise on a non-zero rc (``name`` labels the error). ``self._labels`` is
@@ -1359,7 +1401,13 @@ class ResultSink(_Handle):
         est = self._estimate_size(arr)
         if est > self.MAX_MESSAGE_BYTES:
             self._raise_oversize(name, est, n)
-        rc = getattr(self._lib, cfn)(self._h, c_uint64(pts_us), arr, c_size_t(n))
+        rc = getattr(self._lib, cfn)(
+            self._h,
+            *call_prefix,
+            c_uint64(pts_us),
+            arr,
+            c_size_t(n),
+        )
         if rc != 0:
             self._send_error += 1
             raise error_from_rc(cfn, rc, detail=f"method={name}")
@@ -1663,6 +1711,239 @@ class OsdSink(ResultSink):
 
     def send_keypoints(self, pts_us, instances):
         self._reject_non_detection("send_keypoints")
+
+
+class RecordSink(ResultSink):
+    """Appmgr-only source-aware recording trigger sink.
+
+    One authenticated connection multiplexes managed applications. Every
+    ordered datagram carries the stable manifest app id and reaches only Vigil
+    recording rules; it is not published to OSD, notifications, or public
+    result streams. Native open/handshake and every send/reset have a one-second
+    socket-I/O timeout, so this class's serialization lock and ``close()`` are
+    not held indefinitely by a stalled server. Ordinary application processes
+    cannot open this endpoint.
+    """
+
+    _close_cfn = "rc_ext_record_close"
+    _detection_cfn = "rc_ext_record_send_detections"
+    _APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}\Z")
+    _RECORD_CFNS = {
+        "rc_ext_result_send_classification":
+            "rc_ext_record_send_classification",
+        "rc_ext_result_send_tracking": "rc_ext_record_send_tracking",
+        "rc_ext_result_send_keypoints": "rc_ext_record_send_keypoints",
+    }
+
+    def __init__(self, lib_path=None):
+        self._record_lock = threading.RLock()
+        self._record_app_id = None
+        self._record_cfn_override = None
+        self._h = None
+        self._lib = _load(lib_path)
+        if not hasattr(self._lib, "rc_ext_record_open"):
+            raise CapabilityUnavailableError(
+                "librecamera_ext lacks the appmgr recording-only sink",
+                operation="rc_ext_record_open",
+            )
+        err = c_int(0)
+        self._h = self._lib.rc_ext_record_open(byref(err))
+        if not self._h:
+            raise error_from_rc(
+                "rc_ext_record_open",
+                err.value or -int(ErrorCode.EINTERNAL),
+            )
+        self.source_id = "appmgr-record"
+        self._labels = []
+        self._masks = []
+        self._pt_arrays = []
+        self._sent = 0
+        self._oversize = 0
+        self._send_error = 0
+
+    @classmethod
+    def _app_id(cls, value, operation):
+        if (
+            not isinstance(value, str)
+            or not cls._APP_ID_RE.fullmatch(value)
+            or value == "builtin"
+        ):
+            cls._format_error(
+                operation,
+                "app_id must match [a-z0-9-]{1,64} and must not be 'builtin'",
+            )
+        return value.encode("ascii")
+
+    def _send(
+        self,
+        cfn,
+        ArrayT,
+        name,
+        pts_us,
+        items,
+        fill_item,
+        call_prefix=(),
+    ):
+        del call_prefix
+        if self._record_app_id is None:
+            raise InternalError(
+                "RecordSink send is missing its ordered app_id context",
+                operation=cfn,
+            )
+        cfn = self._record_cfn_override or self._RECORD_CFNS.get(cfn, cfn)
+        return super()._send(
+            cfn,
+            ArrayT,
+            name,
+            pts_us,
+            items,
+            fill_item,
+            call_prefix=(self._record_app_id,),
+        )
+
+    def _for_app(
+        self, app_id, operation, callback, *args, cfn_override=None
+    ):
+        encoded = self._app_id(app_id, operation)
+        with self._record_lock:
+            self._ensure_open()
+            self._record_app_id = encoded
+            self._record_cfn_override = cfn_override
+            try:
+                return callback(*args)
+            finally:
+                self._record_app_id = None
+                self._record_cfn_override = None
+
+    def send_detections(self, app_id, pts_us, boxes):
+        """Send detection triggers for ``app_id`` using ResultSink tuples."""
+
+        return self._for_app(
+            app_id,
+            "send_detections",
+            super().send_detections,
+            pts_us,
+            boxes,
+        )
+
+    def send_classifications(self, app_id, pts_us, classes):
+        """Send ``(score, label[, class_id[, box]])`` trigger tuples."""
+
+        operation = "send_classifications"
+        try:
+            classes = list(classes)
+        except TypeError:
+            self._format_error(operation, "classes must be iterable")
+        normalized = []
+        for index, item in enumerate(classes):
+            item = self._require_sequence(
+                item,
+                (2, 3, 4),
+                operation,
+                f"classes[{index}]",
+            )
+            normalized_item = (
+                item[0],
+                item[2] if len(item) >= 3 else 0,
+                item[1],
+            )
+            if len(item) == 4:
+                normalized_item += (item[3],)
+            normalized.append(normalized_item)
+        return self._for_app(
+            app_id,
+            operation,
+            super().send_classification,
+            pts_us,
+            normalized,
+        )
+
+    def send_events(self, app_id, pts_us, events):
+        """Send event-kind tuples through the distinct record event channel.
+
+        Entries use the same ``(score, label[, class_id[, box]])`` shape as
+        :meth:`send_classifications`; native code marks their classification
+        oneof with ``RC_EXT_RECORD_EVENT_MODEL_ID`` on the wire.
+        """
+
+        operation = "send_events"
+        try:
+            events = list(events)
+        except TypeError:
+            self._format_error(operation, "events must be iterable")
+        normalized = []
+        for index, item in enumerate(events):
+            item = self._require_sequence(
+                item,
+                (2, 3, 4),
+                operation,
+                f"events[{index}]",
+            )
+            normalized_item = (
+                item[0],
+                item[2] if len(item) >= 3 else 0,
+                item[1],
+            )
+            if len(item) == 4:
+                normalized_item += (item[3],)
+            normalized.append(normalized_item)
+        return self._for_app(
+            app_id,
+            operation,
+            super().send_classification,
+            pts_us,
+            normalized,
+            cfn_override="rc_ext_record_send_events",
+        )
+
+    def send_classification(self, app_id, pts_us, classes):
+        """Singular-name alias for :meth:`send_classifications`."""
+
+        return self.send_classifications(app_id, pts_us, classes)
+
+    def send_tracking(self, app_id, pts_us, items):
+        return self._for_app(
+            app_id,
+            "send_tracking",
+            super().send_tracking,
+            pts_us,
+            items,
+        )
+
+    def send_keypoints(self, app_id, pts_us, instances):
+        return self._for_app(
+            app_id,
+            "send_keypoints",
+            super().send_keypoints,
+            pts_us,
+            instances,
+        )
+
+    @staticmethod
+    def send_segmentation(app_id, pts_us, items):
+        del app_id, pts_us, items
+        raise FormatError(
+            "send_segmentation: RecordSink does not support segmentation triggers",
+            operation="send_segmentation",
+            detail=(
+                "record@1 accepts detection, classification, events, tracking, "
+                "and keypoints"
+            ),
+        )
+
+    def reset(self, app_id):
+        operation = "rc_ext_record_reset"
+        encoded = self._app_id(app_id, "reset")
+        with self._record_lock:
+            self._ensure_open()
+            rc = self._lib.rc_ext_record_reset(self._h, encoded)
+            if rc != 0:
+                raise error_from_rc(operation, rc, detail=f"app_id={app_id!r}")
+            return rc
+
+    def close(self):
+        with self._record_lock:
+            return super().close()
 
 
 class FrameLease:

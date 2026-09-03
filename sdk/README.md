@@ -42,7 +42,10 @@ protobuf-c ABI 依赖及构建目录软链。
 ## 结果注入(全套任务类型)
 `rc_ext_result_send_{detections,classification,segmentation,tracking,keypoints}`
 Python: `ResultSink(source_id).send_{detections,classification,tracking,keypoints,segmentation}(...)`
-→ 上官方 OSD(检测框/关键点/分类标签/跟踪)+ 录像 + WS/MQTT/HTTP/UART。
+→ 上官方 OSD(检测框/关键点/分类标签/跟踪)+ WS/MQTT/HTTP/UART。
+普通 `ResultSink` 不再进入 Vigil；托管应用需要触发录像时，由 appmgr
+根据已安装 manifest 的 `record_trigger` 声明过滤结果，再通过下文
+recording-only sink 转发。
 （注:keypoints/classification 的 OSD 绘制代码已在 osd_infer.c,真机端到端验证待补。）
 
 **坐标契约:所有 box 坐标(检测/分类 ROI/分割 ROI/跟踪/关键点对象框)以及关键点 point 的 x/y 均为归一化 [0,1]**,即相对画面宽高的比例(左上 x1/y1、右下 x2/y2,0..1;如 0.5 = 居中)。OSD 渲染器会先 clamp 到 [0,1] 再乘画面宽高,**传像素值会被压成 1px 隐形框**,务必发比例。分割的 `mask` 是行主序原始字节(非坐标)。示例:`send_detections(0, [(0.05, 0.07, 0.62, 0.94, 0.92, "person")])`。
@@ -63,6 +66,50 @@ Python:items 元素用 `(score, class_id, label)` 无框,或 `(score, class_id, 
 `-m appmgr serve` argv。Hello/client name、payload `source_id`/`model_id` 均不参与
 授权。普通应用继续使用 `ResultSink`；在 appmgr 进程之外创建 `OsdSink()` 会以
 认证错误失败。
+
+## App Center recording-only sink（v1.5.0+）
+
+平台的录像规则桥使用 `rc_ext_record_*` / Python `RecordSink` 连接
+`/run/recamera/record-in.sock`。同一条已认证的 appmgr 连接可以转发多个应用，
+每条消息都携带稳定的 manifest app id；id 必须匹配 `[a-z0-9-]{1,64}`，且不能是
+保留值 `builtin`。
+
+该入口支持 detection、classification、event、tracking、keypoints，明确不支持
+segmentation。event 在 wire 上复用 classification oneof，但由公共常量
+`RC_EXT_RECORD_EVENT_MODEL_ID == INT32_MIN` 与普通 frame classification 的
+`model_id=0` 严格区分。服务端只把结果送入 source-aware Vigil 录像规则，不更新 OSD，
+也不进入通知或公共结果流。`reset(app_id)` 与数据使用同一条有序 SEQPACKET
+连接，供应用停止或升级时清除该来源的 debounce 状态；reset 只有收到服务端
+`HelloAck(error=0)` 后才成功返回。连接异常关闭时服务端还会对该连接观察过的所有
+来源执行 fail-safe reset。任何 reset 错误都会使当前 handle 失效，调用方应关闭并
+新建 `RecordSink`，避免延迟到达的旧 ACK 被误认为下一次 reset 的确认。
+
+`RecordSink` 的 connect/Hello/ACK 与每次 send/reset 都使用同一个固定的 1 秒
+socket-I/O 上限（open 的三个阶段共享 1 秒预算）。超时按现有 `EINTERNAL` /
+Python `InternalError` 返回；reset 的发送和 ACK 也共享一秒预算，避免异常服务端或
+背压无限阻塞 appmgr 的录制桥工作线程；
+普通 `ResultSink` 仍发布到 OSD + notify/公共结果流，但从 1.5.0 起不再进入
+Vigil；`OsdSink` 仍为 OSD-only。二者的 wire/ABI 与调用方式不变。
+
+```python
+from recamera_ext import RecordSink
+
+with RecordSink() as sink:
+    sink.reset("fall-detection")
+    sink.send_detections(
+        "fall-detection",
+        123456,
+        [(0.1, 0.1, 0.8, 0.9, 0.95, "person", 0)],
+    )
+    sink.reset("scene-classifier")
+    sink.send_classifications(
+        "scene-classifier", 123457, [(0.91, "outdoor", 2)]
+    )
+    sink.send_events("fall-detection", 123458, [(1.0, "fall", 0)])
+```
+
+它不是普通应用入口：服务端与 OSD-only sink 一样，要求 SO_PEERCRED PID 精确
+匹配受保护的 appmgr 身份。普通应用仍只使用 `ResultSink`。
 
 ## 帧代理
 `FrameSource` / `rc_ext_frame_*` 连 `/run/recamera/frame.sock`。

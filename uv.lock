@@ -175,7 +175,7 @@ wheels = [
 
 [[package]]
 name = "recamera-ext"
-version = "1.4.0"
+version = "1.5.0"
 source = { editable = "sdk/python" }
 
 [package.optional-dependencies]

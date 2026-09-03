@@ -110,6 +110,183 @@ accepted during migration. CPU-only apps omit the NPU claim. Claims currently
 cover `camera.frames`, `audio.capture`, `npu.rknn`, `rga`, `codec.decode`,
 `probe.read`, and `result.publish`.
 
+## Managed recording triggers
+
+An optional `record_trigger` lets an installed managed application appear as a
+recording-rule source. It is a closed manifest v2 contract, not a capability
+that an application may claim in its result payload. The declaration requires
+an `output.contract_version` of 2 and every selectable label or event kind must
+be backed by a direct, non-derived `output.fields[].from` path. For example:
+
+```json
+{
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "recamera.ai.result",
+    "default_channel": ["ws"],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "label",
+        "from": "results[].label",
+        "type": "string",
+        "description": "Detection class"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "number",
+        "description": "Detection confidence"
+      },
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox",
+        "coord": "normalized_xyxy",
+        "description": "Detection bounds"
+      },
+      {
+        "name": "fall_kind",
+        "from": "events[kind=fall].kind",
+        "type": "string",
+        "description": "Fall event kind"
+      }
+    ],
+    "default_mapping": []
+  },
+  "record_trigger": {
+    "version": 1,
+    "signals": [
+      {
+        "id": "people",
+        "type": "detection",
+        "classes": ["person"],
+        "supports_roi": true
+      },
+      {
+        "id": "fall",
+        "type": "event",
+        "event_kind": "fall",
+        "supports_roi": false
+      }
+    ]
+  }
+}
+```
+
+`signals` contains 1 to 32 entries with unique stable `id` values. A
+`detection` signal needs one or more unique class labels plus direct label,
+score, and pixel or normalized box fields; it may opt into ROI. A
+`classification` signal needs direct label and score fields and cannot support
+ROI. Detection and classification signals cannot be mixed in one declaration,
+although either kind may be combined with event signals. An `event` signal has
+one lowercase `event_kind`, no `classes`, and no ROI; that kind must be declared
+by a direct `events[...]` output field. Labels and event kinds must also be
+unique across the declaration. `signal.id` identifies the configuration choice;
+the runtime match is against the declared class label or `event_kind`.
+
+FRAME and EVENT have deliberately different delivery semantics:
+
+- `detection` and `classification` consume canonical `type=frame` snapshots.
+  Each accepted frame is one rule evaluation, including an empty matching set,
+  so ordinary frame-rule debounce can assert and deassert from later snapshots.
+  No evaluation occurs merely because wall-clock time passes.
+- `event` consumes a canonical `type=event` occurrence as a one-shot edge.
+  Each accepted, non-duplicate event is evaluated once and its receiver-side
+  match state is reset immediately. Events do not remain active and do not
+  accumulate debounce counts across quiet gaps. A later distinct occurrence
+  is a new edge. Result Hub still applies its normal semantic de-duplication to
+  state-style observations such as a stable QR value; changing telemetry under
+  a trigger event kind creates distinct occurrences and should be avoided.
+
+The discovery endpoint is read-only:
+
+```http
+GET /api/app-center/v1/recording/sources
+```
+
+```json
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "builtin",
+      "kind": "builtin",
+      "installed": true,
+      "running": true,
+      "status": "running",
+      "supports_roi": true,
+      "signals": []
+    },
+    {
+      "id": "example-app",
+      "kind": "app",
+      "name": "Example",
+      "name_zh": null,
+      "version": "1.0.0",
+      "installed": true,
+      "running": false,
+      "status": "stopped",
+      "supports_roi": true,
+      "signals": [
+        {
+          "id": "people",
+          "type": "detection",
+          "classes": ["person"],
+          "supports_roi": true
+        }
+      ]
+    }
+  ],
+  "status": {
+    "running": true,
+    "active_sources": [],
+    "queued": 0,
+    "sent": 0,
+    "frames": 0,
+    "events": 0,
+    "resets": 0,
+    "dropped": 0,
+    "frame_dropped": 0,
+    "event_dropped": 0,
+    "frame_coalesced": 0,
+    "duplicates": 0,
+    "send_errors": 0,
+    "last_error": ""
+  }
+}
+```
+
+The built-in pipeline is always represented by the special `builtin` source;
+its classes come from the currently selected firmware model, so its `signals`
+array is empty here. Other entries are installed managed apps whose
+`record_trigger` still validates against their installed manifest. An omitted
+or invalid declaration is hidden. A stopped or failed app remains discoverable
+for rule configuration, with `running` and `status` reporting its current
+lifecycle state. The top-level `status` is bridge diagnostics, not permission
+to widen a source's declaration.
+
+The trust boundary is the appmgr-admitted installed manifest and the exact
+authenticated app instance/generation. Result Gateway derives source identity
+from `SO_PEERCRED`; Result Hub replaces payload identity, render, coordinate,
+and stream claims with control-plane facts. The recording bridge then filters
+labels and event kinds against `record_trigger`. Payload fields cannot add a
+source, signal, class, event kind, ROI support, or route data to the private
+recording ingress. Normally the package signature authenticates the manifest;
+an explicitly confirmed local unsigned install has the documented root-code
+risk but receives no broader recording declaration than the manifest appmgr
+admitted.
+
+Lifecycle invalidation is also a recording fence. On stop, crash, deletion,
+generation replacement, or trusted capability refresh, appmgr advances the
+source epoch, discards queued old-generation observations, and queues a native
+per-source reset. It waits for that reset with a bounded acknowledgement outside
+Result Hub's publish fence; a failed sink connection is closed so the receiver
+can reset every source owned by that connection. Old instance/generation data
+cannot re-authorize itself, and a new generation never inherits the previous
+generation's debounce or event state.
+
 ## Offline Python dependencies
 
 Every wheel descriptor binds the project name, exact version, filename, one

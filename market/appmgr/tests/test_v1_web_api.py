@@ -1578,6 +1578,136 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
         thread.join(timeout=2)
 
 
+def test_recording_sources_http_hides_apps_without_valid_capability(
+        layout, monkeypatch):
+    detection_output = {
+        "contract_version": 2,
+        "fields": [
+            {"name": "label", "from": "results[].label"},
+            {"name": "score", "from": "results[].score"},
+            {"name": "box", "from": "results[].box",
+             "coord": "normalized_xyxy"},
+        ],
+    }
+    event_output = {
+        "contract_version": 2,
+        "fields": [
+            {"name": "kind", "from": "events[kind=fall].kind"},
+        ],
+    }
+    monkeypatch.setattr(server, "do_v1_apps", lambda: {"apps": [
+        {
+            "id": "builtin", "name": "Built-in AI", "version": "system",
+            "installed": True, "running": True, "status": "running",
+            "manifest": {},
+        },
+        {
+            "id": "person-detector", "name": "Person detector",
+            "version": "1.2.3", "installed": True,
+            "running": True, "status": "running",
+            "manifest": {
+                "manifest_version": 2, "id": "person-detector",
+                "name": "Person detector", "version": "1.2.3",
+                "output": detection_output,
+                "record_trigger": {"version": 1, "signals": [{
+                    "id": "people", "type": "detection",
+                    "classes": ["person"], "supports_roi": True,
+                }]},
+            },
+        },
+        {
+            "id": "fall-alarm", "name": "Fall alarm",
+            "version": "2.0.0", "installed": True,
+            "running": False, "status": "failed",
+            "manifest": {
+                "manifest_version": 2, "id": "fall-alarm",
+                "name": "Fall alarm", "version": "2.0.0",
+                "output": event_output,
+                "record_trigger": {"version": 1, "signals": [{
+                    "id": "fall", "type": "event",
+                    "event_kind": "fall", "supports_roi": False,
+                }]},
+            },
+        },
+        {
+            "id": "undeclared-event", "name": "Undeclared event",
+            "version": "1.0.0", "installed": True,
+            "running": False, "status": "stopped",
+            "manifest": {
+                "manifest_version": 2, "id": "undeclared-event",
+                "output": event_output,
+                "record_trigger": {"version": 1, "signals": [{
+                    "id": "smoke", "type": "event",
+                    "event_kind": "smoke", "supports_roi": False,
+                }]},
+            },
+        },
+        {
+            "id": "no-recording", "name": "No recording capability",
+            "version": "1.0.0", "installed": True,
+            "running": True, "status": "running",
+            "manifest": {
+                "manifest_version": 2, "id": "no-recording",
+                "output": detection_output,
+            },
+        },
+    ]})
+
+    expected_bridge_status = {
+        "running": True, "active_sources": ["fall-alarm", "person-detector"],
+        "queued": 0, "sent": 7, "frames": 5, "events": 2,
+        "resets": 2, "dropped": 0, "frame_dropped": 0,
+        "event_dropped": 0, "frame_coalesced": 0, "duplicates": 0,
+        "send_errors": 0, "last_error": "",
+    }
+
+    class Bridge:
+        @staticmethod
+        def status():
+            return dict(expected_bridge_status)
+
+    monkeypatch.setattr(server, "_recording_bridge_instance", Bridge())
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, payload = _json_request(
+            httpd, "GET", "/api/app-center/v1/recording/sources", {})
+        assert status == 200
+        assert payload["version"] == 1
+        assert payload["status"] == expected_bridge_status
+        assert [source["id"] for source in payload["sources"]] == [
+            "builtin", "fall-alarm", "person-detector",
+        ]
+
+        builtin_source, fall_source, detector_source = payload["sources"]
+        assert builtin_source == {
+            "id": "builtin", "kind": "builtin", "name": "Built-in AI",
+            "name_zh": "内置 AI", "version": "system",
+            "installed": True, "running": True, "status": "running",
+            "supports_roi": True, "signals": [],
+        }
+        assert fall_source["installed"] is True
+        assert fall_source["running"] is False
+        assert fall_source["status"] == "failed"
+        assert fall_source["signals"] == [{
+            "id": "fall", "type": "event", "supports_roi": False,
+            "event_kind": "fall",
+        }]
+        assert detector_source["installed"] is True
+        assert detector_source["running"] is True
+        assert detector_source["status"] == "running"
+        assert detector_source["supports_roi"] is True
+        assert detector_source["signals"] == [{
+            "id": "people", "type": "detection", "supports_roi": True,
+            "classes": ["person"],
+        }]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
 def test_visualization_http_policy_is_persisted_and_manifest_gated(
         layout, monkeypatch):
     compatible = os.path.join(paths.APPS_DIR, "compatible")

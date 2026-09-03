@@ -1,8 +1,8 @@
 // Copyright 2025 reCamera Pro Extension API
 // Shared client-side plumbing for the librecamera_ext receivers/sink.
-// See ext_client_common.h. Extracted verbatim from the connect+Hello handshake
-// and recvmsg discipline that frame_recv.c / probe_recv.c / recamera_ext.c
-// previously duplicated -- behaviour is identical; only the location changed.
+// See ext_client_common.h. The ordinary connect+Hello and recvmsg discipline
+// was extracted from frame_recv.c / probe_recv.c / recamera_ext.c without a
+// behaviour change; record@1 additionally uses the bounded helpers below.
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -11,9 +11,13 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "ext_api.pb-c.h"
@@ -34,6 +38,267 @@ static int open_seqpacket_cloexec(void) {
 		if (fd >= 0)
 			(void)fcntl(fd, F_SETFD, FD_CLOEXEC);
 	}
+	return fd;
+}
+
+static int64_t monotonic_ms(void) {
+	struct timespec now;
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+		return -1;
+	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static int make_deadline(unsigned int timeout_ms, int64_t *deadline) {
+	int64_t now = monotonic_ms();
+	if (now < 0)
+		return -1;
+	*deadline = now + (int64_t)timeout_ms;
+	return 0;
+}
+
+static int deadline_expired(int64_t deadline) {
+	int64_t now = monotonic_ms();
+	if (now < 0)
+		return -1;
+	if (now >= deadline) {
+		errno = ETIMEDOUT;
+		return 1;
+	}
+	return 0;
+}
+
+static int wait_fd_until(int fd, short events, int64_t deadline) {
+	for (;;) {
+		int64_t now = monotonic_ms();
+		if (now < 0)
+			return -1;
+		int64_t remaining = deadline - now;
+		if (remaining <= 0) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+
+		struct pollfd pfd = {
+			.fd = fd,
+			.events = events,
+		};
+		int timeout = remaining > INT_MAX ? INT_MAX : (int)remaining;
+		int ready = poll(&pfd, 1, timeout);
+		if (ready > 0) {
+			if (pfd.revents & POLLNVAL) {
+				errno = EBADF;
+				return -1;
+			}
+			/* Let connect/send/recv report the concrete socket error. */
+			if (pfd.revents & (events | POLLERR | POLLHUP))
+				return 0;
+			continue;
+		}
+		if (ready == 0) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		if (errno != EINTR)
+			return -1;
+	}
+}
+
+static int set_nonblocking(int fd) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+		return -1;
+	return 0;
+}
+
+static int connect_until(int fd, const struct sockaddr *address,
+			 socklen_t address_len, int64_t deadline) {
+	for (;;) {
+		if (deadline_expired(deadline) != 0)
+			return -1;
+		if (connect(fd, address, address_len) == 0 || errno == EISCONN)
+			return 0;
+
+		int connect_error = errno;
+		if (connect_error == EINTR) {
+			int expired = deadline_expired(deadline);
+			if (expired != 0)
+				return -1;
+			continue;
+		}
+		if (connect_error == EAGAIN) {
+			/* Linux AF_UNIX uses EAGAIN when the listen backlog is full. */
+			if (wait_fd_until(fd, POLLOUT, deadline) < 0)
+				return -1;
+			continue;
+		}
+		if (connect_error != EINPROGRESS && connect_error != EALREADY) {
+			errno = connect_error;
+			return -1;
+		}
+		if (wait_fd_until(fd, POLLOUT, deadline) < 0)
+			return -1;
+
+		int socket_error = 0;
+		socklen_t error_len = sizeof(socket_error);
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error,
+		               &error_len) < 0)
+			return -1;
+		if (socket_error == 0)
+			return 0;
+		if (socket_error == EINPROGRESS || socket_error == EALREADY ||
+		    socket_error == EAGAIN)
+			continue;
+		errno = socket_error;
+		return -1;
+	}
+}
+
+static int send_packet_until(int fd, const void *buffer, size_t size,
+			     int64_t deadline) {
+	if ((!buffer && size != 0) || size > (size_t)SSIZE_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+	for (;;) {
+		if (deadline_expired(deadline) != 0)
+			return -1;
+		ssize_t sent = send(fd, buffer, size, MSG_DONTWAIT | MSG_NOSIGNAL);
+		if (sent == (ssize_t)size)
+			return 0;
+		if (sent >= 0) {
+			errno = EIO; /* SEQPACKET must be all-or-nothing. */
+			return -1;
+		}
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (wait_fd_until(fd, POLLOUT, deadline) < 0)
+				return -1;
+			continue;
+		}
+		if (errno != EINTR)
+			return -1;
+		int expired = deadline_expired(deadline);
+		if (expired != 0)
+			return -1;
+	}
+}
+
+static ssize_t recv_packet_until(int fd, void *buffer, size_t size,
+				 int64_t deadline) {
+	for (;;) {
+		if (deadline_expired(deadline) != 0)
+			return -1;
+		ssize_t received = recv(fd, buffer, size,
+		                        MSG_DONTWAIT | MSG_TRUNC);
+		if (received >= 0)
+			return received;
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (wait_fd_until(fd, POLLIN, deadline) < 0)
+				return -1;
+			continue;
+		}
+		if (errno != EINTR)
+			return -1;
+		int expired = deadline_expired(deadline);
+		if (expired != 0)
+			return -1;
+	}
+}
+
+static int receive_hello_ack_until(int fd, uint32_t *api_version,
+				   int64_t deadline) {
+	uint8_t buffer[RC_EXT_CLIENT_ACK_MAX];
+	ssize_t received = recv_packet_until(fd, buffer, sizeof(buffer), deadline);
+	if (received < 0)
+		return RC_EXT_EINTERNAL;
+	if (received == 0)
+		return RC_EXT_EVERSION;
+	if ((size_t)received > sizeof(buffer))
+		return RC_EXT_EFORMAT;
+	HelloAck *ack = hello_ack__unpack(NULL, (size_t)received, buffer);
+	if (!ack)
+		return RC_EXT_EFORMAT;
+	int result = RC_EXT_OK;
+	if (ack->error != 0)
+		result = ack->error > 0 ? ack->error : RC_EXT_EINTERNAL;
+	else if (ack->api_version != 1)
+		result = RC_EXT_EVERSION;
+	else if (api_version)
+		*api_version = ack->api_version;
+	hello_ack__free_unpacked(ack, NULL);
+	return result;
+}
+
+int rc_ext_send_packet_bounded(int fd, const void *buffer, size_t size,
+			       unsigned int timeout_ms) {
+	int64_t deadline;
+	if (fd < 0 || make_deadline(timeout_ms, &deadline) < 0) {
+		if (fd < 0)
+			errno = EBADF;
+		return -1;
+	}
+	return send_packet_until(fd, buffer, size, deadline);
+}
+
+int rc_ext_send_packet_ack_bounded(int fd, const void *buffer, size_t size,
+				   unsigned int timeout_ms) {
+	int64_t deadline;
+	if (fd < 0 || make_deadline(timeout_ms, &deadline) < 0)
+		return -RC_EXT_EINTERNAL;
+	if (send_packet_until(fd, buffer, size, deadline) < 0)
+		return -RC_EXT_EINTERNAL;
+	int ack_error = receive_hello_ack_until(fd, NULL, deadline);
+	return ack_error == RC_EXT_OK ? 0 : -ack_error;
+}
+
+int rc_ext_connect_hello_bounded(const char *path, const char *client_name,
+				 uint32_t *api_version, int *err,
+				 unsigned int timeout_ms) {
+	int64_t deadline;
+	if (!path || strlen(path) >= sizeof(((struct sockaddr_un *)0)->sun_path) ||
+	    make_deadline(timeout_ms, &deadline) < 0)
+		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
+
+	int fd = open_seqpacket_cloexec();
+	if (fd < 0 || set_nonblocking(fd) < 0) {
+		if (fd >= 0)
+			close(fd);
+		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
+	}
+
+	struct sockaddr_un address;
+	memset(&address, 0, sizeof(address));
+	address.sun_family = AF_UNIX;
+	memcpy(address.sun_path, path, strlen(path) + 1);
+	if (connect_until(fd, (struct sockaddr *)&address, sizeof(address),
+	                  deadline) < 0) {
+		close(fd);
+		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
+	}
+
+	Hello hello = HELLO__INIT;
+	hello.version_min = 1;
+	hello.version_max = 1;
+	hello.client_name = (char *)(client_name ? client_name : "ext");
+	hello.auth = (char *)"";
+	size_t hello_size = hello__get_packed_size(&hello);
+	uint8_t hello_buffer[RC_EXT_CLIENT_ACK_MAX];
+	if (hello_size > sizeof(hello_buffer)) {
+		close(fd);
+		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
+	}
+	hello__pack(&hello, hello_buffer);
+	if (send_packet_until(fd, hello_buffer, hello_size, deadline) < 0) {
+		close(fd);
+		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
+	}
+
+	int ack_error = receive_hello_ack_until(fd, api_version, deadline);
+	if (ack_error != RC_EXT_OK) {
+		close(fd);
+		return rc_ext_set_err(err, (rc_ext_err_t)ack_error);
+	}
+	if (err)
+		*err = RC_EXT_OK;
 	return fd;
 }
 

@@ -84,12 +84,162 @@ def records_for(value, extra=None):
     return payload
 
 
+def record_output(*, duplicate_box=False):
+    fields = [
+        {"name": "kind", "from": "results[].kind", "type": "string",
+         "description": "Canonical result label"},
+        {"name": "score", "from": "results[].score", "type": "float",
+         "description": "Result confidence"},
+        {"name": "box", "from": "results[].box", "type": "bbox<float>[4]",
+         "coord": "pixel_xyxy", "description": "Detection box"},
+        {"name": "fall_kind", "from": "events[kind=fall].kind",
+         "type": "string", "event_kind": "fall",
+         "description": "Fall edge"},
+    ]
+    if duplicate_box:
+        fields.append({
+            "name": "box_normalized", "from": "results[].box",
+            "type": "bbox<float>[4]", "coord": "normalized_xyxy",
+            "description": "Ambiguous alias",
+        })
+    return {
+        "contract_version": 2, "sink": "ws",
+        "schema": "recamera.ai.result/v2", "default_channel": ["ws"],
+        "default_mode": "raw", "fields": fields, "default_mapping": [],
+    }
+
+
+def schema_errors(value):
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        return list(Draft202012Validator(json.load(source)).iter_errors(value))
+
+
 def test_minimal_v2_is_valid_and_input_is_not_mutated():
     value = minimal_manifest(**{"x-vendor-note": {"opaque": True}})
     before = copy.deepcopy(value)
     assert contract.validate_manifest(value) == 2
 
     assert value == before
+
+
+def test_record_trigger_accepts_detection_and_one_shot_event_contract():
+    signals = [
+        {"id": "people", "type": "detection", "classes": ["person"],
+         "supports_roi": True},
+        {"id": "fall", "type": "event", "event_kind": "fall",
+         "supports_roi": False},
+    ]
+    value = minimal_manifest(
+        output=record_output(),
+        record_trigger={"version": 1, "signals": signals})
+    assert contract.validate_manifest(value) == 2
+    assert schema_errors(value) == []
+    assert contract.effective_record_trigger(value) == {
+        "version": 1, "signals": signals}
+
+
+@pytest.mark.parametrize(
+    ("signals", "match"),
+    [
+        ([
+            {"id": "boxes", "type": "detection", "classes": ["person"],
+             "supports_roi": True},
+            {"id": "scene", "type": "classification", "classes": ["person"],
+             "supports_roi": False},
+        ], "cannot mix detection and classification"),
+        ([
+            {"id": "boxes", "type": "detection", "classes": ["fall"],
+             "supports_roi": True},
+            {"id": "fall", "type": "event", "event_kind": "fall",
+             "supports_roi": False},
+        ], "unique across all recording signals"),
+        ([
+            {"id": "fall", "type": "event", "event_kind": "Fall",
+             "supports_roi": False},
+        ], "must be lowercase"),
+    ],
+)
+def test_record_trigger_rejects_ambiguous_delivery_or_labels(signals, match):
+    value = minimal_manifest(
+        output=record_output(),
+        record_trigger={"version": 1, "signals": signals})
+    with pytest.raises(contract.ManifestValidationError, match=match):
+        contract.validate_manifest(value)
+
+
+def test_record_trigger_rejects_ambiguous_direct_box_alias():
+    value = minimal_manifest(
+        output=record_output(duplicate_box=True),
+        record_trigger={"version": 1, "signals": [{
+            "id": "boxes", "type": "detection", "classes": ["person"],
+            "supports_roi": True,
+        }]})
+    with pytest.raises(contract.ManifestValidationError,
+                       match="unambiguous direct 'box'"):
+        contract.validate_manifest(value)
+
+
+def test_record_trigger_event_kind_matches_result_hub_length_limit():
+    accepted_kind = "a" * 96
+    accepted = minimal_manifest(
+        output={
+            **record_output(),
+            "fields": record_output()["fields"] + [{
+                "name": "long_kind",
+                "from": f"events[kind={accepted_kind}].kind",
+                "type": "string",
+                "event_kind": accepted_kind,
+                "description": "Long event kind boundary",
+            }],
+        },
+        record_trigger={"version": 1, "signals": [{
+            "id": "long-event", "type": "event",
+            "event_kind": accepted_kind, "supports_roi": False,
+        }]},
+    )
+    assert contract.validate_manifest(accepted) == 2
+    assert schema_errors(accepted) == []
+
+    rejected = copy.deepcopy(accepted)
+    rejected_kind = "a" * 97
+    rejected["record_trigger"]["signals"][0]["event_kind"] = rejected_kind
+    rejected["output"]["fields"][-1]["from"] = \
+        f"events[kind={rejected_kind}].kind"
+    rejected["output"]["fields"][-1]["event_kind"] = rejected_kind
+    with pytest.raises(contract.ManifestValidationError,
+                       match="96-character limit"):
+        contract.validate_manifest(rejected)
+    assert schema_errors(rejected)
+
+
+def test_record_trigger_requires_v2_output_in_python_and_json_schema():
+    value = minimal_manifest(record_trigger={"version": 1, "signals": [{
+        "id": "fall", "type": "event", "event_kind": "fall",
+        "supports_roi": False,
+    }]})
+    with pytest.raises(contract.ManifestValidationError,
+                       match="requires output.contract_version=2"):
+        contract.validate_manifest(value)
+    assert schema_errors(value)
+
+
+@pytest.mark.parametrize("signals", [
+    [
+        {"id": "boxes", "type": "detection", "classes": ["person"],
+         "supports_roi": True},
+        {"id": "scene", "type": "classification", "classes": ["cat"],
+         "supports_roi": False},
+    ],
+    [{"id": "fall", "type": "event", "event_kind": "Fall",
+      "supports_roi": False}],
+])
+def test_record_trigger_schema_rejects_wire_incompatible_shapes(signals):
+    value = minimal_manifest(
+        output=record_output(),
+        record_trigger={"version": 1, "signals": signals})
+    assert schema_errors(value)
 
 
 def test_v1_is_explicitly_compatible_but_can_be_disabled():

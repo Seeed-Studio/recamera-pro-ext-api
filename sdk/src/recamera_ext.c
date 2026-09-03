@@ -16,7 +16,16 @@
 
 #define RC_EXT_RESULT_SOCK "/run/recamera/result-in.sock"
 #define RC_EXT_OSD_SOCK    "/run/recamera/osd-in.sock"
+#define RC_EXT_RECORD_SOCK "/run/recamera/record-in.sock"
 #define RC_EXT_OSD_MAX_BOXES 64u
+
+// RecordSink calls run on appmgr's ordered recording worker. Keep every
+// record@1 socket operation finite so lifecycle invalidation and close cannot
+// be held indefinitely by a stalled or backpressured server. This does not
+// alter the historical blocking behaviour of ResultSink or OsdSink.
+#ifndef RC_EXT_RECORD_IO_TIMEOUT_MS
+#define RC_EXT_RECORD_IO_TIMEOUT_MS 1000u
+#endif
 
 struct rc_ext_result {
 	int fd;
@@ -25,6 +34,11 @@ struct rc_ext_result {
 };
 
 struct rc_ext_osd {
+	int fd;
+	uint32_t api_version;
+};
+
+struct rc_ext_record {
 	int fd;
 	uint32_t api_version;
 };
@@ -84,8 +98,85 @@ static int rc_send_result_fd(int fd, const char *source_id,
 	return (s < 0) ? -RC_EXT_EINTERNAL : 0;
 }
 
+static int rc_send_record_result_mode(int fd, const char *source_id,
+				      InferenceResult *res, int32_t model_id,
+				      int require_ack) {
+	res->model_id = model_id;
+	res->source_id = (char *)(source_id ? source_id : "");
+	size_t packed_size = inference_result__get_packed_size(res);
+	uint8_t *buffer = (uint8_t *)malloc(packed_size ? packed_size : 1);
+	if (!buffer)
+		return -RC_EXT_EINTERNAL;
+	inference_result__pack(res, buffer);
+	int sent = require_ack ?
+	    rc_ext_send_packet_ack_bounded(fd, buffer, packed_size,
+	                                   RC_EXT_RECORD_IO_TIMEOUT_MS) :
+	    rc_ext_send_packet_bounded(fd, buffer, packed_size,
+	                               RC_EXT_RECORD_IO_TIMEOUT_MS);
+	free(buffer);
+	return require_ack ? sent : (sent < 0 ? -RC_EXT_EINTERNAL : 0);
+}
+
+static int rc_send_record_result_fd(int fd, const char *source_id,
+				    InferenceResult *res) {
+	return rc_send_record_result_mode(fd, source_id, res, 0, 0);
+}
+
+static int rc_send_record_event_fd(int fd, const char *source_id,
+				   InferenceResult *res) {
+	return rc_send_record_result_mode(
+	    fd, source_id, res, RC_EXT_RECORD_EVENT_MODEL_ID, 0);
+}
+
+static int rc_send_record_reset_fd(int fd, const char *source_id,
+				   InferenceResult *res) {
+	return rc_send_record_result_mode(fd, source_id, res, 0, 1);
+}
+
+typedef int (*send_result_fn)(int fd, const char *source_id,
+			      InferenceResult *result);
+
 static int rc_send_result(rc_ext_result_t *handle, InferenceResult *result) {
 	return rc_send_result_fd(handle->fd, handle->source_id, result);
+}
+
+static int rc_record_app_id_valid(const char *app_id) {
+	size_t length = 0;
+
+	if (!app_id)
+		return 0;
+	while (length <= 64 && app_id[length] != '\0')
+		length++;
+	if (length == 0 || length > 64 || strcmp(app_id, "builtin") == 0)
+		return 0;
+	for (size_t i = 0; i < length; i++) {
+		unsigned char ch = (unsigned char)app_id[i];
+		if (!((ch >= 'a' && ch <= 'z') ||
+		      (ch >= '0' && ch <= '9') || ch == '-'))
+			return 0;
+	}
+	return 1;
+}
+
+rc_ext_record_t *rc_ext_record_open(int *err) {
+	uint32_t api_version = 0;
+	int fd = rc_ext_connect_hello_bounded(
+	    RC_EXT_RECORD_SOCK, "appmgr-record", &api_version, err,
+	    RC_EXT_RECORD_IO_TIMEOUT_MS);
+	if (fd < 0)
+		return NULL;
+
+	rc_ext_record_t *handle = (rc_ext_record_t *)calloc(1, sizeof(*handle));
+	if (!handle) {
+		close(fd);
+		rc_ext_set_err(err, RC_EXT_EINTERNAL);
+		return NULL;
+	}
+	handle->fd = fd;
+	handle->api_version = api_version;
+	if (err)
+		*err = RC_EXT_OK;
+	return handle;
 }
 
 rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err) {
@@ -111,7 +202,8 @@ rc_ext_result_t *rc_ext_result_open(const char *source_id, int *err) {
 }
 
 static int send_detections_fd(int fd, const char *source_id, uint64_t pts_us,
-			      const rc_ext_box_t *boxes, size_t n) {
+			      const rc_ext_box_t *boxes, size_t n,
+			      send_result_fn send_result) {
 	if (fd < 0 || (n && !boxes))
 		return -RC_EXT_EINTERNAL;
 
@@ -145,7 +237,7 @@ static int send_detections_fd(int fd, const char *source_id, uint64_t pts_us,
 	res.data_case = INFERENCE_RESULT__DATA_DETECTION;
 	res.detection = &det;
 
-	int ret = rc_send_result_fd(fd, source_id, &res);
+	int ret = send_result(fd, source_id, &res);
 
 	RC_FREE3(entries, eptrs, boxobjs);
 	return ret;
@@ -155,7 +247,19 @@ int rc_ext_result_send_detections(rc_ext_result_t *h, uint64_t pts_us,
 				  const rc_ext_box_t *boxes, size_t n) {
 	if (!h)
 		return -RC_EXT_EINTERNAL;
-	return send_detections_fd(h->fd, h->source_id, pts_us, boxes, n);
+	return send_detections_fd(h->fd, h->source_id, pts_us, boxes, n,
+	                          rc_send_result_fd);
+}
+
+int rc_ext_record_send_detections(rc_ext_record_t *h, const char *app_id,
+				  uint64_t pts_us, const rc_ext_box_t *boxes,
+				  size_t n) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+	return send_detections_fd(h->fd, app_id, pts_us, boxes, n,
+	                          rc_send_record_result_fd);
 }
 
 rc_ext_osd_t *rc_ext_osd_open(int *err) {
@@ -183,7 +287,8 @@ int rc_ext_osd_send_detections(rc_ext_osd_t *handle, uint64_t pts_us,
 		return -RC_EXT_EINTERNAL;
 	if (n > RC_EXT_OSD_MAX_BOXES || (n && !boxes))
 		return -RC_EXT_EFORMAT;
-	return send_detections_fd(handle->fd, "appmgr-osd", pts_us, boxes, n);
+	return send_detections_fd(handle->fd, "appmgr-osd", pts_us, boxes, n,
+	                          rc_send_result_fd);
 }
 
 void rc_ext_osd_close(rc_ext_osd_t *handle) {
@@ -194,9 +299,11 @@ void rc_ext_osd_close(rc_ext_osd_t *handle) {
 	free(handle);
 }
 
-int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
-                                      const rc_ext_class_t *items, size_t n) {
-	if (!h)
+static int send_classification_fd(int fd, const char *source_id,
+				  uint64_t pts_us,
+				  const rc_ext_class_t *items, size_t n,
+				  send_result_fn send_result) {
+	if (fd < 0 || (n && !items))
 		return -RC_EXT_EINTERNAL;
 
 	InferenceResult res = INFERENCE_RESULT__INIT;
@@ -233,10 +340,40 @@ int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
 	res.data_case = INFERENCE_RESULT__DATA_CLASSIFICATION;
 	res.classification = &cls;
 
-	int ret = rc_send_result(h, &res);
+	int ret = send_result(fd, source_id, &res);
 
 	RC_FREE3(entries, eptrs, boxobjs);
 	return ret;
+}
+
+int rc_ext_result_send_classification(rc_ext_result_t *h, uint64_t pts_us,
+				      const rc_ext_class_t *items, size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+	return send_classification_fd(h->fd, h->source_id, pts_us, items, n,
+	                              rc_send_result_fd);
+}
+
+int rc_ext_record_send_classification(rc_ext_record_t *h, const char *app_id,
+				      uint64_t pts_us,
+				      const rc_ext_class_t *items, size_t n) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+	return send_classification_fd(h->fd, app_id, pts_us, items, n,
+	                              rc_send_record_result_fd);
+}
+
+int rc_ext_record_send_events(rc_ext_record_t *h, const char *app_id,
+			      uint64_t pts_us,
+			      const rc_ext_class_t *items, size_t n) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+	return send_classification_fd(h->fd, app_id, pts_us, items, n,
+	                              rc_send_record_event_fd);
 }
 
 int rc_ext_result_send_segmentation(rc_ext_result_t *h, uint64_t pts_us,
@@ -286,9 +423,10 @@ int rc_ext_result_send_segmentation(rc_ext_result_t *h, uint64_t pts_us,
 	return ret;
 }
 
-int rc_ext_result_send_tracking(rc_ext_result_t *h, uint64_t pts_us,
-                                const rc_ext_track_t *items, size_t n) {
-	if (!h)
+static int send_tracking_fd(int fd, const char *source_id, uint64_t pts_us,
+			    const rc_ext_track_t *items, size_t n,
+			    send_result_fn send_result) {
+	if (fd < 0 || (n && !items))
 		return -RC_EXT_EINTERNAL;
 
 	InferenceResult res = INFERENCE_RESULT__INIT;
@@ -322,15 +460,35 @@ int rc_ext_result_send_tracking(rc_ext_result_t *h, uint64_t pts_us,
 	res.data_case = INFERENCE_RESULT__DATA_TRACKING;
 	res.tracking = &trk;
 
-	int ret = rc_send_result(h, &res);
+	int ret = send_result(fd, source_id, &res);
 
 	RC_FREE3(entries, eptrs, boxobjs);
 	return ret;
 }
 
-int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
-                                 const rc_ext_kpinstance_t *instances, size_t n) {
+int rc_ext_result_send_tracking(rc_ext_result_t *h, uint64_t pts_us,
+				const rc_ext_track_t *items, size_t n) {
 	if (!h)
+		return -RC_EXT_EINTERNAL;
+	return send_tracking_fd(h->fd, h->source_id, pts_us, items, n,
+	                        rc_send_result_fd);
+}
+
+int rc_ext_record_send_tracking(rc_ext_record_t *h, const char *app_id,
+				uint64_t pts_us,
+				const rc_ext_track_t *items, size_t n) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+	return send_tracking_fd(h->fd, app_id, pts_us, items, n,
+	                        rc_send_record_result_fd);
+}
+
+static int send_keypoints_fd(int fd, const char *source_id, uint64_t pts_us,
+			     const rc_ext_kpinstance_t *instances, size_t n,
+			     send_result_fn send_result) {
+	if (fd < 0 || (n && !instances))
 		return -RC_EXT_EINTERNAL;
 
 	InferenceResult res = INFERENCE_RESULT__INIT;
@@ -416,7 +574,7 @@ int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
 	res.data_case = INFERENCE_RESULT__DATA_KEYPOINTS;
 	res.keypoints = &kp;
 
-	ret = rc_send_result(h, &res);
+	ret = send_result(fd, source_id, &res);
 
 cleanup:
 	free(insts);
@@ -428,7 +586,54 @@ cleanup:
 	return ret;
 }
 
+int rc_ext_result_send_keypoints(rc_ext_result_t *h, uint64_t pts_us,
+				 const rc_ext_kpinstance_t *instances,
+				 size_t n) {
+	if (!h)
+		return -RC_EXT_EINTERNAL;
+	return send_keypoints_fd(h->fd, h->source_id, pts_us, instances, n,
+	                         rc_send_result_fd);
+}
+
+int rc_ext_record_send_keypoints(rc_ext_record_t *h, const char *app_id,
+				 uint64_t pts_us,
+				 const rc_ext_kpinstance_t *instances,
+				 size_t n) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+	return send_keypoints_fd(h->fd, app_id, pts_us, instances, n,
+	                         rc_send_record_result_fd);
+}
+
 void rc_ext_result_close(rc_ext_result_t *h) {
+	if (!h)
+		return;
+	if (h->fd >= 0)
+		close(h->fd);
+	free(h);
+}
+
+int rc_ext_record_reset(rc_ext_record_t *h, const char *app_id) {
+	if (!h || h->fd < 0)
+		return -RC_EXT_EINTERNAL;
+	if (!rc_record_app_id_valid(app_id))
+		return -RC_EXT_EFORMAT;
+
+	InferenceResult result = INFERENCE_RESULT__INIT;
+	/* record@1 reserves DATA__NOT_SET for ordered source invalidation. */
+	int ret = rc_send_record_reset_fd(h->fd, app_id, &result);
+	if (ret != 0 && h->fd >= 0) {
+		/* The request may have reached the server even when its ACK did not.
+		 * Never let a delayed ACK confirm a later reset on this stream. */
+		close(h->fd);
+		h->fd = -1;
+	}
+	return ret;
+}
+
+void rc_ext_record_close(rc_ext_record_t *h) {
 	if (!h)
 		return;
 	if (h->fd >= 0)

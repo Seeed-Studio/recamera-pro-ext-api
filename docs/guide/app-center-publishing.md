@@ -39,8 +39,11 @@
   `<app>/logs/app.log`。
 - **以 root 运行**。appmgr 自身经 `S94appmgr` 以 root 启动，其拉起的 app 继承 root。
   原因见规格 §1.1：摄像头/麦克风/`/dev/mpi/*` 设备节点均 root 属主，非 root 开不了硬件。
-- **用扩展 SDK 对接固件**：拿帧（帧代理）、回注结果（结果注入 → OSD/录像/推送）、
-  GPIO、音频，全部走扩展 SDK 的 unix domain socket，见 [README.md](./README.md)。
+- **用扩展 SDK 对接固件**：拿帧（帧代理）、回注结果（公开结果注入 → OSD/推送，
+  不触发录像）、GPIO、音频，全部走扩展 SDK 的 unix domain socket，见
+  [README.md](./README.md)。托管应用要触发录像，在 manifest v2 声明
+  [`record_trigger`](./app-package-v2.md#managed-recording-triggers)，由 appmgr
+  代理，应用本身不能连接 recording-only 内部入口。
 - **单活模型**：同一时刻只有一个 app 在跑。`do_switch()`（`server.py:243`）先停掉当前
   active（和目标本身，保证干净重启），再启动目标。这与"摄像头独占"约束一致。
 

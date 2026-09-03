@@ -6,7 +6,8 @@
 >
 > **交付现状**：M1 结果注入、M2 帧代理、M3 probe 与 M4 硬件遮罩曾在
 > 匹配的 v1.x 补丁固件上运行；v1.6.0 handoff 已把相应 client/server 源码
-> 补回当前工作树。本轮另新增 `inference-control@1`。host/交叉构建结果不
+> 补回当前工作树。本轮另新增 `inference-control@1`，并将外部录像触发收敛为
+> manifest `record_trigger` → appmgr → 受保护 `record@1` 的独立信任链。host/交叉构建结果不
 > 等同目标板发布，当前整合版仍须完成 RV1126B 真机 kill/restart/OTA 门禁。
 > 下文保留的早期规划口吻应以各小节“当前状态”与 guide 为准。
 
@@ -17,7 +18,8 @@
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
 | **M0 存量文档化** | `ai_asr` PCM、notify 入站格式、`ext_*.conf` 挂载、`/var/tmp/rkipc` RPC 现状说明 | 无（纯文档） |
-| **M1 结果回注** | rkipc 入站结果 socket + OSD/录像/WS 三路分发 + proto 扩展 | 门禁 G3/G4 |
+| **M1 结果回注** | rkipc 入站结果 socket + OSD/WS 分发 + proto 扩展；公开入口不触发录像 | 门禁 G3/G4 |
+| **M1.5 应用触发录像** | manifest 声明 + appmgr 过滤桥接 + recording-only socket + source-aware Vigil | M1 + appmgr Result Hub |
 | **M2 帧代理** | 零拷贝帧扇出子系统 + C ABI SDK | 门禁 G1/G2/G5/G6 |
 | **M3 观测面** | rc_infer stage tap + 预处理回显 + metrics | M1（复用其 socket 骨架） |
 | **M4 控制面** | `/api/v1/ext/*` 版本化域 + capabilities + app token | M1-M3 落定后收口 |
@@ -37,10 +39,12 @@
 - 所有新增 IPC 走 **unix domain socket（SOCK_SEQPACKET）**，路径统一 `/run/recamera/`：
   - `/run/recamera/frame.sock` — 帧订阅（M2）
   - `/run/recamera/result-in.sock` — 结果回注（M1）
+  - `/run/recamera/osd-in.sock` — appmgr 专用 OSD-only 注入
+  - `/run/recamera/record-in.sock` — appmgr 专用 recording-only 注入（M1.5）
   - `/run/recamera/probe.sock` — 观测面（M3）
   - `/run/recamera/inference-control.sock` — external RKNN 单 owner 仲裁（M4，连接即租约）
 - 选 SEQPACKET：天然消息边界；fd 传递（`SCM_RIGHTS`）与消息原子绑定。
-- **权限（v1 实测：root-only，共享 root）：目录 `0750 root:root`，socket 文件 `0660`**。原设计曾拟用 `recamera-ext` 组做粗粒度授权，但上机（2026-08-10，V1.0.10）确认扩展应用**实际以 root 运行**（媒体设备节点均 root 属主，非 root 开不了），故 v1 落地为共享 root、无独立组；身份区分靠下条的 SO_PEERCRED + appmgr 注册表（见 §1.1 校准说明）。拆分组做多级授权留作后续演进。
+- **权限（v1 实测：root-only）：目录 `0750 root:root`；frame/result/probe/inference-control socket 为 `0660`，appmgr 专用 osd-in/record-in socket 为 `0600`**。原设计曾拟用 `recamera-ext` 组做粗粒度授权，但上机（2026-08-10，V1.0.10）确认扩展应用**实际以 root 运行**（媒体设备节点均 root 属主，非 root 开不了），故 v1 落地为共享 root、无独立组；私有入口再通过 SO_PEERCRED + appmgr pidfile + `/proc` 做进程身份核验。拆分组做多级授权留作后续演进。
 - **身份（v1 即有，不推迟）**：服务端对每个连接取 `SO_PEERCRED`（pid/uid/gid），作为连接身份记录并用于：
   - `source_id` 防冒充：`"builtin"` 为保留字，外部连接使用一律拒绝（EAUTH）。
   - **source_id ↔ uid 绑定注册表**：`/run/recamera/apps.d/<name>.conf`（内容：`uid=<n>`，root 只写）。连接的 peercred uid 在注册表中有对应条目 → 允许使用该 `<name>` 作为 `source_id`；无条目 → 强制改写为 `"uid:<n>"`，`Hello.client_name` 仅作诊断标注。v1 注册文件由管理员手写，打包分发落地后由安装器生成——机制不变，来源变。
@@ -82,8 +86,8 @@ message HelloAck {
 ```
 
 - **协商规则**：服务端在客户端声明的 `[version_min, version_max]` 与自身支持集合的交集内取最大值；交集为空 → EVERSION + 关闭（评审发现 4：不再用 `min(client, server)`）。
-- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `probe@1` /
-  `inference-control@1` 一经发布**不可移除**。能力演进 = 新增 Capability
+- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `osd@1` / `record@1` /
+  `probe@1` / `inference-control@1` 一经发布**不可移除**。能力演进 = 新增 Capability
   或提升 version，limits 数值可变（客户端必须按 limits 自适应）。socket
   inode 存在不代表协商成功，客户端仍须完成 Hello/HelloAck。
 - **schema 演进纪律**：proto tag 永不复用；删除字段必须 `reserved`；**中转组件（notify-server 等）转发外来 payload 时透传原始字节，禁止 decode→re-encode**（防旧端丢未知字段）；CI 加 v1 客户端 ↔ v2 服务端双向 round-trip 测试。
@@ -242,19 +246,20 @@ with FrameSource() as src:          # 默认 NPU 同款格式
 
 ### 3.3 服务端行为
 
-新增 `recamera_ipc/common/rc_result_in/`：监听 `result-in.sock`，收 `<InferenceResult>` 消息后走**与内建推理完全相同的三路分发**（`video.c:648-657` 的逻辑抽出为 `rc_result_dispatch()`，内建路径与入站路径共同调用——设计文档 6.3"官方推理吃自己的狗粮"的第一步）：
+实际端点位于 `recamera_ipc/common/rc_notify/rc_result_in.c`：监听 `result-in.sock`，收到并校验 `<InferenceResult>` 后调用外部专用的 `rc_result_dispatch_external_ir()`，只进入以下两路：
 
 1. `osd_manager_draw_infer()` — 叠加渲染。按 `source_id` 分配颜色（哈希到调色板）。
-   > **G4 已 PASS 定案（2026-08-11）**：RGN 每通道 attach 上限 8、内建占 1。两种实现——**（推荐）单 canvas 合成**：所有 source（含 builtin）画进同一 overlay region、按 source_id 哈希调色，`max_sources` 不受 RGN 硬限，仅受视觉/带宽约束，capability 报 `max_sources=8`（软上限）；**（退路）独立 region**：每 source 一个 RGN，`max_sources=6`（8 − 内建 1 − 1 余量），超出的 source 只走录像+notify 两路 + ERATELIMIT 告警。执行时优先单 canvas；若 osd_manager 现结构改动过大则退独立 region。
-2. vigil 录像队列 — 结果进录像。
-3. `rc_notify_send_inference()` — 转发 WS/MQTT/HTTP/UART。
+   > **G4 已 PASS 定案（2026-08-11）**：RGN 每通道 attach 上限 8、内建占 1。当前采用单 canvas 合成：所有可显示 source 画进同一 overlay region、按 source_id 哈希调色，`max_sources` 不受 RGN 硬限，仅受视觉/带宽约束。
+2. `rc_notify_send_inference()` — 转发 WS/MQTT/HTTP/UART。
+
+公开 result-in **不进入 Vigil**。内建推理则由可信的 `rc_result_dispatch()` 规范化为 `source_id="builtin"` 后进入 Vigil、notify 与 OSD。这样公开结果仍可观察、可叠加，但不能伪造应用来源触发录像。OSD 已画进编码视频，因此会出现在已经开始的录像中，这不等于该消息启动了录像。
 
 **限速（评审发现 7 更正）**：两级 token bucket——每连接 60 msg/s（burst 15）+ **全局 120 msg/s（burst 30）**；单条 payload ≤ 64 KB（EFORMAT）。超限丢弃 + 计数（metrics 可见），不断连接。
 **并发**：≤ 4 连接。`source_id` 防冒充见 §1.1。
 
 ### 3.4 与存量 notify 入站的关系
 
-`/var/tmp/notify`（0666 直写 notify-server）保持不动，定位**永久降为** "只要分发、不要叠加"的无特权 legacy 通道，并纳入全局 token bucket 记账。文档明确：**要上 OSD/录像 → `result-in.sock`；只要推送 → `/var/tmp/notify`**。
+`/var/tmp/notify`（0666 直写 notify-server）保持不动，定位**永久降为** “只要分发、不要叠加”的无特权 legacy 通道，并纳入全局 token bucket 记账。文档明确：**要上 OSD → `result-in.sock`；只要推送 → `/var/tmp/notify`；托管应用要按结果启动录像 → manifest 声明 `record_trigger`，由 appmgr 代理**。
 
 ### 3.5 SDK
 
@@ -268,6 +273,12 @@ sink.send_detections(pts_us=frame.pts_us,
 C 侧对应 `rc_ext_result_open/send/close`。SDK 内部完成 proto 组包，方案商不接触 protobuf。
 
 > **坐标契约**：所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）及关键点 point 的 x/y 均为**归一化 [0,1]**（相对画面宽高的比例），与 `docs/guide/README.md` §4.4 一致。OSD 先 clamp 到 [0,1] 再乘画面宽高——传像素值会被压成 1px 隐形框。分割 mask 是行主序原始字节（非坐标）。
+
+### 3.6 托管应用触发录像（`record-in.sock`）
+
+应用在 manifest v2 声明 `record_trigger`，列出可供录像规则选择的 detection、classification 或 event 信号。appmgr 的 Result Hub 按已安装 manifest 过滤 label / event kind，再以稳定 app id 作为来源，通过 `RecordSink` 送到 `record-in.sock`。该端点只接受经 `SO_PEERCRED`、root-owned appmgr pidfile 与 `/proc` 核验的 appmgr 进程；正常启动的普通应用不能通过认证。v1 应用仍以 root 运行，这项校验不是对恶意 root 代码的沙箱；未签名本地安装继续具有文档化的 root-code 风险。
+
+record-in 只进入 source-aware Vigil，不进入 OSD、notify 或公共结果流。FRAME 保留逐帧 debounce；EVENT 单条正事件触发且不跨消息累计。应用停止、升级或触发能力变化时，appmgr 发送有序 reset 并等待 ACK，清除该来源的旧 debounce 状态。对外配置与示例见 `docs/guide/app-package-v2.md` 的 “Managed recording triggers”。
 
 ---
 
@@ -355,8 +366,10 @@ HTTP `/api/v1/ext/capabilities` 可声明这项能力，但 acquire/release 不�
 | `sdk/proto/ext_api.proto` + `recamera_ipc/protobufs/ext_api.proto` | Hello/Capability/Subscribe/Probe/InferenceLease 等；SDK/固件各持一份协议发布源 | **新增** |
 | **`common/rc_ext_core/`** | **服务端核心库（§8.1）：传输/握手/身份/配额/所有权/fd 收发，三端点共用** | **新增（先行）** |
 | `src/rv1126b_ipc/video/frame_export.{c,h}` | 帧代理端点（core 之上的薄层：VI 取帧 + plane 填充） | **新增** |
-| `src/rv1126b_ipc/video/video.c` | 三路分发抽为 `rc_result_dispatch()`；新 VI chn1 初始化 | 修改（~几十行） |
-| `common/rc_result_in/` | 入站结果端点（core 之上的薄层：proto 校验 + 分发调用） | **新增** |
+| `src/rv1126b_ipc/video/video.c` | 内建结果接入可信 `rc_result_dispatch()`；新 VI chn1 初始化 | 修改（~几十行） |
+| `common/rc_notify/rc_result_in.*` | 公开入站结果端点（proto 校验 + OSD/notify 分发，不进 Vigil） | **新增** |
+| `common/rc_notify/rc_record_in.*` + `rc_appmgr_auth.*` | appmgr-only recording 入口、身份认证与 source reset | **新增** |
+| `common/vigil/` | 录像规则增加 builtin/app 来源和 FRAME/EVENT 语义 | 修改 |
 | `common/rc_infer/`（流水线各级） | tap 点 + probe 端点（core 之上的薄层） | 修改 + **新增** |
 | `recamera_web_backend/src/rest_api.cpp` + `ext_api.{h,cpp}` | ext 域 | 修改（2 行）+ **新增** |
 | `sdk/librecamera_ext/` | C ABI（v1 冻结对象）+ Python 薄封装 | **新增**（发布形态属门禁 G7） |
@@ -364,7 +377,8 @@ HTTP `/api/v1/ext/capabilities` 可声明这项能力，但 acquire/release 不�
 | init 脚本 | `/run/recamera` 目录（`0750 root:root`）+ socket `0660`（root-only，无独立组） | 修改 |
 
 **DoD（每里程碑验收）**：
-- M1：外部脚本注入假检测框 → RTSP 流里看到框和标签 → 录像回放看到 → WS:8123 收到带 `source_id` 的结果；冒充 `"builtin"` 被拒；超速消息被丢且计数可查。
+- M1：外部脚本注入假检测框 → RTSP 流里看到框和标签 → WS:8123 收到带 `source_id` 的结果；确认它不启动 Vigil 录像；冒充 `"builtin"` 被拒；超速消息被丢且计数可查。
+- M1.5：安装声明 `record_trigger` 的 app → 来源 API 可枚举 → FRAME/EVENT 规则各自触发录像；未声明信号被过滤；普通进程连接 record-in 被拒；stop/upgrade reset ACK 后旧结果不能再发布录制事件。
 - M2：C 测试程序在板上实测 ≥ NPU 通道帧率、`top` 中 rkipc CPU 增量 < 3%；**恶意客户端三连测**（连接后不读 socket / 收帧不 release / kill -9）各跑 1 小时，相机线程零阻塞、VI 池零泄漏、内建推理帧率不掉；Python 5 行示例可跑。
 - M3：故意喂错归一化的模型，通过 `preproc.out` 回显图 + `npu.raw` 张量在 10 分钟内定位问题（复刻设计文档 5.3 场景）；开满 probe 订阅时推理帧率下降 < 5%。
 
@@ -390,8 +404,8 @@ HTTP `/api/v1/ext/capabilities` 可声明这项能力，但 acquire/release 不�
 
 ## 8. 架构与扩展模型（v0.4 增补）
 
-> §1-§7 最初定义三条数据 socket；同一核心现已长出第四条
-> `inference-control`，本章定义**怎么增加端点而不复制一套实现**，以及兼容性
+> §1-§7 最初定义三条数据 socket；同一核心现已扩展出 OSD-only、
+> recording-only 与 `inference-control` 端点。本章定义**怎么增加端点而不复制一套实现**，以及兼容性
 > 如何被工程化保证而不是靠自觉。
 
 ### 8.1 组件分层：一个核心库，N 个薄端点
@@ -430,9 +444,9 @@ rkipc 进程内
 2. **数量演进走 limits**：并发数、速率、池深这类配额变化只改 `Capability.limits` 数值，客户端必须按握手返回值自适应，不得硬编码。
 3. **结构演进走保留位**：`frame_hdr` 的 `ver` + `reserved[16]`（如 G3 失败需加第二时间戳，占 reserved 8 字节 + flags 一位标识，`ver` 不变）；重排/删字段才升 `ver`，且旧 `ver` 服务端至少再支持两个固件版本。
 4. **任务类型演进走 oneof 追加**：`InferenceResult` 新任务 = 新 oneof 分支（tag 15+），旧读者跳过未知分支；与 rc_infer 后处理注册表的字符串名一一对应，注册表加算法不需要动 proto。
-5. **只增不减**：`/run/recamera/` 存在期间，v1 baseline 能力
-   （`frame@1`/`result@1`/`probe@1`/`inference-control@1`）与其线格式永不
-   移除。废弃流程：`Capability.limits["deprecated"]=1` 标记 ≥ 2 个固件版本
+5. **只增不减**：`/run/recamera/` 存在期间，v1 能力
+   （`frame@1`/`result@1`/`osd@1`/`record@1`/`probe@1`/`inference-control@1`）与其线格式永不
+   移除。安全边界调整必须在 SDK 版本说明中显式记录。废弃流程：`Capability.limits["deprecated"]=1` 标记 ≥ 2 个固件版本
    → 从 capabilities 列表消失（但端点仍应答 EVERSION 类错误而非消失式断连）。
 
 ### 8.3 兼容性工程（CI 化，不靠自觉）
@@ -561,7 +575,8 @@ rkipc 进程内
 ### 出:处理结果/画面接回(三个出口)
 | 出口 | 用途 | 现状 |
 |---|---|---|
-| ① 结果(框/标签/事件)回注 → 官方 OSD/RTSP/录像 | 只叠加结果,原画面不变 | **✅ M1 result-in 已做** |
+| ① 结果(框/标签/事件)回注 → 官方 OSD/RTSP + 结果推送 | 只叠加/发布结果，不启动录像；OSD 可出现在已有录像中 | **✅ M1 result-in 已做** |
+| ①b 托管应用结果 → Vigil 录像触发 | manifest 授权的来源/信号，不做显示或公开分发 | **✅ M1.5 record-in 已做** |
 | ② 处理后**整帧画面**回注 → VENC 编码 → RTSP/录像 | 方案商处理后的完整帧(滤镜/融合/GUI) | ❌ 需新"帧回注→VENC"入口(M2 反向) |
 | ③ 直接上屏 → DSI | 处理后画面显示在屏 | M5 方案 A(LVGL/DRM)或 gst `kmssink` |
 
