@@ -1,4 +1,4 @@
-# reCamera Pro Extension API — v1.6.3 (sideload package)
+# reCamera Pro Extension API — v1.6.5 (sideload package)
 
 Persistent sideload that adds the extension API (frame proxy / result injection / probe) to a
 reCamera Pro (RV1126B). It overwrites `/oem/usr/bin/rkipc` (ext4, read-write) so it **survives reboot**.
