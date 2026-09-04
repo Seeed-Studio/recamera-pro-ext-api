@@ -30,15 +30,36 @@ import tarfile
 
 DEFAULT_VERSION = "1.5.0"
 
-# The 9 shipped apps.
+# The shipped apps. This list is the single source of truth for what a release
+# contains -- kit/tests/test_kit_run_entry.py reads it, so an app added to
+# apps/ without being added here is caught rather than shipped by accident.
 APPS = [
+    "crayfish-fight",
     "face-analysis", "facemesh-reader", "fall-detection", "fitness-trainer",
     "ppocr-reader", "qrcode-reader", "retail-vision", "voice-transcribe",
     "yolo-detector",
 ]
 
+# Apps that live in apps/ but are NOT shipped yet. Listed so the inventory test
+# can tell "deliberately held back" from "someone forgot to add it to APPS".
+UNSHIPPED_APPS = [
+    # imports paho.mqtt, which the kit deliberately does NOT depend on
+    # (kit/adapters/mqtt_sink.py hand-rolls a client for exactly that reason)
+    # and which the manifest does not declare as a runtime.
+    "intrusion-detection",
+    # work in progress; not reviewed for release.
+    "face-recognition",
+]
+
 # Bundled per app: thin code + manifest (+ small model-side config in models/).
+# `app.py` is not the whole app: several ship sibling helper modules next to it
+# (ppocr-reader/striptext.py, crayfish-fight/logic.py) and an app package
+# missing one installs fine and dies at `import` on the first frame. The App
+# Center builder (market/packaging/build.py) already takes "any sibling helper
+# .py"; this list used to name app.py alone, so the two packagers disagreed.
 APP_INCLUDE_TOP = ("manifest.json", "app.py", "README.md", "models")
+# ...plus every other top-level .py in the app dir, minus tests.
+APP_INCLUDE_SIBLING_PY = True
 # Big model weights never travel in an app package (shared, via catalog).
 MODEL_EXCLUDE_GLOBS = ("*.rknn", "*.onnx")
 # fall-detection ships dev/training extras we never deploy.
@@ -120,6 +141,12 @@ def collect_apps(apps_dir):
         if not os.path.isdir(adir):
             sys.exit(f"error: missing app dir {adir}")
         members.append((adir, app))
+        if APP_INCLUDE_SIBLING_PY:
+            for f in sorted(os.listdir(adir)):
+                if (f.endswith(".py") and f not in APP_INCLUDE_TOP
+                        and not f.startswith("test_")
+                        and os.path.isfile(os.path.join(adir, f))):
+                    members.append((os.path.join(adir, f), f"{app}/{f}"))
         fall = (app == "fall-detection")
         for top in APP_INCLUDE_TOP:
             if fall and top in FALL_EXCLUDE_TOP:

@@ -22,6 +22,7 @@ must be able to locate exactly one App subclass in each of them.
 Run: python3 -m pytest kit/tests/test_kit_run_entry.py -q
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -247,14 +248,59 @@ class TestResolveAndFind(unittest.TestCase):
             kitrun.find_app(m)
 
 
-class TestShippedApps(unittest.TestCase):
-    """The nine real apps: bootstrap gone, and still launchable by kit.run."""
+def _release_app_lists():
+    """Read APPS / UNSHIPPED_APPS out of release/deploy/build-packages.py.
 
-    APPS = sorted(d for d in os.listdir(APPS_DIR)
+    As TEXT, not by importing it: that module runs packaging at import time in
+    some paths and this test has no business triggering it.
+    """
+    src = open(os.path.join(_REPO, "release", "deploy",
+                            "build-packages.py"), encoding="utf-8").read()
+    out = {}
+    for name in ("APPS", "UNSHIPPED_APPS"):
+        m = re.search(rf"^{name} = \[(.*?)^\]", src, re.S | re.M)
+        assert m, f"{name} not found in build-packages.py"
+        out[name] = sorted(re.findall(r'"([^"]+)"', m.group(1)))
+    return out["APPS"], out["UNSHIPPED_APPS"]
+
+
+_SHIPPED, _UNSHIPPED = _release_app_lists()
+_PRESENT = sorted(d for d in os.listdir(APPS_DIR)
                   if os.path.isfile(os.path.join(APPS_DIR, d, "app.py")))
+_SHIPPED_PRESENT = [a for a in _PRESENT if a in _SHIPPED]
 
-    def test_there_are_still_nine_apps(self):
-        self.assertEqual(len(self.APPS), 9, self.APPS)
+
+class TestShippedApps(unittest.TestCase):
+    """Every app that ships is launchable by kit.run, and nothing ships by
+    accident.
+
+    The inventory used to be pinned to the literal number nine, which stopped
+    telling the truth the moment a tenth app was committed -- and it failed on
+    apps that are in the tree but deliberately NOT released, dragging the suite
+    down with an unrelated missing dependency. The shipped set now comes from
+    release/deploy/build-packages.py, which is what actually builds the release,
+    and an app in apps/ must appear in one of its two lists.
+    """
+
+    SHIPPED, UNSHIPPED = _SHIPPED, _UNSHIPPED
+    PRESENT = _PRESENT
+    # Only shipped apps are held to the launch contract: an unreleased app is
+    # allowed to be mid-refactor, and its dependencies are not installed here.
+    APPS = _SHIPPED_PRESENT
+
+    def test_every_app_in_the_tree_is_declared_shipped_or_not(self):
+        """★The sentinel★ -- adding an app must be a conscious release decision."""
+        undeclared = [a for a in self.PRESENT
+                      if a not in self.SHIPPED and a not in self.UNSHIPPED]
+        self.assertEqual(
+            undeclared, [],
+            "apps/ holds app(s) missing from BOTH APPS and UNSHIPPED_APPS in "
+            "release/deploy/build-packages.py; add them to one of the two")
+
+    def test_every_shipped_app_exists(self):
+        missing = [a for a in self.SHIPPED if a not in self.PRESENT]
+        self.assertEqual(missing, [], "build-packages.py ships app(s) that are "
+                                      "not in apps/")
 
     def test_no_app_probes_for_kit_on_sys_path_any_more(self):
         """★The deletion, pinned★ -- one regression here and 40 lines come back."""
