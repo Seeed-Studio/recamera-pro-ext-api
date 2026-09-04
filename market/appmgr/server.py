@@ -67,8 +67,9 @@ from typing import Optional
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 
-from . import (assets, builtin, config as appconfig, installer, modelstore,
-               mqtt as mqttcfg, paths, state, supervisor, voiceruntime)
+from . import (assets, builtin, config as appconfig, installer, kitversion,
+               modelstore, mqtt as mqttcfg, paths, state, supervisor,
+               voiceruntime)
 
 
 # --------------------------------------------------------------------------- #
@@ -367,7 +368,15 @@ def do_list() -> dict:
         for gone in [k for k in cache if k not in seen]:
             cache.pop(gone, None)
     apps.append(_builtin_entry(active))
-    return {"active_app": active, "apps": apps}
+    # The device's own kit version, so the store can compare it against each
+    # catalog entry's `kit` requirement and refuse (or warn) BEFORE downloading a
+    # package the device will reject. appmgr enforces the requirement regardless
+    # at install time (kitversion.check in installer.inspect); this field only
+    # moves the verdict earlier, to the one call the App Center page already
+    # polls. None on a pre-1.6.4 kit, which reports no version -- the store
+    # should read that as "older than 1.6.4", the same reading the gate uses.
+    return {"active_app": active, "apps": apps,
+            "kit_version": kitversion.installed_version()}
 
 
 # ★The one network call on the list path★. builtin.is_running() is an HTTPS

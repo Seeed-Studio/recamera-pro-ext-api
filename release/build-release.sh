@@ -129,6 +129,13 @@ perl -0777 -pi -e "
   s/(# expect )[0-9a-f]{32}/\${1}$RKIPC_MD5/;
 " "$PKG/README.md"
 
+# kit/__init__.py: the kit CONTRACT version apps depend on via manifest "kit".
+# Written back here so a shipped kit can never disagree with the tarball it came
+# out of -- appmgr reads this literal to gate installs (appmgr/kitversion.py).
+perl -0777 -pi -e "s/^(__version__ = \")[^\"]*(\")/\${1}$VERSION\${2}/m" "$REPO/kit/__init__.py"
+grep -q "^__version__ = \"$VERSION\"\$" "$REPO/kit/__init__.py" || {
+    echo "FATAL: failed to write __version__=$VERSION into kit/__init__.py" >&2; exit 1; }
+
 # ---- staging -----------------------------------------------------------------
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT

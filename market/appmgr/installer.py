@@ -25,7 +25,7 @@ import tarfile
 import tempfile
 from typing import Optional, Tuple
 
-from . import config as appconfig, paths, signing
+from . import config as appconfig, kitversion, paths, signing
 
 
 class InstallError(Exception):
@@ -228,12 +228,23 @@ def inspect(pkg_path: str, signature: Optional[str] = None) -> dict:
     app_id = manifest.get("id")
     if not paths.valid_app_id(app_id):
         raise InstallError(f"manifest id {app_id!r} not in whitelist [a-z0-9-]{{1,64}}")
+    # Kit compatibility LAST, after identity/authenticity: an app package does not
+    # carry the shared kit runtime, so one built against a newer kit installs fine
+    # and then dies at startup with ModuleNotFoundError. Checked here rather than
+    # in install() so the "validate without installing" path reports the same
+    # verdict, and so the refusal lands before anything is extracted.
+    try:
+        kit_have = kitversion.check(manifest)
+    except kitversion.KitIncompatible as e:
+        raise InstallError(str(e))
     return {
         "id": app_id,
         "version": manifest.get("version"),
         "manifest": manifest,
         "members": [m.name for m in members],
         "signature": sig_status,
+        "kit_required": manifest.get("kit"),
+        "kit_installed": kit_have,
     }
 
 
