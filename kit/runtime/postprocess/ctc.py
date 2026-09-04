@@ -51,37 +51,6 @@ def _as_seq(outputs) -> np.ndarray:
     return a
 
 
-def decode_chars(outputs, dictionary: List[str]) -> Tuple[List[tuple], int]:
-    """Greedy CTC decode keeping each character's TIME STEP.
-
-    Returns ([(char, t, conf), ...], T). `t` is the step that emitted the
-    character, which is a position: step t covers model-input x in
-    [t/T, (t+1)/T) of the crop's width. `kit.pipeline` uses that to place the
-    characters of several overlapping windows on one axis and merge them, which
-    is the only way to stitch a split-up long line without string heuristics --
-    those align on the wrong repetition when the text is periodic.
-
-    Same collapse rule as `decode`: skip blanks and repeats of the previous
-    step.
-    """
-    seq = _as_seq(outputs)
-    if seq.size == 0:
-        return [], 0
-    idx = np.argmax(seq, axis=1)
-    best = seq[np.arange(seq.shape[0]), idx]
-    out: List[tuple] = []
-    prev = BLANK_INDEX
-    dict_len = len(dictionary)
-    for t in range(idx.shape[0]):
-        c = int(idx[t])
-        if c != BLANK_INDEX and c != prev and 0 <= c < dict_len:
-            ch = dictionary[c]
-            if ch != "":
-                out.append((ch, t, float(best[t])))
-        prev = c
-    return out, int(seq.shape[0])
-
-
 def decode(outputs, dictionary: List[str]) -> Tuple[str, float]:
     """CTC greedy decode -> (text, mean confidence of emitted chars).
 

@@ -616,7 +616,12 @@ if __name__ == "__main__":
 # 6.67:1 is squashed and CTC's 40 steps cap it near 20 characters; these cover
 # the split-and-merge that works around it. Pure geometry -- no model needed.
 # --------------------------------------------------------------------------- #
-from kit import pipeline as _pl                                    # noqa: E402
+# The strip windowing lives in the APP, not the kit -- an App Center install
+# ships without the kit runtime, so the fix has to travel with the app.
+_APP_DIR = os.path.join(_REPO, "apps", "ppocr-reader")
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+import striptext as _pl                                            # noqa: E402
 
 
 def test_split_windows_leaves_a_fitting_strip_alone():

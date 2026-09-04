@@ -53,6 +53,10 @@ from kit import events as E
 from kit.runtime.postprocess import db_ocr
 from kit.runtime.postprocess import ctc
 
+# App-local, NOT kit: an app package ships without the kit runtime, so anything
+# the App Center install needs must travel with the app. See striptext.py.
+import striptext
+
 REC_H, REC_W = 48, 320          # rec model input (manifest models[1].input)
 
 
@@ -118,7 +122,7 @@ class PpocrReaderApp(App):
         single-inference path, so short lines cost exactly what they did before.
         """
         ch, cw = crop.shape[:2]
-        wins = pipeline.split_windows(cw, ch)
+        wins = striptext.split_windows(cw, ch)
         if len(wins) == 1:
             fit = pipeline.fit_rec_input(crop, out_h=REC_H, out_w=REC_W)
             return ctc.decode(self.models.rec.infer(fit), self.dictionary)
@@ -126,11 +130,11 @@ class PpocrReaderApp(App):
         per_win = []
         for x0, x1 in wins:
             fit = pipeline.fit_rec_input(crop[:, x0:x1], out_h=REC_H, out_w=REC_W)
-            chars, steps = ctc.decode_chars(self.models.rec.infer(fit),
-                                            self.dictionary)
-            per_win.append(pipeline.place_chars(chars, steps, x0, x1, ch,
-                                                out_h=REC_H, out_w=REC_W))
-        return pipeline.merge_windows(wins, per_win, cw)
+            chars, steps = striptext.decode_chars(self.models.rec.infer(fit),
+                                                  self.dictionary)
+            per_win.append(striptext.place_chars(chars, steps, x0, x1, ch,
+                                                 out_h=REC_H, out_w=REC_W))
+        return striptext.merge_windows(wins, per_win, cw)
 
     def run(self):
         for frame in self.frames():
