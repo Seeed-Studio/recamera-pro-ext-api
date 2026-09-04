@@ -24,7 +24,28 @@ if _ROOT not in sys.path:
 
 from kit import config as kitconfig                                # noqa: E402
 
-_MANIFESTS = sorted(glob.glob(os.path.join(_ROOT, "apps", "*", "manifest.json")))
+def _shipped_apps():
+    """The apps a release actually contains, per release/deploy/build-packages.py.
+
+    Read as TEXT so this never imports the packager. Scoping to the shipped set
+    matters: apps/ also holds work in progress, and holding an unfinished app to
+    the manifest contract fails the suite for a decision its author has not made
+    yet (intrusion-detection.status_interval did exactly that). An app is
+    validated from the moment it is added to APPS -- which is the moment it
+    starts going out to devices.
+    """
+    import re
+    src = open(os.path.join(_ROOT, "release", "deploy", "build-packages.py"),
+               encoding="utf-8").read()
+    m = re.search(r"^APPS = \[(.*?)^\]", src, re.S | re.M)
+    assert m, "APPS not found in build-packages.py"
+    return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
+_SHIPPED = _shipped_apps()
+_MANIFESTS = sorted(
+    p for p in glob.glob(os.path.join(_ROOT, "apps", "*", "manifest.json"))
+    if os.path.basename(os.path.dirname(p)) in _SHIPPED)
 
 
 def _load(path):
