@@ -76,6 +76,12 @@ class Track:
     foot: Tuple[float, float] = (0.0, 0.0)       # current foot point (norm)
     prev_foot: Tuple[float, float] = (0.0, 0.0)  # last frame's foot point
     near_edge: bool = False
+    # Index into the `dets` list handed to the most recent `update()`, or -1 if
+    # this track was not matched to a detection this frame. Cascade apps (a
+    # second-stage classifier running per detection) need to attach a stable
+    # identity to the detection they are about to crop; without this they would
+    # have to re-associate by IoU right after the tracker already did it.
+    det_index: int = -1
 
     @property
     def xyxy_norm(self) -> List[float]:
@@ -243,6 +249,7 @@ class Tracker:
             tr.frames_tracked += 1
             tr.lost_frames = 0
             tr.near_edge = self._is_near_edge(ncx, ncy)
+            tr.det_index = di
             matched_det[di] = True
             matched_tid.add(tid)
 
@@ -252,6 +259,7 @@ class Tracker:
             if tid in matched_tid:
                 continue
             tr.lost_frames += 1
+            tr.det_index = -1          # no detection backs this track this frame
             max_lost = (self.cfg.max_lost_frames_edge if tr.near_edge
                         else self.cfg.max_lost_frames_center)
             if tr.lost_frames > max_lost:
@@ -269,7 +277,8 @@ class Tracker:
             tr = Track(track_id=self._next_id, cx=ncx, cy=ncy, w=nw, h=nh,
                        score=sc, first_seen=t, last_seen=t, frames_tracked=1,
                        lost_frames=0, foot=foot, prev_foot=foot,
-                       near_edge=self._is_near_edge(ncx, ncy))
+                       near_edge=self._is_near_edge(ncx, ncy),
+                       det_index=di)
             self._tracks[self._next_id] = tr
             self.new_ids.append(self._next_id)
             self._next_id += 1

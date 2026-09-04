@@ -3,23 +3,27 @@
 face-analysis -- reCamera Pro three-stage face cascade (port of the first-gen
 SSCMA face-analysis / audience-analytics solution).
 
-Migrated to the new kit shape (internal/KIT_APP_SHAPE_SPEC.md §1/§3): `run()`
-owns the loop and the whole three-stage cascade reads top to bottom as ordinary
-Python -- no cascade framework, no declarative stage list:
+`run()` owns the loop and the whole cascade reads top to bottom as ordinary
+Python (internal/KIT_APP_SHAPE_SPEC.md §1/§3) -- no cascade framework, no
+declarative stage list:
 
   frame -> self.pre()             letterbox to 640 (manifest models[0].input)
         -> self.models.det        YOLOv8n-face rawhead
         -> face_post.postprocess  face boxes in ORIGINAL pixels, score-desc
         -> results[:max_faces]    ★business★ top-K faces
-        -> for each face:         <-- stages 2+3 are a PLAIN `for`, spec §3
-             self.crop_roi_hw     padded SQUARE ROI, cropped on RGA straight
-                                  from the camera NV12 dma-buf (hw-roi mode)
+        -> self.tracker.update    ★business★ stable identity per face
+        -> for each tracked face: <-- stages 2+3 are a PLAIN `for`, spec §3
+             attributes.passes_gate  skip ROIs too small to classify
+             self.crop_roi_hw        padded SQUARE ROI, cropped on RGA straight
+                                     from the camera NV12 dma-buf (hw-roi mode)
              self.models.fairface_fp16        (1,18) -> race/gender/age heads
              self.models.emotion_enet_b0_fp16 (1,8)  -> AffectNet emotion,
-                                  ★business★ only every `emotion_interval`
-                                  frames; the last verdict is cached per face
-                                  index and reused in between
-        -> time-windowed demographic histogram (★business★, cross-frame)
+                                     ★business★ only every `emotion_interval`
+                                     frames
+             agg.track(id).add(...)  fold this frame's probabilities into the
+                                     track's evidence; the reported label is the
+                                     argmax of the ACCUMULATED evidence
+        -> once-per-track demographic histogram (★business★, cross-frame)
         -> self.emit()            one `face` event per face + the periodic
                                   `demographics` aggregate + results[]
 
@@ -34,22 +38,52 @@ not the camera frame). "hw-direct" would be wrong here (no cropper), and plain
 "hw" measured +0.8% (noise) because it still pays the full-res convert. See
 docs/guide/hw-preprocess.md before touching this.
 
-★Equivalence with the pre-change "cpu" path★: the loop body, model calls,
-cross-frame aggregation and events are UNCHANGED; only where each ROI comes from
-moved (numpy `crop_square_roi(frame.data, ...)` -> `self.crop_roi_hw(frame,
-...)`), and both return the identical `(roi, roi_map)` contract via one shared
-geometry helper.
+★Accuracy★ -- four things this app does NOT do naively, each of which was a
+measured-wrong behaviour before (see the accuracy review in the 0.2.0 notes):
+
+  * **Identity, not slot.** Faces are tracked (`kit.logic.tracker`), so stage-3
+    results and accumulated evidence are keyed by `track_id`. The previous
+    version cached the emotion verdict under the face's INDEX in the score-sorted
+    list, so as soon as `emotion_interval > 1` and the ordering shifted, one
+    person was handed another person's cached emotion.
+  * **Vote, not single frame.** Every reported label is the argmax of the
+    probability mass accumulated over that track's gate-passing frames
+    (`kit.logic.attributes`), not one frame's argmax, which flickers.
+  * **People, not face-frames.** The demographic histogram folds in each
+    `track_id` exactly once. Bumping it per face per frame -- what the previous
+    version did -- measures dwell time, not audience: one person standing still
+    for a minute outvoted sixty people walking past.
+  * **Gate before classify.** A face whose box is smaller than `min_face_px` is
+    upsampling artefact by the time it reaches the 224 classifier input, so it
+    is skipped entirely: no inference spent, no evidence contributed, and the
+    result carries `gated: true` instead of a confident-looking coin toss.
+
+`crop_pad` defaults to **-0.05** -- a NEGATIVE pad, i.e. the classifier ROI is
+5% TIGHTER than the detector box before it is squared. That is a measured value,
+not a guess: an offline sweep over 1942 FairFace val images through this exact
+geometry (`square_roi_geometry`, imported by the harness rather than
+reimplemented) is single-peaked at -0.05, and the curve falls off hard on the
+positive side -- race 0.712 at -0.05 vs 0.551 at +0.25, a 16-point drop. The
+reason the optimum is negative: yolov8n-face emits a looser box than the dlib
+face rect FairFace was trained on, and squaring it widens the framing again, so
+the crop has to be pulled back in to land on the training distribution. Reasoning
+from "the checkpoint was trained at dlib padding=0.25" to "set crop_pad=0.25" is
+exactly the mistake the sweep caught: the two paddings are measured against
+different rectangles. See docs/guide/face-attribute-accuracy.md for the table.
+
+At this padding the plain square crop is statistically level with feeding the
+model FairFace's own aligned chips (gender/race/age all within the ±1.04 pt noise
+floor), and similarity-transform ALIGNMENT measured 1-2.6 points WORSE than it.
+So this app deliberately does not align: alignment only wins against a
+mis-padded baseline.
 
 All three models are declared in the manifest `models[]` and preloaded by the
-kit, so the hand-written "scan the manifest for role==stage2_fairface" loop is
-gone. Both classifiers claim the `classify` task, so they are reached by their
-manifest ids (an alias claimed twice is dropped rather than resolved
-arbitrarily -- see kit.app.ModelRegistry).
+kit, so both classifiers are reached by their manifest ids (both claim the
+`classify` task, so the `.cls` alias is ambiguous and deliberately dropped --
+see kit.app.ModelRegistry).
 
-Every knob (confidence / iou / max_faces / crop_pad / emotion_interval /
-aggregate_window_sec / privacy_blur) is auto-bound from the manifest
-config_schema and re-bound on SIGHUP for the apply:"live" ones, so there is no
-setup() param-copying and no on_config_reload.
+Every knob is auto-bound from the manifest config_schema and re-bound on SIGHUP
+for the apply:"live" ones, so there is no setup() param-copying.
 
 ImageNet normalization is baked into both classifier rknns, so we feed the raw
 uint8 224x224 RGB ROI straight to the engine (no /255, no mean/std here).
@@ -61,6 +95,8 @@ Run on device (inference requires root):
 
 from kit.app import App, run_app
 from kit import events as E
+from kit.logic.attributes import AttributeConfig, Aggregator, passes_gate
+from kit.logic.tracker import Tracker, TrackerConfig
 from kit.runtime.postprocess import face_detect as face_post
 from kit.runtime.postprocess import classify as clf
 
@@ -72,6 +108,18 @@ EMO_INPUT = 224
 # alias is ambiguous and deliberately dropped by the registry.
 FF_ID = "fairface_fp16"
 EMO_ID = "emotion_enet_b0_fp16"
+
+# Head name -> label vocabulary, shared by the accumulator and the emitted
+# fields. The three FairFace heads come off one 18-vector; emotion is its own
+# model. Order is the model's, not ours (kit.runtime.postprocess.classify).
+LABELS = {
+    "race": clf.RACE_LABELS,
+    "gender": clf.GENDER_LABELS,
+    "age": clf.AGE_LABELS,
+    "emotion": clf.EMOTION_LABELS,
+}
+FF_HEADS = ("race", "gender", "age")
+ALL_HEADS = ("gender", "age", "race", "emotion")
 
 
 class FaceAnalysisApp(App):
@@ -86,14 +134,19 @@ class FaceAnalysisApp(App):
     # Fallbacks for the auto-bound config_schema keys (used when a key is
     # missing from the effective config; the manifest supplies each default).
     confidence = 0.4
+    iou = 0.45
     max_faces = 5
-    crop_pad = 0.15
+    crop_pad = -0.05
+    min_face_px = 64
     emotion_interval = 1
+    min_track_frames = 3
+    evidence_decay = 1.0
+    track_max_lost = 15
     aggregate_window_sec = 30.0
     privacy_blur = True
 
     def setup(self, config):
-        """Build the cross-frame aggregation state from the already-bound params.
+        """Build the tracker and the evidence store from the already-bound params.
 
         Called by `App.start()` AFTER the config_schema auto-bind, so every
         `self.<knob>` below is already populated. All three RKNNs are preloaded
@@ -101,68 +154,92 @@ class FaceAnalysisApp(App):
         """
         super().setup(config)
 
-        # --- time-windowed demographic aggregation (cross-frame state) ---- #
-        self._win_start = None
-        self._win_faces = 0
-        self._hist = {"gender": {}, "age": {}, "race": {}, "emotion": {}}
         self._frame_idx = 0
-        self._emotion_cache = {}   # face-index -> emotion dict (reused between runs)
+        self._tracker = Tracker(self._tracker_config())
+        self._agg = Aggregator(self._attr_config(), heads=ALL_HEADS)
+        self._window_started = False
 
         print(f"[face-analysis] setup conf={self.confidence} iou={self.iou} "
               f"max_faces={self.max_faces} crop_pad={self.crop_pad} "
+              f"min_face_px={self.min_face_px} "
               f"fairface={FF_ID}({FF_INPUT}) emotion={EMO_ID}({EMO_INPUT}) "
               f"emotion_interval={self.emotion_interval} "
+              f"min_track_frames={self.min_track_frames} "
+              f"evidence_decay={self.evidence_decay} "
+              f"track_max_lost={self.track_max_lost} "
               f"agg_window={self.aggregate_window_sec}s "
               f"privacy_blur={self.privacy_blur}", flush=True)
+
+    # -- derived-object builders ------------------------------------------ #
+    def _tracker_config(self) -> TrackerConfig:
+        """Face-tuned tracker policy.
+
+        The kit defaults are tuned for the retail PERSON tracker, where a
+        3-second occlusion budget (90 frames @30fps) is right. This cascade runs
+        far slower than the capture rate -- every extra face costs two
+        224-input classifier inferences -- so 90 frames can be 15+ wall-clock
+        seconds, long enough for a track to be re-associated onto a DIFFERENT
+        person who walked into the same spot, which then pollutes that track's
+        accumulated evidence. `track_max_lost` caps it; the edge budget stays
+        proportionally shorter because an edge loss is usually a real exit.
+        """
+        lost = max(1, int(self.track_max_lost))
+        return TrackerConfig(max_lost_frames_center=lost,
+                             max_lost_frames_edge=max(1, lost // 2))
+
+    def _attr_config(self) -> AttributeConfig:
+        """Gate / voting policy. Calibration (temperature, per-head confidence
+        floors) is left at its no-op default on purpose: both need a measured
+        held-out set behind them, and `AttributeConfig` only supplies the
+        mechanism. See the accuracy notes before setting either."""
+        return AttributeConfig(min_face_px=float(self.min_face_px),
+                               min_track_frames=int(self.min_track_frames),
+                               decay=float(self.evidence_decay))
 
     def on_params_changed(self, changed):
         """★S1 live hot-reload★ -- after SIGHUP re-bound the apply:"live" keys.
 
-        face-analysis owns NO derived object that needs rebuilding: every live
-        knob (confidence / iou / max_faces / crop_pad / emotion_interval /
-        privacy_blur) is a plain scalar the auto-bind has already replaced on
-        `self`, and each is read fresh inside the loop (`max_faces` and
-        `emotion_interval` are typed "number" in the schema, so they arrive as
-        floats and are clamped/int-ed at the use site, exactly as the old
-        on_config_reload did). Nothing here touches `self._win_start` /
-        `self._hist` / `self._emotion_cache`, so the aggregation window and the
-        cached emotions survive a config change untouched.
-        `aggregate_window_sec` is apply:"restart" and never reaches here.
+        Most live knobs (confidence / iou / max_faces / crop_pad /
+        emotion_interval / privacy_blur) are plain scalars the auto-bind has
+        already replaced on `self`, read fresh inside the loop. The two that
+        feed DERIVED objects -- the gate/voting policy and the tracker budget --
+        are mirrored in place, so neither the tracker's identities nor the
+        accumulated per-track evidence nor the open demographic window is
+        thrown away by a config change. `aggregate_window_sec` is
+        apply:"restart" and never reaches here.
         """
+        if changed & {"min_face_px", "min_track_frames", "evidence_decay"}:
+            cfg = self._attr_config().clamp()
+            # Mutate in place: every live TrackAttributes holds this same object.
+            self._agg.cfg.min_face_px = cfg.min_face_px
+            self._agg.cfg.min_track_frames = cfg.min_track_frames
+            self._agg.cfg.decay = cfg.decay
+        if "track_max_lost" in changed:
+            new = self._tracker_config().clamp()
+            self._tracker.cfg.max_lost_frames_center = new.max_lost_frames_center
+            self._tracker.cfg.max_lost_frames_edge = new.max_lost_frames_edge
+
         print(f"[face-analysis] hot-reload changed={sorted(changed)} "
               f"conf={self.confidence} iou={self.iou} "
               f"max_faces={self.max_faces} crop_pad={self.crop_pad} "
+              f"min_face_px={self.min_face_px} "
               f"emotion_interval={self.emotion_interval} "
+              f"min_track_frames={self.min_track_frames} "
+              f"evidence_decay={self.evidence_decay} "
+              f"track_max_lost={self.track_max_lost} "
               f"privacy_blur={self.privacy_blur}", flush=True)
 
     # -- helpers (business: the demographic window) ------------------------ #
-    def _bump(self, head: str, label) -> None:
-        if label is None:
-            return
-        d = self._hist[head]
-        d[label] = d.get(label, 0) + 1
-
     def _roll_window(self, t: float):
-        """Emit a demographics aggregate event when the window elapses; reset."""
-        if self._win_start is None:
-            self._win_start = t
+        """Emit a demographics aggregate when the window elapses; reset it."""
+        if not self._window_started:
+            self._agg.reset_window(t)
+            self._window_started = True
             return None
-        if (t - self._win_start) < self.aggregate_window_sec:
+        if self._agg.elapsed(t) < self.aggregate_window_sec:
             return None
-        event = {
-            "kind": "demographics",
-            "window_sec": round(float(t - self._win_start), 1),
-            "faces": int(self._win_faces),
-            "gender": dict(self._hist["gender"]),
-            "age": dict(self._hist["age"]),
-            "race": dict(self._hist["race"]),
-            "emotion": dict(self._hist["emotion"]),
-        }
-        # reset window
-        self._win_start = t
-        self._win_faces = 0
-        for k in self._hist:
-            self._hist[k] = {}
+        event = self._agg.snapshot(t)
+        self._agg.reset_window(t)
         return event
 
     def run(self):
@@ -174,68 +251,103 @@ class FaceAnalysisApp(App):
                                             conf_thres=self.confidence,
                                             iou_thres=self.iou)
 
-            # ★business★ cross-frame frame counter drives the emotion cadence.
+            # ★privacy★ kind and the blur flag are stamped on EVERY detection,
+            # BEFORE the top-K slice. `results` is what the sink publishes and
+            # what an overlay renders, so tagging only the top-K -- as the
+            # previous version did -- silently left every face past `max_faces`
+            # unflagged in exactly the crowded scene where blurring matters.
+            for r in results:
+                r["kind"] = "face"
+                r["blur"] = self.privacy_blur
+
             self._frame_idx += 1
             t = frame.pts
-            interval = max(1, self.emotion_interval)
+            interval = max(1, int(self.emotion_interval))
             run_emotion = (self._frame_idx % interval) == 0
 
-            # -- 2. stages 2+3: one padded square ROI per face ----------- #
+            # -- 2. identity: track the faces we will classify ----------- #
+            # Only the top-K enter the tracker: they are the faces that can
+            # accumulate evidence, and feeding it detections we never classify
+            # would spawn ids that never produce a verdict.
+            faces = results[: int(self.max_faces)]
+            tracks = self._tracker.update(faces, t, frame.w, frame.h)
+            self._agg.sweep(self._tracker.removed_ids)
+            by_det = {tr.det_index: tr for tr in tracks if tr.det_index >= 0}
+
+            # -- 3. stages 2+3: one padded square ROI per tracked face ---- #
             # A plain Python loop, not a declared pipeline stage. Each ROI is
             # cropped on RGA straight from the camera dma-buf (model_frame=
             # "hw-roi") via self.crop_roi_hw -- never from frame.data, which in
             # this mode holds the stage-1 letterbox, not the camera frame.
-            faces = results[: self.max_faces]
             for i, r in enumerate(faces):
-                r["kind"] = "face"
-                r["blur"] = self.privacy_blur
+                tr = by_det.get(i)
+                r["track_id"] = tr.track_id if tr is not None else None
 
+                # ★business★ quality gate, BEFORE the crop: too small to
+                # classify means no inference spent and no evidence polluted.
+                if tr is None or not passes_gate(r["box"], r.get("score", 0.0),
+                                                 self._agg.cfg):
+                    r["gated"] = True
+                    r["stable"] = False
+                    continue
+                r["gated"] = False
+
+                ta = self._agg.track(tr.track_id)
                 roi, _roi_map = self.crop_roi_hw(frame, r["box"],
                                                  FF_INPUT, self.crop_pad)
 
-                # stage 2: FairFace age / gender / race
-                ff = clf.fairface_decode(self.models[FF_ID].infer(roi))
-                r["gender"] = ff["gender"]["label"]
-                r["gender_conf"] = ff["gender"]["confidence"]
-                r["age"] = ff["age"]["label"]
-                r["age_conf"] = ff["age"]["confidence"]
-                r["race"] = ff["race"]["label"]
-                r["race_conf"] = ff["race"]["confidence"]
+                # stage 2: FairFace age / gender / race -> evidence
+                ff = clf.fairface_decode(self.models[FF_ID].infer(roi),
+                                         temperature=self._agg.cfg.temperature)
+                for head in FF_HEADS:
+                    ta.add(head, ff[head]["probs"])
 
-                # stage 3: ★business★ emotion runs every `interval` frames; in
-                # between, the previous verdict for this face SLOT is reused.
+                # stage 3: ★business★ emotion runs every `interval` frames. No
+                # cache is needed: the accumulator IS the per-track memory, so
+                # between runs `verdict("emotion")` keeps returning that track's
+                # own accumulated verdict -- never a neighbour's.
                 if run_emotion:
                     if EMO_INPUT != FF_INPUT:
                         roi_e, _ = self.crop_roi_hw(frame, r["box"],
                                                     EMO_INPUT, self.crop_pad)
                     else:
                         roi_e = roi
-                    em = clf.emotion_decode(self.models[EMO_ID].infer(roi_e))
-                    self._emotion_cache[i] = em
-                em = self._emotion_cache.get(i)
-                if em is not None:
-                    r["emotion"] = em["label"]
-                    r["emotion_conf"] = em["confidence"]
+                    em = clf.emotion_decode(
+                        self.models[EMO_ID].infer(roi_e),
+                        temperature=self._agg.cfg.temp("emotion"))
+                    ta.add("emotion", em["probs"])
 
-                # ★business★ feed the running demographic histogram
-                self._win_faces += 1
-                self._bump("gender", r.get("gender"))
-                self._bump("age", r.get("age"))
-                self._bump("race", r.get("race"))
-                if em is not None:
-                    self._bump("emotion", em["label"])
+                ta.bump_frame(t)
+                self._agg.note_face_frame()
 
-            # -- 3. events: one attribute event per face ----------------- #
+                # ★business★ report the VOTE over this track's evidence, not
+                # this single frame's argmax.
+                verdicts = {h: ta.verdict(h, LABELS[h]) for h in ALL_HEADS}
+                for head in FF_HEADS:
+                    r[head] = verdicts[head]["label"]
+                    r[f"{head}_conf"] = verdicts[head]["confidence"]
+                if verdicts["emotion"]["index"] >= 0:
+                    r["emotion"] = verdicts["emotion"]["label"]
+                    r["emotion_conf"] = verdicts["emotion"]["confidence"]
+                r["stable"] = ta.stable
+                r["evidence_frames"] = ta.frames
+
+                # ★business★ fold this PERSON into the window histogram -- once,
+                # the first time their evidence is stable.
+                self._agg.maybe_count(tr.track_id,
+                                      {h: verdicts[h]["label"] for h in ALL_HEADS})
+
+            # -- 4. events: one attribute event per face ----------------- #
             events = [E.face_attributes(r, blur=self.privacy_blur)
                       for r in faces]
 
-            # ★business★ time-windowed demographic aggregation
             agg = self._roll_window(t)
             if agg is not None:
                 events.append(agg)
                 print(f"[face-analysis] demographics window={agg['window_sec']}s "
-                      f"faces={agg['faces']} gender={agg['gender']} "
-                      f"age={agg['age']} emotion={agg['emotion']}", flush=True)
+                      f"faces={agg['faces']} face_frames={agg['face_frames']} "
+                      f"gender={agg['gender']} age={agg['age']} "
+                      f"race={agg['race']} emotion={agg['emotion']}", flush=True)
 
             self.emit(events, frame.pts, results=results)
 
