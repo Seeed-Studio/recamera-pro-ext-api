@@ -32,7 +32,7 @@ Both models are declared in the manifest `models[]` and preloaded by the kit
 for role==stage2_rec" loop is gone. The character dictionary is not a model --
 the app still loads it, from the path the manifest hangs off the rec model.
 
-All five knobs (det_thresh / box_thresh / unclip_ratio / max_boxes /
+All six knobs (det_thresh / box_thresh / unclip_ratio / min_size / max_boxes /
 min_rec_conf) are auto-bound from the manifest config_schema and re-bound on
 SIGHUP (every one is apply:"live"), so there is no setup() param-copying and no
 on_config_reload: they are plain values read per frame.
@@ -76,6 +76,9 @@ class PpocrReaderApp(App):
     det_thresh = 0.3
     box_thresh = 0.5
     unclip_ratio = 2.0
+    # Short side of the raw (pre-unclip, shrink-trained) DB blob, in detector
+    # space. See db_ocr.DEFAULT_MIN_SIZE -- at 8.0 this dropped every line.
+    min_size = 3.0
     max_boxes = 8
     min_rec_conf = 0.25
 
@@ -100,6 +103,7 @@ class PpocrReaderApp(App):
 
         print(f"[ppocr-reader] setup det_thresh={self.det_thresh} "
               f"box_thresh={self.box_thresh} unclip={self.unclip_ratio} "
+              f"min_size={self.min_size} "
               f"max_boxes={self.max_boxes} min_rec_conf={self.min_rec_conf} "
               f"dict_classes={len(self.dictionary)} "
               f"dict={os.path.basename(dict_path)}", flush=True)
@@ -113,9 +117,7 @@ class PpocrReaderApp(App):
                                   det_thresh=self.det_thresh,
                                   box_thresh=self.box_thresh,
                                   unclip_ratio=self.unclip_ratio,
-                                  # config_schema types max_boxes as "number",
-                                  # so the auto-bind hands us a float; decode
-                                  # slices with it.
+                                  min_size=self.min_size,
                                   max_boxes=self.max_boxes)
 
             # ★business★ reading order: top-to-bottom, then left-to-right,
