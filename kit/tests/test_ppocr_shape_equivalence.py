@@ -608,3 +608,123 @@ class PpocrNewShapeTests(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------- #
+# Long-strip windowing (kit.pipeline.split_windows / place_chars /
+# merge_windows). The rec rknn is fixed at 48x320, so a strip wider than
+# 6.67:1 is squashed and CTC's 40 steps cap it near 20 characters; these cover
+# the split-and-merge that works around it. Pure geometry -- no model needed.
+# --------------------------------------------------------------------------- #
+from kit import pipeline as _pl                                    # noqa: E402
+
+
+def test_split_windows_leaves_a_fitting_strip_alone():
+    """A strip within the model's aspect ratio must stay ONE window.
+
+    Short lines are the common case; they have to keep the single-inference
+    path or every frame pays for a feature only long lines need.
+    """
+    assert _pl.split_windows(300, 48) == [(0, 300)]
+    assert _pl.split_windows(320, 48) == [(0, 320)]
+
+
+def test_split_windows_covers_the_strip_and_respects_the_aspect_cap():
+    for crop_w, crop_h in [(984, 58), (2000, 58), (700, 30), (5000, 48)]:
+        wins = _pl.split_windows(crop_w, crop_h)
+        assert wins[0][0] == 0
+        assert wins[-1][1] == crop_w, "the last window must reach the end"
+        for x0, x1 in wins:
+            assert (x1 - x0) <= _pl.REC_MAX_ASPECT * crop_h + 1
+        for (a0, a1), (b0, b1) in zip(wins, wins[1:]):
+            assert b0 < a1, "neighbouring windows must overlap, not just touch"
+
+
+def test_place_chars_maps_time_steps_onto_the_strip():
+    """Step t must land at (t+0.5)/T of the window's own width."""
+    chars = [("A", 0, 0.9), ("B", 19, 0.9), ("C", 39, 0.9)]
+    placed = _pl.place_chars(chars, 40, 100, 420, 48)   # 320 wide, 48 tall -> no padding
+    xs = [p[0] for p in placed]
+    assert abs(xs[0] - (100 + 0.5 / 40 * 320)) < 1e-6
+    assert abs(xs[2] - (100 + 39.5 / 40 * 320)) < 1e-6
+    assert xs[0] < xs[1] < xs[2]
+
+
+def test_place_chars_drops_steps_inside_the_right_padding():
+    """A narrow window is right-padded to 320; steps past the content are noise."""
+    placed = _pl.place_chars([("A", 5, 0.9), ("Z", 38, 0.9)], 40, 0, 96, 48)
+    assert [p[1] for p in placed] == ["A"], "the step inside the padding must go"
+
+
+def _windowed_reads(text, pitch, windows, jitter=2.0, misreads=(), drops=()):
+    """Build physically consistent per-window placements for `text`.
+
+    Glyph i sits at x = i * pitch on the strip. Each window reports the glyphs
+    inside its own span at that position give or take `jitter` px -- roughly one
+    CTC step, which is the real placement error. `misreads` maps
+    (window, glyph index) to the wrong character, `drops` is the set of
+    (window, glyph index) a window failed to emit at all.
+    """
+    per = []
+    for wi, (x0, x1) in enumerate(windows):
+        placed = []
+        for i, ch in enumerate(text):
+            x = i * pitch
+            if not (x0 <= x < x1) or (wi, i) in drops:
+                continue
+            got = dict(misreads).get((wi, i), ch)
+            conf = 0.5 if (wi, i) in dict(misreads) else 0.9
+            placed.append((x + (jitter if wi % 2 else -jitter), got, conf))
+        per.append(placed)
+    return per
+
+
+def test_merge_windows_keeps_periodic_text_intact():
+    """The reason this merges by position and not by string similarity.
+
+    Longest-common-substring stitching aligns repeats of "0123456789" onto the
+    wrong period and eats one; position cannot.
+    """
+    text = "0123456789" * 3
+    wins = [(0, 200), (150, 350), (300, 500)]
+    per = _windowed_reads(text, 16.0, wins)
+    got, conf = _pl.merge_windows(wins, per, 500)
+    assert got == text, got
+    assert 0.0 < conf <= 1.0
+
+
+def test_merge_windows_drops_a_glyph_emitted_by_both_windows():
+    """A glyph inside the overlap is read twice and must be emitted once.
+
+    This is the "...ABCDEFGHH12345678" duplication seen on device.
+    """
+    text = "ABCDEFGH12345678"
+    wins = [(0, 200), (150, 350)]
+    per = _windowed_reads(text, 20.0, wins)
+    assert sum(len(p) for p in per) > len(text), "the fixture must overlap"
+    got, _ = _pl.merge_windows(wins, per, 350)
+    assert got == text, got
+
+
+def test_merge_windows_keeps_a_glyph_only_one_window_read():
+    """A glyph the neighbour missed must survive.
+
+    Its window's edge is what cut through it, so the window that DID read it is
+    the one to trust -- an ownership split by x would throw it away.
+    """
+    text = "ABCDEFGHIJKLMN"
+    wins = [(0, 200), (150, 350)]
+    # glyph 9 sits in the overlap; the left window never emitted it
+    per = _windowed_reads(text, 20.0, wins, drops={(0, 9)})
+    got, _ = _pl.merge_windows(wins, per, 350)
+    assert got == text, got
+
+
+def test_merge_windows_prefers_the_more_confident_read_of_a_shared_glyph():
+    """When two windows disagree inside the overlap, confidence decides."""
+    text = "ABCDEFGH12345678"
+    wins = [(0, 200), (150, 350)]
+    # the left window misreads glyph 8 near its right edge, with low confidence
+    per = _windowed_reads(text, 20.0, wins, misreads={(0, 8): "X"})
+    got, _ = _pl.merge_windows(wins, per, 350)
+    assert got == text, got

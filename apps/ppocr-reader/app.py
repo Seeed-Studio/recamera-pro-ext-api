@@ -108,6 +108,30 @@ class PpocrReaderApp(App):
               f"dict_classes={len(self.dictionary)} "
               f"dict={os.path.basename(dict_path)}", flush=True)
 
+    def _read_strip(self, crop):
+        """Recognize one upright text strip, windowing it if it is too wide.
+
+        The rec rknn is fixed at 48x320, so a strip wider than 320/48 = 6.67:1
+        gets squashed and CTC's 40 steps cap it at ~20 characters. Anything that
+        long is read as overlapping windows and merged by character position --
+        see kit.pipeline.merge_windows. A strip that already fits takes the
+        single-inference path, so short lines cost exactly what they did before.
+        """
+        ch, cw = crop.shape[:2]
+        wins = pipeline.split_windows(cw, ch)
+        if len(wins) == 1:
+            fit = pipeline.fit_rec_input(crop, out_h=REC_H, out_w=REC_W)
+            return ctc.decode(self.models.rec.infer(fit), self.dictionary)
+
+        per_win = []
+        for x0, x1 in wins:
+            fit = pipeline.fit_rec_input(crop[:, x0:x1], out_h=REC_H, out_w=REC_W)
+            chars, steps = ctc.decode_chars(self.models.rec.infer(fit),
+                                            self.dictionary)
+            per_win.append(pipeline.place_chars(chars, steps, x0, x1, ch,
+                                                out_h=REC_H, out_w=REC_W))
+        return pipeline.merge_windows(wins, per_win, cw)
+
     def run(self):
         for frame in self.frames():
             # -- 1. pre / infer / stage-1 post --------------------------- #
@@ -145,9 +169,7 @@ class PpocrReaderApp(App):
             events = []
             for r in results:
                 crop = pipeline.perspective_crop(frame.data, r["quad"])
-                fit = pipeline.fit_rec_input(crop, out_h=REC_H, out_w=REC_W)
-                text, conf = ctc.decode(self.models.rec.infer(fit),
-                                        self.dictionary)
+                text, conf = self._read_strip(crop)
                 # ★business★ a reading below the confidence floor is reported
                 # as an empty string -- the box still ships, carrying its raw
                 # (unclamped) recognition confidence.
