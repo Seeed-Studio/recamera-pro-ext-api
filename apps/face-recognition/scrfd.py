@@ -36,8 +36,10 @@ def generate_anchors(model_h: int, model_w: int) -> Dict[int, np.ndarray]:
     for stride in STRIDES:
         fh = model_h // stride
         fw = model_w // stride
-        x_centers = (np.arange(fw) + 0.5) * stride
-        y_centers = (np.arange(fh) + 0.5) * stride
+        # InsightFace SCRFD convention: anchor centre = grid index * stride,
+        # no half-cell offset (insightface/model_zoo/scrfd.py forward()).
+        x_centers = np.arange(fw, dtype=np.float32) * stride
+        y_centers = np.arange(fh, dtype=np.float32) * stride
         xv, yv = np.meshgrid(x_centers, y_centers)
         centers = np.stack([xv, yv], axis=-1).reshape(-1, 2)
         anchors[stride] = np.repeat(centers, NUM_ANCHORS, axis=0)

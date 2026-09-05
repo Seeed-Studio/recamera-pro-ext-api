@@ -257,7 +257,7 @@ class TestPayload(_Base):
         assert set(big) == {"box", "label", "score", "cls"}
         assert big["cls"] == 0
         # stride-32 cell (4,6), half-side 2*32 px, letterbox pad_h = 80
-        assert big["box"] == pytest.approx([80.0, 64.0, 208.0, 192.0])
+        assert big["box"] == pytest.approx([64.0, 48.0, 192.0, 176.0])
         assert big["label"] == "alice"
         assert big["score"] == pytest.approx(1.0, abs=1e-5)
 
@@ -273,7 +273,7 @@ class TestPayload(_Base):
                                  "score", "live", "liveness_score", "stable",
                                  "gated", "reason"}
         assert faces[0]["bbox"] == pytest.approx(
-            [80 / FRAME_W, 64 / FRAME_H, 208 / FRAME_W, 192 / FRAME_H])
+            [64.0 / 640, 48.0 / 480, 192.0 / 640, 176.0 / 480])
         assert faces[0]["det_score"] == pytest.approx(0.9)
 
     def test_an_unloadable_gallery_reports_the_reason_instead_of_crashing(self):

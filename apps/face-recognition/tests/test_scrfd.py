@@ -91,7 +91,7 @@ class TestDecode:
         dets = scrfd.decode(flatten(blocks, seed=1), IDENTITY,
                             conf_thres=0.5, iou_thres=0.4, model_size=NET)
         assert len(dets) == 1
-        ax, ay = (4 + 0.5) * 32, (6 + 0.5) * 32          # 144, 208
+        ax, ay = 4 * 32, 6 * 32                          # 128, 192 (no half-cell offset)
         half = 2.0 * 32                                   # 64 px
         assert dets[0]["box"] == pytest.approx(
             [ax - half, ay - half, ax + half, ay + half])
@@ -107,7 +107,7 @@ class TestDecode:
         blocks = blank_outputs()
         plant(blocks, 32, col=4, row=6, score=0.9, half_cells=2.0)
         d = scrfd.decode(flatten(blocks, seed=2), info, conf_thres=0.5)[0]
-        assert d["box"] == pytest.approx([80.0, 144.0 - 80.0, 208.0, 272.0 - 80.0])
+        assert d["box"] == pytest.approx([64.0, 128.0 - 80.0, 192.0, 256.0 - 80.0])
         assert all(0 <= p[1] <= 480 for p in d["kps"])
 
     def test_confidence_threshold_drops_weak_anchors(self):
