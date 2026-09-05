@@ -1,0 +1,306 @@
+{
+  "id": "face-recognition",
+  "name": "Face Recognition",
+  "name_zh": "人脸识别",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/face-recognition.png",
+  "type": "self-hosted",
+  "scene": "Access & Attendance",
+  "scene_zh": "门禁考勤",
+  "description": "On-device 1:N face identification. SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, and the embedding is matched against an enrolled gallery by cosine similarity. Faces are tracked, so a reported identity is the argmax of the evidence accumulated over that person's frames rather than one frame's nearest neighbour, and faces too small to embed reliably are gated out instead of matched to whoever happens to be closest. An optional MiniFASNet anti-spoofing head suppresses printed photos and phone screens: a face that fails liveness contributes no evidence at all. Enrollment runs over a loopback HTTP command channel, from the live camera or from a posted still. No image and no embedding leaves the device.",
+  "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=1.6.4",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
+  "models": [
+    {
+      "id": "scrfd",
+      "file": "models/scrfd500m_640_fp16.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "face"
+      ],
+      "norm": "scrfd-baked",
+      "role": "stage1_detector",
+      "description": "SCRFD-500M raw head: nine 2-D tensors (score/bbox/kps per stride 8/16/32). Output ORDER is not part of any contract; scrfd.py maps them by shape."
+    },
+    {
+      "id": "arcface",
+      "file": "models/arcface_mbf_fp16.rknn",
+      "task": "embed",
+      "input": [
+        1,
+        112,
+        112,
+        3
+      ],
+      "quant": "fp16",
+      "norm": "arcface-baked",
+      "dim": 512,
+      "role": "stage2_embedder",
+      "description": "MobileFaceNet ArcFace, (1,512) raw embedding; L2 normalization happens in the app."
+    },
+    {
+      "id": "liveness",
+      "file": "models/liveness_minifasnet_fp16.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        80,
+        80,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "channel_order": "BGR",
+      "norm": "none",
+      "classes": [
+        "fake_2d",
+        "real",
+        "fake_3d"
+      ],
+      "role": "stage3_liveness",
+      "description": "MiniFASNet 2.7_80x80 anti-spoofing. Takes BGR with NO normalization; the app flips channels before infer. softmax()[1] is P(real)."
+    }
+  ],
+  "default_model": "scrfd",
+  "postproc": "detect",
+  "model_tag": "rv1126b:scrfd500m+mbf512@fp16",
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,label,score,cls} + extra{model_tag,enrolled,faces[]{track_id,bbox,det_score,name,score,live,liveness_score,stable,gated,reason}}",
+    "topic": "recamera/face-recognition/results",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Face box, original-frame xyxy pixels"},
+      {"name": "label", "from": "results[].label", "type": "string", "description": "Recognised person, or 'unknown' when no gallery entry cleared match_threshold, the face was gated, or it failed liveness"},
+      {"name": "score", "from": "results[].score", "type": "float", "description": "Cosine similarity to the winning gallery template on this track's most recent embedding; 0 when nobody matched"},
+      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "Class index, always 0 ('face')"},
+      {"name": "model_tag", "from": "extra.model_tag", "type": "string", "description": "Detector+embedder identity the gallery is bound to. Embeddings are NOT comparable across tags, so a gallery written under a different tag is refused rather than silently matching nobody"},
+      {"name": "enrolled", "from": "extra.enrolled", "type": "integer", "description": "People currently in the gallery"},
+      {"name": "gallery_error", "from": "extra.gallery_error", "type": "string", "optional": true, "description": "Present only when the gallery file could not be loaded (usually a model_tag mismatch); recognition runs with an empty gallery"},
+      {"name": "track_id", "from": "extra.faces[].track_id", "type": "integer", "optional": true, "description": "Stable per-person identity across frames; null when the face was not associated to a track this frame"},
+      {"name": "face_bbox", "from": "extra.faces[].bbox", "type": "bbox<float>[4]", "coord": "norm_xyxy", "description": "Same box as results[].box, normalised to [0,1]"},
+      {"name": "det_score", "from": "extra.faces[].det_score", "type": "float", "description": "SCRFD detection confidence, separate from the recognition score"},
+      {"name": "name", "from": "extra.faces[].name", "type": "string", "optional": true, "description": "Recognised name, or null (results[].label carries 'unknown' for the same case)"},
+      {"name": "live", "from": "extra.faces[].live", "type": "bool", "optional": true, "description": "Anti-spoofing verdict; null when liveness is disabled or has not run for this track yet"},
+      {"name": "liveness_score", "from": "extra.faces[].liveness_score", "type": "float", "optional": true, "description": "P(real) from MiniFASNet on this track's most recent liveness run"},
+      {"name": "stable", "from": "extra.faces[].stable", "type": "bool", "description": "The track has accumulated at least min_track_frames of embedding evidence, so the identity has settled"},
+      {"name": "gated", "from": "extra.faces[].gated", "type": "bool", "description": "Face was below min_face_px (or unassociated), so no embedding ran and no identity is claimed"},
+      {"name": "reason", "from": "extra.faces[].reason", "type": "string", "optional": true, "description": "Why this face has no name despite being embedded; currently 'spoof'"}
+    ],
+    "default_mapping": [
+      {"source": "detection.count", "target": "face_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
+      {"source": "results | last", "target": "recognition", "topic": "recamera/{{ app }}/recognition", "task": "detection"}
+    ]
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Face detection",
+        "title_zh": "人脸检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Face confidence",
+            "title_zh": "人脸置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "max_faces",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max faces / frame",
+            "title_zh": "每帧最大人脸数",
+            "description": "Upper bound on embeddings per frame. The NPU has one core and runs serially, so this is the app's per-frame worst case; faces past the cut still appear in results[] only if they win the score sort.",
+            "description_zh": "每帧特征提取次数的上限。NPU 单核串行，这个值就是每帧的最坏开销；按检测分数排序取前 N。",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 5
+          },
+          {
+            "key": "min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face size (px)",
+            "title_zh": "最小人脸尺寸（像素）",
+            "description": "Quality gate: faces whose shorter box side is below this in the ORIGINAL frame are never embedded. Below roughly this size the aligned 112x112 chip is mostly upsampling artefact, and a garbage embedding does not fail — it matches somebody. Gated faces still appear in results with gated=true and label 'unknown', and cost no inference.",
+            "description_zh": "质量门控：原图中短边小于此值的人脸不做特征提取。低于这个尺寸，对齐后的 112x112 基本是插值伪影，而错误的特征不会报错，只会匹配到某个人。被门控的人脸仍出现在 results 中，标 gated=true、label 为 unknown，且不消耗推理。",
+            "min": 0,
+            "max": 320,
+            "step": 8,
+            "default": 64
+          }
+        ]
+      },
+      {
+        "key": "recognition",
+        "title": "Recognition",
+        "title_zh": "识别",
+        "items": [
+          {
+            "key": "match_threshold",
+            "type": "number",
+            "apply": "restart",
+            "title": "Match threshold (cosine)",
+            "title_zh": "匹配阈值（余弦）",
+            "description": "Minimum cosine similarity between a face embedding and a gallery template to claim that identity. Raising it trades recall for precision; below it the face is reported as 'unknown' rather than as the closest person.",
+            "description_zh": "判定为某个已注册身份所需的最小余弦相似度。调高换取更高准确率、更低召回；低于阈值时报 unknown，而不是报最接近的那个人。",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.01,
+            "default": 0.40
+          },
+          {
+            "key": "embed_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "Re-embed every N frames",
+            "title_zh": "每 N 帧重提特征",
+            "description": "How often an already-tracked face is embedded again. Between two embeddings the track keeps reporting its accumulated verdict, so raising this spreads NPU load without blanking the output.",
+            "description_zh": "已跟踪人脸多久重新提取一次特征。两次提取之间沿用已累积的结论，因此调大只会摊平 NPU 负载，不会让输出变空。",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 5
+          },
+          {
+            "key": "min_track_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Embeddings before a verdict settles",
+            "title_zh": "结论生效所需特征帧数",
+            "description": "Embedding samples a tracked face must accumulate before its identity is reported as stable=true. The name is emitted before this too (stable=false) so the UI is not blank while a person is being measured.",
+            "description_zh": "一张被跟踪的人脸需要累积多少次特征提取，其身份才标记为 stable=true。在此之前照常输出名字（stable=false），避免测量期间界面空白。",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 3
+          },
+          {
+            "key": "evidence_decay",
+            "type": "number",
+            "apply": "live",
+            "title": "Evidence decay per embedding",
+            "title_zh": "证据衰减系数",
+            "description": "Accumulated per-name vote weight is multiplied by this before each new sample is folded in. 1.0 never forgets (best for a fixed entry point); below 1.0 lets a track that was re-associated to a different person converge onto the new one instead of carrying the old identity.",
+            "description_zh": "每次加入新样本前，已累积的每个名字的票权先乘以该系数。1.0 表示永不遗忘（固定入口场景最稳）；小于 1.0 时，若跟踪框被错误关联到另一个人，可以逐步收敛到新身份而不是一直沿用旧结论。",
+            "min": 0.5,
+            "max": 1.0,
+            "step": 0.01,
+            "default": 1.0
+          },
+          {
+            "key": "track_max_lost",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Track lost budget (frames)",
+            "title_zh": "跟踪丢失容忍帧数",
+            "description": "Frames a face may go undetected before its track — and its accumulated identity evidence — is dropped. Too high and a new person inherits the previous one's evidence when they stand in the same place.",
+            "description_zh": "人脸连续多少帧检不到后丢弃该跟踪及其累积证据。设得过大时，下一个站在同一位置的人可能继承上一个人的证据。",
+            "min": 1,
+            "max": 120,
+            "step": 1,
+            "default": 15
+          },
+          {
+            "key": "enroll_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Frames per camera enrollment",
+            "title_zh": "摄像头注册采集帧数",
+            "description": "Embeddings averaged into one template when enrolling from the live camera. More frames average out blur and pose, but the HTTP request waits for all of them within its 15 s budget.",
+            "description_zh": "摄像头注册时，平均多少次特征形成一个模板。帧数越多越能抵消模糊与姿态偏差，但 HTTP 请求要在 15 秒预算内等齐。",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 5
+          }
+        ]
+      },
+      {
+        "key": "liveness",
+        "title": "Anti-spoofing",
+        "title_zh": "活体检测",
+        "items": [
+          {
+            "key": "liveness_enabled",
+            "type": "boolean",
+            "apply": "restart",
+            "title": "Enable liveness check",
+            "title_zh": "启用活体检测",
+            "description": "Run MiniFASNet on every embedding frame. Costs one extra 80x80 inference per embedded face; a face that fails contributes no identity evidence at all, so a printed photo cannot accumulate its way to a match. Requires models/liveness_minifasnet_fp16.rknn.",
+            "description_zh": "在每个特征提取帧上运行 MiniFASNet。每张脸多一次 80x80 推理；未通过的帧完全不贡献身份证据，因此照片翻拍无法逐帧累积成一次匹配。需要 models/liveness_minifasnet_fp16.rknn。",
+            "default": false
+          },
+          {
+            "key": "liveness_threshold",
+            "type": "number",
+            "apply": "live",
+            "title": "Liveness threshold P(real)",
+            "title_zh": "活体阈值 P(real)",
+            "description": "Minimum softmax probability of the 'real' class for a face to be treated as live.",
+            "description_zh": "判定为真人所需的 real 类 softmax 概率下限。",
+            "min": 0.1,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          }
+        ]
+      },
+      {
+        "key": "control",
+        "title": "Enrollment endpoint",
+        "title_zh": "注册接口",
+        "items": [
+          {
+            "key": "cmd_port",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Command port",
+            "title_zh": "指令端口",
+            "description": "TCP port for the enrollment/admin HTTP endpoint, bound to 127.0.0.1. Enrollment writes the gallery, so this is a loopback control channel rather than a second public port. 0 disables it entirely.",
+            "description_zh": "注册/管理 HTTP 接口的 TCP 端口，绑定在 127.0.0.1。注册会写入人脸库，因此这是本地控制通道而非对外端口。设为 0 则完全关闭。",
+            "min": 0,
+            "max": 65535,
+            "step": 1,
+            "default": 8125
+          }
+        ]
+      }
+    ]
+  }
+}
