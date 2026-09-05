@@ -95,3 +95,9 @@ imports `rknn` or `librknnrt`.
 ```bash
 uv run pytest apps/face-recognition/tests -q
 ```
+
+## Measured on device (2026-09-05)
+
+RV1126B, FP16 models: **7.9 fps** with one face (inference 102 ms avg), live recognition score 0.85–0.87,
+device fp16 embedding vs fp32 reference cosine 0.9999. Liveness on: 7.4 fps, not yet validated at close range.
+Details and raw logs in `evaluation/README.md`.
