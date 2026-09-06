@@ -528,7 +528,7 @@
             "min": 0.0,
             "max": 0.05,
             "step": 0.001,
-            "default": 0.003
+            "default": 0.006
           },
           {
             "key": "liveness_motion_high",
@@ -723,7 +723,7 @@
             "min": 0.3,
             "max": 0.95,
             "step": 0.05,
-            "default": 0.65
+            "default": 0.55
           },
           {
             "key": "liveness_t_spoof",
@@ -736,7 +736,7 @@
             "min": 0.05,
             "max": 0.9,
             "step": 0.05,
-            "default": 0.45
+            "default": 0.35
           },
           {
             "key": "liveness_depth_enabled",

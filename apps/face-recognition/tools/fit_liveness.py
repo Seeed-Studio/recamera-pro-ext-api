@@ -37,8 +37,11 @@ DEFAULT_WEIGHTS = {"texture": 0.70, "motion": 0.30, "depth": 0.20,
 DEFAULT_CAL = {"floor": 0.003, "high": 0.020, "corr_low": 0.15,
                "corr_high": 0.65}
 
+# depth_* are absent from captures taken with no depth model installed; they
+# arrive as NaN and every per-feature ROC skips exactly the rows it is missing
+# from, so a mixed set of captures still fits.
 FEATURES = ("P_tex_v2", "P_tex_v1se", "motion_residual", "correlation", "EAR",
-            "face_px_size")
+            "face_px_size", "depth_planarity", "depth_score")
 
 
 def _f(v) -> float:
@@ -136,7 +139,11 @@ def roc_threshold(y: np.ndarray, score: np.ndarray,
     tpr = np.array([float((s[y == 1] >= t).sum()) / n_pos for t in cand])
     fpr = np.array([float((s[y == 0] >= t).sum()) / n_neg for t in cand])
 
-    order = np.argsort(fpr, kind="stable")
+    # Sort by fpr AND tpr. Sorting on fpr alone leaves the ties in candidate
+    # order, which is tpr-DESCENDING, so a perfectly separable feature ends its
+    # fpr==0 run at tpr==0 and the trapezoid rule then charges the curve for a
+    # descent that is not in it (measured: 0.917 instead of 1.0 on 6+6 rows).
+    order = np.lexsort((tpr, fpr))
     # numpy 2 renamed trapz; the device may still be on numpy 1.
     trapezoid = getattr(np, "trapezoid", None) or np.trapz
     auc = float(trapezoid(tpr[order], fpr[order]))
@@ -232,6 +239,8 @@ def report(data: Dict[str, np.ndarray], cal: Dict[str, float],
                                cal["floor"], cal["high"], cal["corr_low"],
                                cal["corr_high"])
     fused = fused_score(tex_mean, motion, data["blink"], None, weights)
+    depth = data["depth_score"]
+    fused_d = fused_score(tex_mean, motion, data["blink"], depth, weights)
     y = data["y"]
     return {
         "rows": int(y.size),
@@ -242,7 +251,10 @@ def report(data: Dict[str, np.ndarray], cal: Dict[str, float],
         "motion_residual": roc_threshold(y, data["motion_residual"], max_far),
         "correlation": roc_threshold(y, data["correlation"], max_far),
         "motion_score": roc_threshold(y, motion, max_far),
+        # depth_score is 1 - planarity, already oriented "higher = more live".
+        "depth_score": roc_threshold(y, depth, max_far),
         "fused": roc_threshold(y, fused, max_far),
+        "fused_with_depth": roc_threshold(y, fused_d, max_far),
     }
 
 

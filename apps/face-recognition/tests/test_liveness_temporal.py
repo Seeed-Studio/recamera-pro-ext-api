@@ -262,7 +262,8 @@ class TestFusion:
 
     def test_a_first_verdict_inside_the_band_stays_pending(self):
         cfg = _cfg()
-        st = self._state(0.55, 3, cfg)
+        assert cfg.t_spoof < 0.45 < cfg.t_live     # inside the hysteresis band
+        st = self._state(0.45, 3, cfg)
         out = lt.fuse_liveness(st, 5.0, 0.0, None, None, cfg)
         assert out["decision"] == "pending"
         assert out["reason"] == "uncertain"

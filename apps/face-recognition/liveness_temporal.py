@@ -62,7 +62,7 @@ class LivenessConfig:
     min_samples: int = 3
     motion_window_sec: float = 1.75
     timeout_sec: float = 2.0
-    motion_noise_floor: float = 0.003
+    motion_noise_floor: float = 0.006
     motion_high: float = 0.020
     correlation_low: float = 0.15
     correlation_high: float = 0.65
@@ -80,8 +80,8 @@ class LivenessConfig:
     w_motion: float = 0.30
     w_depth: float = 0.20
     blink_bonus: float = 1.0
-    t_live: float = 0.65
-    t_spoof: float = 0.45
+    t_live: float = 0.55
+    t_spoof: float = 0.35
     depth_enabled: bool = False
 
     @classmethod
