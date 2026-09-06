@@ -10,6 +10,7 @@ something that authenticates.
                {"op":"remove","name":"alice"}
                {"op":"list"}
                {"op":"reload"}
+               {"op":"liveness_capture","label":"real","seconds":20}
     GET  /gallery                       same as {"op":"list"}
 
 Every response: ``{"op", "ok", "model_tag", "users", ...}`` plus ``"err"`` when
@@ -31,7 +32,11 @@ from typing import Any, Dict, Optional
 
 DEFAULT_TIMEOUT = 15.0
 MAX_BODY = 8 * 1024 * 1024      # a base64 JPEG, generously
-VALID_OPS = ("enroll", "remove", "list", "reload")
+VALID_OPS = ("enroll", "remove", "list", "reload", "liveness_capture")
+# A capture runs for up to `liveness_capture_max_sec`; the request waits for the
+# deadline so the ack can report the real row count. Its budget is therefore the
+# duration plus a margin, not the fixed enrollment timeout.
+CAPTURE_GRACE = 10.0
 
 
 class CmdServer:
@@ -45,6 +50,7 @@ class CmdServer:
         remove_user(str) -> bool
         reload()         -> int
         submit_enroll(req: dict) -> concurrent.futures.Future
+        start_liveness_capture(label: str, seconds: float) -> dict
     """
 
     def __init__(self, port: int, ops: Any, host: str = "127.0.0.1",
@@ -162,6 +168,8 @@ class CmdServer:
                     return 404, self.envelope(op, False,
                                               err=f"no such user: {name}")
                 return 200, self.envelope(op, True, name=name)
+            if op == "liveness_capture":
+                return self._capture(req)
             # -- enroll ------------------------------------------------- #
             name = str(req.get("name") or "").strip()
             if not name:
@@ -190,3 +198,30 @@ class CmdServer:
             return 200, self.envelope(op, True, **{"name": name, **(res or {})})
         except Exception as e:                  # noqa: BLE001
             return 500, self.envelope(op, False, err=str(e))
+
+    def _capture(self, req: Dict[str, Any]):
+        """Arm one calibration capture and wait for its deadline.
+
+        The frame loop writes the rows (it is the only thread that has frames);
+        this handler only validates, arms and blocks on the future the app hands
+        back, exactly like enrollment.
+        """
+        op = "liveness_capture"
+        try:
+            arm = self.ops.start_liveness_capture(req.get("label"),
+                                                  req.get("seconds"))
+        except ValueError as e:
+            return 400, self.envelope(op, False, err=str(e))
+        fut: Optional[Future] = (arm or {}).pop("future", None)
+        if fut is None:
+            return 200, self.envelope(op, True, **(arm or {}))
+        budget = float(arm.get("seconds") or 0.0) + CAPTURE_GRACE
+        try:
+            res = fut.result(timeout=budget)
+        except FutureTimeout:
+            return 504, self.envelope(op, False, **arm,
+                                      err=f"capture did not finish within "
+                                          f"{budget:g}s (is the loop running?)")
+        except Exception as e:                  # noqa: BLE001
+            return 400, self.envelope(op, False, **arm, err=str(e))
+        return 200, self.envelope(op, True, **{**arm, **(res or {})})

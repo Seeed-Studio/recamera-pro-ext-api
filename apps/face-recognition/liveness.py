@@ -11,15 +11,20 @@ caller must flip channels (``crop[..., ::-1]``) before ``infer``.
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
 LIVENESS_INPUT_SIZE = 80
 LIVENESS_CROP_SCALE = 2.7
+# MiniFASNetV1SE is trained on a WIDER 4.0x crop of the SAME box. The pair is an
+# ensemble precisely because the two see different context: 2.7x sees the face,
+# 4.0x sees the face plus whatever frames it — a phone bezel, a paper edge.
+LIVENESS_CROP_SCALE_V1SE = 4.0
 # Index of the "real" class in the softmax output (same for 2- and 3-class).
 LIVENESS_REAL_INDEX = 1
+N_LOGITS = 3
 
 
 def get_expanded_box(
@@ -102,3 +107,51 @@ def real_probability(outputs) -> float:
     probs = softmax(np.asarray(arr).reshape(-1))
     idx = LIVENESS_REAL_INDEX if probs.size > LIVENESS_REAL_INDEX else 0
     return float(probs[idx])
+
+
+def real_probability_strict(outputs) -> float:
+    """`real_probability` with the three-logit head asserted, not guessed.
+
+    Both MiniFAS variants shipped here are 3-class (fake_2d / real / fake_3d).
+    A silently-2-class or transposed export would still produce a plausible
+    number through the lenient path, and an anti-spoofing head that is quietly
+    reading the wrong index fails OPEN. So the ensemble path refuses instead.
+    """
+    arr = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
+    flat = np.asarray(arr).reshape(-1)
+    if flat.size != N_LOGITS:
+        raise ValueError(
+            f"liveness head must emit exactly {N_LOGITS} logits, got {flat.size}")
+    return float(softmax(flat)[LIVENESS_REAL_INDEX])
+
+
+def infer_texture_ensemble(
+    frame_bgr: np.ndarray,
+    bbox_xywh: Tuple[float, float, float, float],
+    model_v2,
+    model_v1se,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Run the 2.7x and 4.0x MiniFAS heads once each on independent crops.
+
+    Returns ``(P_v2_real, P_v1se_real, mean)``. The mean is the arithmetic mean
+    of whichever heads are present — a missing `model_v1se` degrades to the
+    single-model behaviour rather than failing, because `optional: true` models
+    can legitimately be absent from an install.
+
+    Each crop is cut fresh from `frame_bgr`: the 4.0x view is NOT a resize of
+    the 2.7x one, which would hand V1SE upsampled pixels for the context it
+    exists to look at.
+    """
+    ps: list = []
+    p_v2: Optional[float] = None
+    p_v1se: Optional[float] = None
+    if model_v2 is not None:
+        crop = crop_minifas(frame_bgr, bbox_xywh, LIVENESS_CROP_SCALE)
+        p_v2 = real_probability_strict(model_v2.infer(crop))
+        ps.append(p_v2)
+    if model_v1se is not None:
+        crop = crop_minifas(frame_bgr, bbox_xywh, LIVENESS_CROP_SCALE_V1SE)
+        p_v1se = real_probability_strict(model_v1se.infer(crop))
+        ps.append(p_v1se)
+    mean = (sum(ps) / len(ps)) if ps else None
+    return p_v2, p_v1se, mean

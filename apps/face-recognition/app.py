@@ -15,8 +15,11 @@ Python (internal/KIT_APP_SHAPE_SPEC.md §1/§3):
              align.align_face          5-point similarity warp to 112x112
              self.models.arcface       512-D embedding, L2-normalized here
              gallery.match             cosine linear scan over enrolled people
-             (optional) liveness       MiniFAS 2.7_80x80, P(real) < threshold
-                                       -> spoof: no name, no vote
+             (optional) liveness       MiniFAS 2.7x + 4.0x texture ensemble,
+                                       five-point motion, sampled FaceMesh
+                                       blink -> fused per-track verdict; a
+                                       spoof gets no name and no vote, and a
+                                       PENDING verdict gets no name either
              per-track evidence        accumulate cosine weight per candidate
         -> self.emit()           results[] (box/label/score) + extra.faces[]
 
@@ -64,7 +67,11 @@ Run on device (inference requires root):
 from __future__ import annotations
 
 import base64
+import json
+import os
 import queue
+import threading
+import time
 import traceback
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -72,12 +79,17 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from kit import config as kit_cfg
 from kit.app import App, run_app
+from kit.logic import drowsiness
 from kit.logic.tracker import Tracker, TrackerConfig
+from kit.runtime.postprocess import landmark as landmark_post
 
 import align
+import depth_liveness
 import gallery as gallery_mod
 import liveness as liveness_mod
+import liveness_temporal as lt
 import scrfd
 from cmd_server import CmdServer
 
@@ -85,9 +97,15 @@ MODEL_TAG = "rv1126b:scrfd500m+mbf512@fp16"
 SCRFD_ID = "scrfd"
 ARCFACE_ID = "arcface"
 LIVENESS_ID = "liveness"
+LIVENESS_V1SE_ID = "liveness_v1se"
+FACEMESH_ID = "facemesh"
 DET_SIZE = 640
+FACEMESH_SIZE = 192
+FACEMESH_PAD = 0.25
 EMBED_DIM = 512
 UNKNOWN = "unknown"
+CAPTURE_FILE = "liveness_capture.jsonl"
+CAPTURE_LABELS = ("real", "print", "screen")
 
 
 @dataclass
@@ -102,6 +120,11 @@ class TrackState:
     live: Optional[bool] = None
     liveness_score: Optional[float] = None
     reason: Optional[str] = None
+    # -- liveness v2 ---------------------------------------------------- #
+    lv: lt.LivenessState = field(default_factory=lt.LivenessState)
+    first_seen: Optional[float] = None   # frame pts of this track's first sample
+    last_texture: int = -(10 ** 9)       # frame index of the last texture run
+    liveness: Optional[dict] = None      # last fused verdict object
 
     def add(self, name: Optional[str], cos: float, decay: float) -> None:
         if decay != 1.0:
@@ -141,6 +164,7 @@ class FaceRecognitionApp(App):
     enroll_frames: int = 5
     liveness_enabled: bool = False
     liveness_threshold: float = 0.5
+    liveness_capture_max_sec: int = 60
     cmd_port: int = 8125
     cmd_host: str = "127.0.0.1"
 
@@ -154,6 +178,10 @@ class FaceRecognitionApp(App):
         self._jobs: "queue.Queue" = queue.Queue()
         self._enroll: Optional[dict] = None      # in-flight camera enrollment
         self._server: Optional[CmdServer] = None
+        self._lv_cfg = lt.LivenessConfig()
+        self._capture: Optional[dict] = None     # in-flight calibration capture
+        self._capture_lock = threading.Lock()
+        self._capture_dir: Optional[str] = None  # overridden in tests
 
     # -- setup ---------------------------------------------------------- #
     def setup(self, config) -> None:
@@ -176,6 +204,13 @@ class FaceRecognitionApp(App):
         self.liveness_enabled = bool(c.get("liveness_enabled", self.liveness_enabled))
         self.liveness_threshold = float(c.get("liveness_threshold",
                                               self.liveness_threshold))
+        self.liveness_capture_max_sec = int(c.get("liveness_capture_max_sec",
+                                                  self.liveness_capture_max_sec))
+        self._lv_cfg = lt.LivenessConfig.from_config(c)
+        # `_rt` (which carries start()'s app_dir) is only populated AFTER
+        # setup() returns, so resolve the install dir the same way the kit does.
+        if self._capture_dir is None:
+            self._capture_dir = kit_cfg.app_dir_of(self)
         self.cmd_port = int(c.get("cmd_port", self.cmd_port))
         self.cmd_host = str(c.get("cmd_host", self.cmd_host))
 
@@ -216,6 +251,7 @@ class FaceRecognitionApp(App):
         return len(self.gallery)
 
     def finish(self) -> None:
+        self._stop_capture()
         if self._server is not None:
             try:
                 self._server.stop()
@@ -247,7 +283,115 @@ class FaceRecognitionApp(App):
         self._jobs.put((job, fut))
         return fut
 
+    # -- calibration capture --------------------------------------------- #
+    @property
+    def capture_path(self) -> str:
+        return os.path.join(self._capture_dir or os.getcwd(), CAPTURE_FILE)
+
+    def start_liveness_capture(self, label: str, seconds: float) -> dict:
+        """Arm a bounded, append-only feature capture. Returns the ack skeleton.
+
+        ★Features, not frames★ the rows carry the model outputs and the geometry
+        the fusion actually consumes — never pixels, never an embedding, never a
+        name. A calibration set therefore contains nothing that identifies the
+        people who helped record it, which is the only way collecting one on a
+        deployed camera is defensible.
+
+        The returned dict carries a `future` that the command handler waits on;
+        the loop resolves it at the deadline with the written-row count, so the
+        caller gets the real number rather than a zero taken at arm time.
+        """
+        lab = str(label or "").strip().lower()
+        if lab not in CAPTURE_LABELS:
+            raise ValueError(f"label must be one of {list(CAPTURE_LABELS)}")
+        try:
+            secs = float(seconds)
+        except (TypeError, ValueError):
+            raise ValueError("seconds must be a number")
+        hi = max(1.0, float(self.liveness_capture_max_sec))
+        if not (0 < secs <= hi):
+            raise ValueError(f"seconds must be in (0, {hi:g}]")
+        with self._capture_lock:
+            if self._capture is not None:
+                raise ValueError("a liveness capture is already running")
+            path = self.capture_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fh = open(path, "a", encoding="utf-8")
+            fut: Future = Future()
+            fut.set_running_or_notify_cancel()
+            self._capture = {"label": lab, "seconds": secs, "path": path,
+                             "fh": fh, "rows": 0, "fut": fut,
+                             "deadline": time.monotonic() + secs,
+                             "flushed": time.monotonic()}
+        print(f"[face-recognition] liveness capture {lab!r} for {secs:g}s -> "
+              f"{path}", flush=True)
+        return {"label": lab, "seconds": secs, "path": path, "future": fut}
+
+    def _capture_row(self, state: TrackState, track_id, ts: float,
+                     face_px: float, p_v2, p_v1se, ear, blink: bool) -> None:
+        cap = self._capture
+        if cap is None:
+            return
+        row = {
+            "P_tex_v2": (None if p_v2 is None else float(p_v2)),
+            "P_tex_v1se": (None if p_v1se is None else float(p_v1se)),
+            "motion_residual": (None if state.lv.motion_residual is None
+                                else float(state.lv.motion_residual)),
+            "correlation": (None if state.lv.correlation is None
+                            else float(state.lv.correlation)),
+            "EAR": (None if ear is None else float(ear)),
+            "blink": bool(blink),
+            "face_px_size": float(face_px),
+            "track_id": (None if track_id is None else int(track_id)),
+            "label": cap["label"],
+            "ts": float(ts),
+        }
+        try:
+            cap["fh"].write(json.dumps(row, ensure_ascii=False) + "\n")
+            cap["rows"] += 1
+        except Exception as e:                  # noqa: BLE001
+            print(f"[face-recognition] capture write failed: {e}", flush=True)
+
+    def _tick_capture(self) -> None:
+        """Flush at least once a second; close and ack at the deadline."""
+        cap = self._capture
+        if cap is None:
+            return
+        now = time.monotonic()
+        if now >= cap["deadline"]:
+            self._stop_capture()
+            return
+        if now - cap["flushed"] >= 1.0:
+            try:
+                cap["fh"].flush()
+            except Exception:                   # noqa: BLE001
+                pass
+            cap["flushed"] = now
+
+    def _stop_capture(self) -> None:
+        with self._capture_lock:
+            cap, self._capture = self._capture, None
+        if cap is None:
+            return
+        try:
+            cap["fh"].flush()
+            cap["fh"].close()
+        except Exception:                       # noqa: BLE001
+            pass
+        print(f"[face-recognition] liveness capture done: {cap['rows']} rows -> "
+              f"{cap['path']}", flush=True)
+        fut: Future = cap["fut"]
+        if not fut.done():
+            fut.set_result({"label": cap["label"], "seconds": cap["seconds"],
+                            "path": cap["path"], "rows": int(cap["rows"])})
+
     # -- inference helpers ---------------------------------------------- #
+    def _model(self, model_id: str):
+        """A manifest model handle, or None when the install lacks that file."""
+        try:
+            return self.models[model_id]
+        except Exception:                       # noqa: BLE001
+            return None
     def _embed(self, frame_rgb: np.ndarray, kps5) -> np.ndarray:
         chip = align.align_face(frame_rgb, kps5)
         out = self.models[ARCFACE_ID].infer(chip)
@@ -255,11 +399,98 @@ class FaceRecognitionApp(App):
                          dtype=np.float32).reshape(-1)
         return gallery_mod.l2_normalize(vec)
 
-    def _liveness(self, frame_rgb: np.ndarray, box) -> float:
-        x1, y1, x2, y2 = box
-        bgr = np.ascontiguousarray(np.asarray(frame_rgb)[..., ::-1])
-        crop = liveness_mod.crop_minifas(bgr, (x1, y1, x2 - x1, y2 - y1))
-        return liveness_mod.real_probability(self.models[LIVENESS_ID].infer(crop))
+    def _facemesh_ear(self, frame, box) -> Optional[float]:
+        """One FaceMesh pass on a 192 ROI -> average EAR, or None.
+
+        `crop_roi_hw` is the padded-square ROI contract the landmark decoder's
+        `roi_map` is defined against, so the 468 points come back in ORIGINAL
+        frame pixels and the 6-point EAR is scale-free.
+        """
+        model = self._model(FACEMESH_ID)
+        if model is None:
+            return None
+        roi, roi_map = self.crop_roi_hw(frame, box, FACEMESH_SIZE, FACEMESH_PAD)
+        lm, presence = landmark_post.decode(model.infer(roi), roi_map,
+                                            FACEMESH_SIZE)
+        if presence < 0.5:
+            return None
+        m = drowsiness.compute_metrics(
+            lm, ear_threshold=float(self._lv_cfg.ear_threshold))
+        return float(m.avg_ear) if m.valid else None
+
+    def _sample_liveness(self, frame, det: dict, state: TrackState,
+                         track_id) -> dict:
+        """Advance one track's liveness evidence for this frame.
+
+        Three different clocks, deliberately:
+
+          * **motion** every detected frame — the five points are already
+            decoded, so the whole term costs a 5x2 least-squares fit on the CPU
+            and the window would be useless if it were sampled sparsely.
+          * **texture** on `embed_interval` frames (every frame while a capture
+            is running, because a calibration set must not contain the same
+            cached value repeated).
+          * **FaceMesh** every `liveness_facemesh_interval` frames — it is the
+            expensive term and a blink lasts several frames.
+        """
+        lv = state.lv
+        now = float(frame.pts or 0.0)
+        if state.first_seen is None:
+            state.first_seen = now
+        x1, y1, x2, y2 = det["box"]
+        face_px = max(1.0, float(min(x2 - x1, y2 - y1)))
+
+        motion_score = None
+        kps = det.get("kps")
+        if kps is not None:
+            try:
+                _res, _corr, motion_score = lt.update_motion(
+                    lv, now, kps, face_px, self._lv_cfg)
+            except Exception as e:              # noqa: BLE001
+                print(f"[face-recognition] motion update failed: {e}", flush=True)
+
+        capturing = self._capture is not None
+        p_v2 = p_v1se = None
+        due = capturing or (self._frame_idx - state.last_texture) >= self.embed_interval
+        if due:
+            state.last_texture = self._frame_idx
+            try:
+                bgr = np.ascontiguousarray(np.asarray(frame.data)[..., ::-1])
+                p_v2, p_v1se, mean = liveness_mod.infer_texture_ensemble(
+                    bgr, (x1, y1, x2 - x1, y2 - y1),
+                    self._model(LIVENESS_ID), self._model(LIVENESS_V1SE_ID))
+                lv.update_texture(mean, self._lv_cfg.texture_ema_alpha)
+            except Exception as e:              # noqa: BLE001
+                print(f"[face-recognition] liveness failed: {e}", flush=True)
+
+        ear = None
+        interval = max(1, int(self._lv_cfg.facemesh_interval))
+        if self._frame_idx % interval == 0:
+            try:
+                ear = self._facemesh_ear(frame, det["box"])
+            except Exception as e:              # noqa: BLE001
+                print(f"[face-recognition] facemesh failed: {e}", flush=True)
+        blink = lt.update_blink(lv, ear, self._lv_cfg.ear_threshold,
+                                self._lv_cfg.blink_min_samples,
+                                self._lv_cfg.blink_max_samples)
+
+        depth_score = None
+        if self._lv_cfg.depth_enabled:
+            d = depth_liveness.depth_flatness(frame.data, det["box"])
+            lv.depth = d
+            depth_score = None if d is None else d.get("score")
+
+        out = lt.fuse_liveness(lv, now, state.first_seen, motion_score,
+                               depth_score, self._lv_cfg)
+        state.liveness = out
+        state.live = (True if lv.decision == lt.LIVE
+                      else False if lv.decision == lt.SPOOF else None)
+        # ★Legacy field★ `liveness_score` stays a probability-like number, i.e.
+        # the texture EMA — NOT the fused score, which mixes in motion and would
+        # silently change meaning for an existing consumer.
+        state.liveness_score = lv.texture_ema
+        self._capture_row(state, track_id, now, face_px, p_v2, p_v1se, ear, blink)
+        return out
 
     def _detect(self, model_input, info) -> List[dict]:
         outs = self.models[SCRFD_ID].infer(model_input)
@@ -394,6 +625,8 @@ class FaceRecognitionApp(App):
                     st = self._states.setdefault(tid, TrackState())
 
                 if not gated and st is not None:
+                    if self.liveness_enabled or self._capture is not None:
+                        self._sample_liveness(frame, d, st, tid)
                     due = (st.samples == 0
                            or (self._frame_idx - st.last_embed) >= self.embed_interval)
                     if due:
@@ -402,6 +635,15 @@ class FaceRecognitionApp(App):
                 if st is not None and not gated:
                     name, score, stable = st.verdict(self.min_track_frames)
                     st.name, st.score = name, score
+                    # ★Pitfall: identity leakage while pending★ a track whose
+                    # liveness has not settled must not publish a name -- the
+                    # UI would show it, an MQTT consumer would act on it, and
+                    # the verdict that arrives 300 ms later cannot un-open a
+                    # door. Withheld, not renamed: `reason` says why.
+                    if self.liveness_enabled and st.live is not True:
+                        name, score = None, 0.0
+                        if st.reason is None:
+                            st.reason = st.lv.decision
                 else:
                     name, score, stable = None, 0.0, False
 
@@ -423,6 +665,7 @@ class FaceRecognitionApp(App):
                     "stable": bool(stable),
                     "gated": bool(gated),
                     "reason": (st.reason if st is not None else None),
+                    "liveness": (st.liveness if st is not None else None),
                 })
 
             extra = {"model_tag": MODEL_TAG, "faces": face_rows,
@@ -431,24 +674,33 @@ class FaceRecognitionApp(App):
                 extra["gallery_error"] = self.gallery_error
             self.emit([], t, results=results, extra=extra)
 
+            # After emit: the rows for THIS frame are already written, so the
+            # deadline closes the file with a complete frame in it.
+            self._tick_capture()
+        self._stop_capture()
+
     def _embed_track(self, st: TrackState, frame_rgb, det: dict) -> None:
-        """One embedding + optional liveness for `det`, folded into `st`."""
+        """One embedding for `det`, folded into `st`, gated on the verdict.
+
+        The liveness sampling itself already ran this frame (`_sample_liveness`)
+        because motion and blink need EVERY frame, not the embedding cadence.
+        What is left here is the consequence of the verdict.
+        """
         st.last_embed = self._frame_idx
         st.reason = None
         if self.liveness_enabled:
-            try:
-                p = self._liveness(frame_rgb, det["box"])
-            except Exception as e:              # noqa: BLE001
-                print(f"[face-recognition] liveness failed: {e}", flush=True)
-                p = None
-            st.liveness_score = p
-            st.live = None if p is None else bool(p >= self.liveness_threshold)
             if st.live is False:
                 # ★A spoof contributes NO evidence★ -- annotating it while still
                 # voting would let a phone screen accumulate an identity.
                 st.reason = "spoof"
                 st.votes.clear()
                 st.last_cos.clear()
+                return
+            if st.live is not True:
+                # Pending: do not spend the embedder, and do not accumulate
+                # evidence that would become actionable the moment the verdict
+                # flips. The track re-tries on the next due frame.
+                st.reason = st.lv.decision
                 return
         try:
             emb = self._embed(frame_rgb, det["kps"])

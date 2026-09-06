@@ -138,6 +138,46 @@ class _FakeLiveness:
         self.released = True
 
 
+class _FakeFacemesh:
+    """1404 landmark values + a presence logit; `ear_fn(k)` picks the EAR.
+
+    Only the twelve eye indices matter to the app, so the rest of the mesh is a
+    constant blob. The six-point EAR is scale-free and the ROI map only rescales
+    the points, so writing them in ROI pixel space is enough.
+    """
+
+    def __init__(self, path, ear_fn=None):
+        self.path = path
+        self.calls = 0
+        self.input_shapes = []
+        self.released = False
+        self.ear_fn = ear_fn or (lambda k: 0.30)
+
+    @staticmethod
+    def _eye(pts, idx, cx, cy, ear):
+        # EAR = (|p1-p5| + |p2-p4|) / (2*|p0-p3|); with a 10 px width and both
+        # vertical pairs at +-h, EAR == 0.2*h.
+        h = 5.0 * float(ear)
+        xy = [(-5.0, 0.0), (-2.0, h), (2.0, h), (5.0, 0.0), (2.0, -h),
+              (-2.0, -h)]
+        for k, (dx, dy) in zip(idx, xy):
+            pts[k] = (cx + dx, cy + dy, 0.0)
+
+    def infer(self, x):
+        self.input_shapes.append(tuple(np.asarray(x).shape))
+        k = self.calls
+        self.calls += 1
+        ear = float(self.ear_fn(k))
+        pts = np.full((468, 3), 96.0, dtype=np.float32)
+        self._eye(pts, (33, 160, 158, 133, 153, 144), 70.0, 80.0, ear)
+        self._eye(pts, (362, 385, 387, 263, 373, 380), 120.0, 80.0, ear)
+        return [pts.reshape(1, 1, 1, 1404),
+                np.array([[5.0]], dtype=np.float32)]
+
+    def release(self):
+        self.released = True
+
+
 class _RecordingSink(ResultSink):
     def __init__(self):
         self.payloads = []
@@ -159,20 +199,28 @@ class _Base:
     def harness(self, tmp_path, monkeypatch):
         monkeypatch.setenv("FACE_GALLERY_DIR", str(tmp_path))
         self.tmp_path = tmp_path
-        self.det, self.emb, self.live = [], [], []
+        self.det, self.emb, self.live, self.mesh = [], [], [], []
         self.frames_fn = _frames
         self.faces_fn = None
         self.vec_fn = None
         self.p_fn = None
+        self.p_v1se_fn = None
+        self.ear_fn = None
 
         def _fake_load(app_self, path):
             base = os.path.basename(path)
             if "arcface" in base:
                 m = _FakeArcface(path, vec_fn=self.vec_fn)
                 self.emb.append(m)
+            elif "v1se" in base:
+                m = _FakeLiveness(path, p_fn=self.p_v1se_fn or self.p_fn)
+                self.live.append(m)
             elif "liveness" in base:
                 m = _FakeLiveness(path, p_fn=self.p_fn)
                 self.live.append(m)
+            elif "landmark" in base:
+                m = _FakeFacemesh(path, ear_fn=self.ear_fn)
+                self.mesh.append(m)
             else:
                 m = _FakeScrfd(path, faces_fn=self.faces_fn)
                 self.det.append(m)
@@ -271,7 +319,7 @@ class TestPayload(_Base):
         assert len(faces) == 2
         assert set(faces[0]) == {"track_id", "bbox", "det_score", "name",
                                  "score", "live", "liveness_score", "stable",
-                                 "gated", "reason"}
+                                 "gated", "reason", "liveness"}
         assert faces[0]["bbox"] == pytest.approx(
             [64.0 / 640, 48.0 / 480, 192.0 / 640, 176.0 / 480])
         assert faces[0]["det_score"] == pytest.approx(0.9)
@@ -350,34 +398,122 @@ class TestRecognitionBehaviour(_Base):
 
 
 class TestLiveness(_Base):
-    def test_disabled_by_default_and_the_model_is_never_run(self):
+    """Liveness v2: two-model texture ensemble, motion, blink, fusion.
+
+    The scripted faces never move (the SCRFD fixture plants the same cell every
+    frame), so the motion term is always at the noise floor and every test that
+    wants a verdict inside three frames drives `liveness_timeout_sec=0` -- which
+    is exactly the "still face at timeout" path.
+    """
+
+    LIVE = dict(min_face_px=64, embed_interval=1, liveness_enabled=True,
+                liveness_timeout_sec=0.0)
+
+    def test_disabled_by_default_and_no_liveness_model_is_run(self):
         self.enroll(alice=0)
         sink, _app = self.run_app(min_face_px=64, embed_interval=1)
-        assert self.live[-1].calls == 0
-        assert sink.payloads[-1][0]["faces"][0]["live"] is None
+        assert [m.calls for m in self.live] == [0, 0]
+        assert self.mesh[-1].calls == 0
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["live"] is None
+        assert face["liveness"] is None
 
-    def test_enabled_runs_an_80x80_bgr_crop_per_embedding(self):
+    def test_enabled_runs_BOTH_texture_heads_on_80x80_bgr_crops(self):
+        """★The ensemble is two crops, not one★ -- 2.7x and 4.0x of the same
+        box, each cut from the frame, each seen by its own head."""
         self.enroll(alice=0)
-        sink, _app = self.run_app(min_face_px=64, embed_interval=1,
-                                  liveness_enabled=True)
-        assert self.live[-1].calls == N_EMITTED
-        assert set(self.live[-1].input_shapes) == {(80, 80, 3)}
+        sink, _app = self.run_app(**self.LIVE)
+        assert len(self.live) == 2
+        assert [m.calls for m in self.live] == [N_EMITTED, N_EMITTED]
+        for m in self.live:
+            assert set(m.input_shapes) == {(80, 80, 3)}
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["live"] is True
+        assert face["name"] == "alice"
+
+    def test_the_two_heads_are_averaged_into_the_texture_score(self):
+        self.p_fn = lambda k: 0.90
+        self.p_v1se_fn = lambda k: 0.50
+        self.enroll(alice=0)
+        sink, _app = self.run_app(**self.LIVE)
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["liveness"]["texture"] == pytest.approx(0.70, abs=1e-3)
+
+    def test_the_legacy_fields_survive_and_carry_the_texture_ema(self):
+        """★Old consumers★ `live` stays a nullable bool and `liveness_score`
+        stays a probability -- the TEXTURE EMA, not the fused score, which mixes
+        in motion and would silently change meaning."""
+        self.enroll(alice=0)
+        sink, _app = self.run_app(**self.LIVE)
         face = sink.payloads[-1][0]["faces"][0]
         assert face["live"] is True
         assert face["liveness_score"] == pytest.approx(0.99, abs=1e-3)
+        assert face["liveness"]["texture"] == pytest.approx(
+            face["liveness_score"])
+
+    def test_the_nested_liveness_object_has_the_documented_shape(self):
+        self.enroll(alice=0)
+        sink, _app = self.run_app(**self.LIVE)
+        lv = sink.payloads[-1][0]["faces"][0]["liveness"]
+        assert set(lv) == {"score", "texture", "motion", "blink", "decision",
+                           "reason"}
+        assert lv["decision"] == "live"
+        assert lv["blink"] is False
+        assert lv["motion"] is None          # a static face is not motion
+
+    def test_a_pending_verdict_withholds_the_identity(self):
+        """★Pitfall: identity leakage while pending★ a name published before the
+        verdict settles cannot be un-published by the verdict."""
+        self.enroll(alice=0)
+        sink, _app = self.run_app(min_face_px=64, embed_interval=1,
+                                  liveness_enabled=True,
+                                  liveness_timeout_sec=99.0)
+        for payload, _ in sink.payloads:
+            face = payload["faces"][0]
+            assert face["liveness"]["decision"] == "pending"
+            assert face["name"] is None
+            assert payload["results"][0]["label"] == "unknown"
+        assert self.emb[-1].calls == 0       # and no embedding was spent
+
+    def test_a_still_face_is_admitted_once_the_timeout_elapses(self):
+        """Motion is DROPPED, not scored as zero: standing still is not a
+        spoof."""
+        self.enroll(alice=0)
+        sink, _app = self.run_app(**self.LIVE)
+        lv = sink.payloads[-1][0]["faces"][0]["liveness"]
+        assert lv["decision"] == "live"
+        assert lv["reason"] == "timeout_texture"
+
+    def test_a_blink_overrides_a_bad_texture_score(self):
+        self.enroll(alice=0)
+        self.p_fn = lambda k: 0.10
+        self.ear_fn = lambda k: (0.10 if k == 1 else 0.30)
+        sink, _app = self.run_app(liveness_facemesh_interval=1, **self.LIVE)
+        face = sink.payloads[-1][0]["faces"][0]
+        assert self.mesh[-1].calls == N_EMITTED
+        assert set(self.mesh[-1].input_shapes) == {(192, 192, 3)}
+        assert face["liveness"]["blink"] is True
+        assert face["liveness"]["reason"] == "blink"
+        assert face["live"] is True
         assert face["name"] == "alice"
+
+    def test_facemesh_is_sampled_not_run_every_frame(self):
+        self.enroll(alice=0)
+        self.run_app(liveness_facemesh_interval=2, **self.LIVE)
+        # three tracked frames, every second one sampled
+        assert self.mesh[-1].calls == 1
 
     def test_a_spoof_gets_no_name_and_no_embedding_is_wasted_on_it(self):
         """★A spoof must not vote★ -- annotating it while still counting the
         embedding would let a phone screen accumulate an identity."""
         self.enroll(alice=0)
         self.p_fn = lambda k: 0.01
-        sink, _app = self.run_app(min_face_px=64, embed_interval=1,
-                                  liveness_enabled=True)
+        sink, _app = self.run_app(**self.LIVE)
         payload, _ = sink.payloads[-1]
         face = payload["faces"][0]
         assert face["live"] is False
         assert face["reason"] == "spoof"
+        assert face["liveness"]["decision"] == "spoof"
         assert face["name"] is None
         assert payload["results"][0]["label"] == "unknown"
         assert self.emb[-1].calls == 0       # never reached the embedder
@@ -385,10 +521,17 @@ class TestLiveness(_Base):
     def test_a_spoof_frame_wipes_the_evidence_a_live_frame_built(self):
         self.enroll(alice=0)
         self.p_fn = lambda k: (0.99 if k == 0 else 0.01)
-        sink, _app = self.run_app(min_face_px=64, embed_interval=1,
-                                  liveness_enabled=True)
+        sink, _app = self.run_app(liveness_min_samples=1,
+                                  liveness_texture_ema_alpha=1.0, **self.LIVE)
         labels = [p["results"][0]["label"] for p, _ in sink.payloads]
         assert labels == ["alice", "unknown", "unknown"]
+
+    def test_track_retirement_drops_the_liveness_state(self):
+        """A new person standing where the last one stood must not inherit a
+        blink that was never theirs."""
+        self.faces_fn = lambda k: ([(BIG, 0.9)] if k < 2 else [])
+        sink, app = self.run_app(track_max_lost=1, **self.LIVE)
+        assert app._states == {}
 
 
 class TestEnrollmentThroughTheLoop(_Base):
