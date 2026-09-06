@@ -56,6 +56,22 @@ def _frames():
                     fmt="RGB", pts=(N_GREY + i) * DT)
 
 
+class _FakeDepth:
+    """Flat depth map: every face box scores as a plane (no live evidence)."""
+    input_size = 256
+
+    def __init__(self, path):
+        self.path = path
+        self.calls = 0
+
+    def infer(self, x):
+        self.calls += 1
+        return [np.full((1, 256, 256), 100.0, np.float32)]
+
+    def release(self):
+        pass
+
+
 class _FakeSource:
     def __init__(self, *a, frames_fn=None, **kw):
         self.kw = kw
@@ -206,6 +222,7 @@ class _Base:
         self.p_fn = None
         self.p_v1se_fn = None
         self.ear_fn = None
+        self.depth = []
 
         def _fake_load(app_self, path):
             base = os.path.basename(path)
@@ -221,6 +238,9 @@ class _Base:
             elif "landmark" in base:
                 m = _FakeFacemesh(path, ear_fn=self.ear_fn)
                 self.mesh.append(m)
+            elif "depth" in base:
+                m = _FakeDepth(path)
+                self.depth.append(m)
             else:
                 m = _FakeScrfd(path, faces_fn=self.faces_fn)
                 self.det.append(m)

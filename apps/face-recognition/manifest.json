@@ -109,6 +109,22 @@
       "optional": true,
       "role": "stage4_blink",
       "description": "MediaPipe FaceMesh 468-point landmarks on a 192x192 padded square ROI, sampled every liveness_facemesh_interval frames. Only the 6-point eye aspect ratio is consumed, to detect a blink; a blink is positive proof of liveness, and its absence is never treated as a spoof."
+    },
+    {
+      "id": "depth",
+      "file": "models/depth_midas_v21_small_256_fp16.rknn",
+      "task": "depth",
+      "input": [
+        1,
+        256,
+        256,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "norm": "in-graph (ImageNet), feed raw uint8 RGB",
+      "role": "liveness_depth",
+      "note": "MiDaS v2.1 small; ~51 ms on RV1126B. Used only when liveness_depth_enabled."
     }
   ],
   "default_model": "scrfd",
@@ -124,31 +140,159 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Face box, original-frame xyxy pixels"},
-      {"name": "label", "from": "results[].label", "type": "string", "description": "Recognised person, or 'unknown' when no gallery entry cleared match_threshold, the face was gated, or it failed liveness"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Cosine similarity to the winning gallery template on this track's most recent embedding; 0 when nobody matched"},
-      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "Class index, always 0 ('face')"},
-      {"name": "model_tag", "from": "extra.model_tag", "type": "string", "description": "Detector+embedder identity the gallery is bound to. Embeddings are NOT comparable across tags, so a gallery written under a different tag is refused rather than silently matching nobody"},
-      {"name": "enrolled", "from": "extra.enrolled", "type": "integer", "description": "People currently in the gallery"},
-      {"name": "gallery_error", "from": "extra.gallery_error", "type": "string", "optional": true, "description": "Present only when the gallery file could not be loaded (usually a model_tag mismatch); recognition runs with an empty gallery"},
-      {"name": "track_id", "from": "extra.faces[].track_id", "type": "integer", "optional": true, "description": "Stable per-person identity across frames; null when the face was not associated to a track this frame"},
-      {"name": "face_bbox", "from": "extra.faces[].bbox", "type": "bbox<float>[4]", "coord": "norm_xyxy", "description": "Same box as results[].box, normalised to [0,1]"},
-      {"name": "det_score", "from": "extra.faces[].det_score", "type": "float", "description": "SCRFD detection confidence, separate from the recognition score"},
-      {"name": "name", "from": "extra.faces[].name", "type": "string", "optional": true, "description": "Recognised name, or null (results[].label carries 'unknown' for the same case)"},
-      {"name": "live", "from": "extra.faces[].live", "type": "bool", "optional": true, "description": "Anti-spoofing verdict; null when liveness is disabled, or while the track's verdict is still 'pending' (see faces[].liveness.decision)"},
-      {"name": "liveness_score", "from": "extra.faces[].liveness_score", "type": "float", "optional": true, "description": "Texture evidence only: the exponential moving average of the two-model MiniFAS P(real) for this track. Kept as a plain probability for consumers written against v1; the fused verdict is faces[].liveness.score"},
-      {"name": "liveness", "from": "extra.faces[].liveness", "type": "object", "optional": true, "description": "Fused liveness object {score,texture,motion,blink,decision,reason} (+ depth{planarity,score} when depth evidence is enabled and available); null when liveness has not run for this track"},
-      {"name": "liveness_decision", "from": "extra.faces[].liveness.decision", "type": "string", "optional": true, "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending"},
-      {"name": "liveness_reason", "from": "extra.faces[].liveness.reason", "type": "string", "optional": true, "description": "Which evidence produced the verdict: 'insufficient_samples', 'awaiting_motion', 'uncertain', 'blink', or a '+'-joined list of the terms used ('texture', 'texture+motion', 'timeout_texture', ...)"},
-      {"name": "liveness_motion", "from": "extra.faces[].liveness.motion", "type": "float", "optional": true, "description": "Calibrated five-point motion score in [0,1] after the similarity transform between frames is removed; null when the window is too short or the residual is at or below liveness_motion_noise_floor (detector jitter), in which case motion is dropped from the fusion rather than scored as zero"},
-      {"name": "liveness_blink", "from": "extra.faces[].liveness.blink", "type": "bool", "optional": true, "description": "A blink has been observed on this track. True is proof of liveness; false is NOT evidence of a spoof"},
-      {"name": "stable", "from": "extra.faces[].stable", "type": "bool", "description": "The track has accumulated at least min_track_frames of embedding evidence, so the identity has settled"},
-      {"name": "gated", "from": "extra.faces[].gated", "type": "bool", "description": "Face was below min_face_px (or unassociated), so no embedding ran and no identity is claimed"},
-      {"name": "reason", "from": "extra.faces[].reason", "type": "string", "optional": true, "description": "Why this face has no name despite being embedded; currently 'spoof'"}
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Face box, original-frame xyxy pixels"
+      },
+      {
+        "name": "label",
+        "from": "results[].label",
+        "type": "string",
+        "description": "Recognised person, or 'unknown' when no gallery entry cleared match_threshold, the face was gated, or it failed liveness"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Cosine similarity to the winning gallery template on this track's most recent embedding; 0 when nobody matched"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "Class index, always 0 ('face')"
+      },
+      {
+        "name": "model_tag",
+        "from": "extra.model_tag",
+        "type": "string",
+        "description": "Detector+embedder identity the gallery is bound to. Embeddings are NOT comparable across tags, so a gallery written under a different tag is refused rather than silently matching nobody"
+      },
+      {
+        "name": "enrolled",
+        "from": "extra.enrolled",
+        "type": "integer",
+        "description": "People currently in the gallery"
+      },
+      {
+        "name": "gallery_error",
+        "from": "extra.gallery_error",
+        "type": "string",
+        "optional": true,
+        "description": "Present only when the gallery file could not be loaded (usually a model_tag mismatch); recognition runs with an empty gallery"
+      },
+      {
+        "name": "track_id",
+        "from": "extra.faces[].track_id",
+        "type": "integer",
+        "optional": true,
+        "description": "Stable per-person identity across frames; null when the face was not associated to a track this frame"
+      },
+      {
+        "name": "face_bbox",
+        "from": "extra.faces[].bbox",
+        "type": "bbox<float>[4]",
+        "coord": "norm_xyxy",
+        "description": "Same box as results[].box, normalised to [0,1]"
+      },
+      {
+        "name": "det_score",
+        "from": "extra.faces[].det_score",
+        "type": "float",
+        "description": "SCRFD detection confidence, separate from the recognition score"
+      },
+      {
+        "name": "name",
+        "from": "extra.faces[].name",
+        "type": "string",
+        "optional": true,
+        "description": "Recognised name, or null (results[].label carries 'unknown' for the same case)"
+      },
+      {
+        "name": "live",
+        "from": "extra.faces[].live",
+        "type": "bool",
+        "optional": true,
+        "description": "Anti-spoofing verdict; null when liveness is disabled, or while the track's verdict is still 'pending' (see faces[].liveness.decision)"
+      },
+      {
+        "name": "liveness_score",
+        "from": "extra.faces[].liveness_score",
+        "type": "float",
+        "optional": true,
+        "description": "Texture evidence only: the exponential moving average of the two-model MiniFAS P(real) for this track. Kept as a plain probability for consumers written against v1; the fused verdict is faces[].liveness.score"
+      },
+      {
+        "name": "liveness",
+        "from": "extra.faces[].liveness",
+        "type": "object",
+        "optional": true,
+        "description": "Fused liveness object {score,texture,motion,blink,decision,reason} (+ depth{planarity,score} when depth evidence is enabled and available); null when liveness has not run for this track"
+      },
+      {
+        "name": "liveness_decision",
+        "from": "extra.faces[].liveness.decision",
+        "type": "string",
+        "optional": true,
+        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending"
+      },
+      {
+        "name": "liveness_reason",
+        "from": "extra.faces[].liveness.reason",
+        "type": "string",
+        "optional": true,
+        "description": "Which evidence produced the verdict: 'insufficient_samples', 'awaiting_motion', 'uncertain', 'blink', or a '+'-joined list of the terms used ('texture', 'texture+motion', 'timeout_texture', ...)"
+      },
+      {
+        "name": "liveness_motion",
+        "from": "extra.faces[].liveness.motion",
+        "type": "float",
+        "optional": true,
+        "description": "Calibrated five-point motion score in [0,1] after the similarity transform between frames is removed; null when the window is too short or the residual is at or below liveness_motion_noise_floor (detector jitter), in which case motion is dropped from the fusion rather than scored as zero"
+      },
+      {
+        "name": "liveness_blink",
+        "from": "extra.faces[].liveness.blink",
+        "type": "bool",
+        "optional": true,
+        "description": "A blink has been observed on this track. True is proof of liveness; false is NOT evidence of a spoof"
+      },
+      {
+        "name": "stable",
+        "from": "extra.faces[].stable",
+        "type": "bool",
+        "description": "The track has accumulated at least min_track_frames of embedding evidence, so the identity has settled"
+      },
+      {
+        "name": "gated",
+        "from": "extra.faces[].gated",
+        "type": "bool",
+        "description": "Face was below min_face_px (or unassociated), so no embedding ran and no identity is claimed"
+      },
+      {
+        "name": "reason",
+        "from": "extra.faces[].reason",
+        "type": "string",
+        "optional": true,
+        "description": "Why this face has no name despite being embedded; currently 'spoof'"
+      }
     ],
     "default_mapping": [
-      {"source": "detection.count", "target": "face_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "results | last", "target": "recognition", "topic": "recamera/{{ app }}/recognition", "task": "detection"}
+      {
+        "source": "detection.count",
+        "target": "face_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "results | last",
+        "target": "recognition",
+        "topic": "recamera/{{ app }}/recognition",
+        "task": "detection"
+      }
     ]
   },
   "config_schema": {
@@ -224,7 +368,7 @@
             "min": 0.1,
             "max": 0.9,
             "step": 0.01,
-            "default": 0.40
+            "default": 0.4
           },
           {
             "key": "embed_interval",

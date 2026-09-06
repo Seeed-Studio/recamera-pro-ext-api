@@ -99,6 +99,8 @@ ARCFACE_ID = "arcface"
 LIVENESS_ID = "liveness"
 LIVENESS_V1SE_ID = "liveness_v1se"
 FACEMESH_ID = "facemesh"
+DEPTH_ID = "depth"
+DEPTH_INPUT = 256           # MiDaS v2.1 small; matches manifest models[depth].input
 DET_SIZE = 640
 FACEMESH_SIZE = 192
 FACEMESH_PAD = 0.25
@@ -207,6 +209,17 @@ class FaceRecognitionApp(App):
         self.liveness_capture_max_sec = int(c.get("liveness_capture_max_sec",
                                                   self.liveness_capture_max_sec))
         self._lv_cfg = lt.LivenessConfig.from_config(c)
+        if self._lv_cfg.depth_enabled:
+            try:
+                dm = self._model(DEPTH_ID)
+                dm.input_size = DEPTH_INPUT
+                depth_liveness.set_model(dm)
+            except Exception as e:              # noqa: BLE001
+                print(f"[face-recognition] depth model unavailable, depth evidence off: {e}",
+                      flush=True)
+                self._lv_cfg.depth_enabled = False
+        else:
+            depth_liveness.set_model(None)
         # `_rt` (which carries start()'s app_dir) is only populated AFTER
         # setup() returns, so resolve the install dir the same way the kit does.
         if self._capture_dir is None:
@@ -474,10 +487,17 @@ class FaceRecognitionApp(App):
                                 self._lv_cfg.blink_min_samples,
                                 self._lv_cfg.blink_max_samples)
 
+        # Depth runs on the texture cadence (every embed_interval frames, or
+        # every frame while capturing): ~51 ms per call on RV1126B, so not
+        # per frame. Between runs the last result is reused.
         depth_score = None
         if self._lv_cfg.depth_enabled:
-            d = depth_liveness.depth_flatness(frame.data, det["box"])
-            lv.depth = d
+            if due:
+                try:
+                    lv.depth = depth_liveness.depth_flatness(frame.data, det["box"])
+                except Exception as e:          # noqa: BLE001
+                    print(f"[face-recognition] depth failed: {e}", flush=True)
+            d = lv.depth
             depth_score = None if d is None else d.get("score")
 
         out = lt.fuse_liveness(lv, now, state.first_seen, motion_score,
