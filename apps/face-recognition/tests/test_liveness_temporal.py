@@ -306,3 +306,13 @@ class TestConfigBinding:
         assert cfg.t_live == pytest.approx(0.8)
         assert cfg.depth_enabled is True
         assert cfg.texture_ema_alpha == pytest.approx(0.4)   # untouched default
+
+
+def test_result_dict_exports_only_scalar_depth_fields():
+    """depth_flatness returns diagnostics (box tuple, n); the payload must
+    keep only numbers -- the device crashed on float(tuple)."""
+    st = lt.LivenessState()
+    st.depth = {"planarity": 0.84, "relief": 0.02, "score": 0.16,
+                "box": (1, 2, 3, 4), "n": 1600, "note": "x"}
+    out = lt.result_dict(st, None)
+    assert out["depth"] == {"planarity": 0.84, "relief": 0.02, "score": 0.16, "n": 1600.0}

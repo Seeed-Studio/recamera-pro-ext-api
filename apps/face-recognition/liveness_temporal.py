@@ -374,7 +374,11 @@ def result_dict(state: LivenessState, depth_score: Optional[float] = None) -> Di
         "reason": state.reason,
     }
     if state.depth is not None:
-        out["depth"] = {k: float(v) for k, v in state.depth.items()}
+        # depth_flatness also returns diagnostics (box tuple, sample count);
+        # only scalar numbers belong in the result payload.
+        out["depth"] = {k: float(v) for k, v in state.depth.items()
+                        if isinstance(v, (int, float, np.floating, np.integer))
+                        and not isinstance(v, bool)}
     elif depth_score is not None:
         out["depth"] = {"score": float(depth_score)}
     return out
