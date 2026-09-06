@@ -27,3 +27,26 @@ Detector dominates (fp16 SCRFD at 640). Per-track embedding runs every `embed_in
 MiniFASNet runs (fps 7.4) but at a 47 px face P(real) was 0.15–0.30 (judged spoof). Needs a re-test with a face ≥ 100 px before enabling by default.
 
 Raw data: `smoke-ws-20260905.jsonl`, `run-20260905-recognize.log`, `gallery-device.json`, `fp32_ref.py` + `probe_003301.*`.
+
+## Liveness v2 (2026-09-06)
+
+Texture ensemble (MiniFASNetV2 2.7x + V1SE 4.0x) + per-track EMA + 5-point
+passive motion + FaceMesh blink + optional MiDaS depth. Costs measured with the
+in-app stage timer (`liveness timing` every 30 frames):
+
+| Stage | NPU / CPU | Cost |
+|---|---|---|
+| FaceMesh 192 (fp16 / int8) | NPU | 16 ms / 7 ms per call; gated to faces ≥100 px, every 2 frames |
+| MiniFAS ×2 | NPU + crop | 22 ms per texture-due frame (every 5) |
+| MiDaS small 256 | NPU | 51 ms per texture-due frame, faces ≥150 px, off by default |
+| motion (5-pt similarity residual) | CPU | 3.6 ms/face/frame (was 14 ms before the incremental rewrite) |
+
+One face, liveness on (depth off): **7.5 fps** vs 7.7 with liveness off.
+Two 46–64 px faces before the cost gates: 4.9 fps.
+
+Offline calibration (`liveness-calibration-offline.md`, NUAA + CASIA-FASD +
+display-replay, 1723 rows): texture ensemble AUC 0.993 held-out; defaults now
+`t_live 0.55 / t_spoof 0.35 / motion_noise_floor 0.006`; depth inverted on
+face-filling datasets (AUC 0.43) → stays disabled until calibrated on device
+frames. Blink / real micro-motion could not be measured offline.
+
