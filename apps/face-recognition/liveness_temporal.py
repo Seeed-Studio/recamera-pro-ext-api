@@ -109,6 +109,7 @@ class LivenessState:
     texture_ema: Optional[float] = None
     texture_samples: int = 0
     keypoints: Deque = field(default_factory=deque)
+    pair_residuals: Deque = field(default_factory=deque)   # (t_older, residual/scale) per adjacent pair
     ear: Optional[float] = None
     closed_samples: int = 0
     blink_seen: bool = False
@@ -146,19 +147,26 @@ def _similarity_residual(a: np.ndarray, b: np.ndarray) -> Optional[np.ndarray]:
     scale and the rotation, so ``z = <a, b> / <a, a>``. Returns an (n, 2)
     residual in the same pixel units as the inputs, or None when `a` is
     degenerate (all five points coincident).
+
+    Plain Python on purpose: for five points the ~20 tiny numpy calls of the
+    vectorised form cost ~4 ms per call on the RV1126B's Cortex-A7, the
+    arithmetic itself is microseconds.
     """
-    ac = a.astype(np.float64)
-    bc = b.astype(np.float64)
-    ac = ac - ac.mean(axis=0, keepdims=True)
-    bc = bc - bc.mean(axis=0, keepdims=True)
-    za = ac[:, 0] + 1j * ac[:, 1]
-    zb = bc[:, 0] + 1j * bc[:, 1]
-    denom = float(np.vdot(za, za).real)
+    n = len(a)
+    if n == 0 or len(b) != n:
+        return None
+    ax = [float(v) for v in a[:, 0]]; ay = [float(v) for v in a[:, 1]]
+    bx = [float(v) for v in b[:, 0]]; by = [float(v) for v in b[:, 1]]
+    max_ = sum(ax) / n; may = sum(ay) / n
+    mbx = sum(bx) / n; mby = sum(by) / n
+    za = [complex(x - max_, y - may) for x, y in zip(ax, ay)]
+    zb = [complex(x - mbx, y - mby) for x, y in zip(bx, by)]
+    denom = sum((p.conjugate() * p).real for p in za)
     if denom < 1e-9:
         return None
-    z = complex(np.vdot(za, zb)) / denom        # vdot conjugates the first arg
-    res = zb - z * za
-    return np.stack([res.real, res.imag], axis=1)
+    z = sum(p.conjugate() * q for p, q in zip(za, zb)) / denom
+    res = [q - z * p for p, q in zip(za, zb)]
+    return np.array([[r.real, r.imag] for r in res], dtype=np.float64)
 
 
 def _mean_offdiag_correlation(rows: np.ndarray) -> Optional[float]:
@@ -198,29 +206,28 @@ def update_motion(
     """
     pts = np.asarray(kps5, dtype=np.float64).reshape(-1, 2)
     t = float(ts)
+    # Incremental: only the newest adjacent pair is fitted per call; earlier
+    # pairs keep their residual in `pair_residuals` and leave with the window.
+    # (Refitting the whole window every frame cost ~14 ms per face on RV1126B.)
+    if state.keypoints:
+        t_prev, prev = state.keypoints[-1]
+        if prev.shape == pts.shape and pts.shape[0] >= 3:
+            r = _similarity_residual(prev, pts)
+            if r is not None:
+                state.pair_residuals.append((t_prev, r / max(1.0, float(face_px))))
     state.keypoints.append((t, pts))
     window = max(0.0, float(cfg.motion_window_sec))
     while state.keypoints and (t - state.keypoints[0][0]) > window:
         state.keypoints.popleft()
+    t_start = state.keypoints[0][0]
+    while state.pair_residuals and state.pair_residuals[0][0] < t_start:
+        state.pair_residuals.popleft()
 
     state.motion_residual = state.correlation = state.motion_score = None
-    if len(state.keypoints) < MIN_MOTION_OBS:
+    if len(state.keypoints) < MIN_MOTION_OBS or len(state.pair_residuals) < 2:
         return None, None, None
 
-    scale = max(1.0, float(face_px))
-    residuals: List[np.ndarray] = []
-    obs = list(state.keypoints)
-    for (_, a), (_, b) in zip(obs, obs[1:]):
-        if a.shape != b.shape or a.shape[0] < 3:
-            continue
-        r = _similarity_residual(a, b)
-        if r is None:
-            continue
-        residuals.append(r / scale)
-    if len(residuals) < 2:
-        return None, None, None
-
-    stack = np.stack(residuals)                       # (pairs, n, 2)
+    stack = np.stack([r for _, r in state.pair_residuals])   # (pairs, n, 2)
     rms = float(np.sqrt(np.mean(stack * stack)))
     corr = _mean_offdiag_correlation(stack.reshape(stack.shape[0], -1))
 

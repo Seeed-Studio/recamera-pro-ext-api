@@ -130,6 +130,7 @@ def infer_texture_ensemble(
     bbox_xywh: Tuple[float, float, float, float],
     model_v2,
     model_v1se,
+    rgb_input: bool = False,
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """Run the 2.7x and 4.0x MiniFAS heads once each on independent crops.
 
@@ -145,13 +146,17 @@ def infer_texture_ensemble(
     ps: list = []
     p_v2: Optional[float] = None
     p_v1se: Optional[float] = None
+    # With rgb_input=True the frame is the kit's native RGB and the channel
+    # flip is applied to the 80x80 crop, not to the whole 1280x720 frame
+    # (that full-frame copy alone cost ~40 ms per call on RV1126B).
+    def _crop(scale):
+        c = crop_minifas(frame_bgr, bbox_xywh, scale)
+        return np.ascontiguousarray(c[..., ::-1]) if rgb_input else c
     if model_v2 is not None:
-        crop = crop_minifas(frame_bgr, bbox_xywh, LIVENESS_CROP_SCALE)
-        p_v2 = real_probability_strict(model_v2.infer(crop))
+        p_v2 = real_probability_strict(model_v2.infer(_crop(LIVENESS_CROP_SCALE)))
         ps.append(p_v2)
     if model_v1se is not None:
-        crop = crop_minifas(frame_bgr, bbox_xywh, LIVENESS_CROP_SCALE_V1SE)
-        p_v1se = real_probability_strict(model_v1se.infer(crop))
+        p_v1se = real_probability_strict(model_v1se.infer(_crop(LIVENESS_CROP_SCALE_V1SE)))
         ps.append(p_v1se)
     mean = (sum(ps) / len(ps)) if ps else None
     return p_v2, p_v1se, mean

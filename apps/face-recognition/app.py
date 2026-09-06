@@ -412,6 +412,22 @@ class FaceRecognitionApp(App):
                          dtype=np.float32).reshape(-1)
         return gallery_mod.l2_normalize(vec)
 
+    # -- liveness stage timing (printed every 30 frames; cheap monotonic reads) --
+    def _lt_add(self, stage: str, t0: float) -> None:
+        acc = self.__dict__.setdefault("_lt_acc", {})
+        acc[stage] = acc.get(stage, 0.0) + (time.monotonic() - t0) * 1000.0
+        cnt = self.__dict__.setdefault("_lt_cnt", {})
+        cnt[stage] = cnt.get(stage, 0) + 1
+
+    def _lt_report(self) -> None:
+        acc = self.__dict__.get("_lt_acc") or {}
+        if not acc or self._frame_idx % 30:
+            return
+        cnt = self.__dict__.get("_lt_cnt") or {}
+        parts = ["%s=%.1fms/%d" % (k, v, cnt.get(k, 0)) for k, v in sorted(acc.items())]
+        print("[face-recognition] liveness timing (30 frames): " + " ".join(parts), flush=True)
+        acc.clear(); cnt.clear()
+
     def _facemesh_ear(self, frame, box) -> Optional[float]:
         """One FaceMesh pass on a 192 ROI -> average EAR, or None.
 
@@ -422,13 +438,20 @@ class FaceRecognitionApp(App):
         model = self._model(FACEMESH_ID)
         if model is None:
             return None
+        t0 = time.monotonic()
         roi, roi_map = self.crop_roi_hw(frame, box, FACEMESH_SIZE, FACEMESH_PAD)
-        lm, presence = landmark_post.decode(model.infer(roi), roi_map,
-                                            FACEMESH_SIZE)
+        self._lt_add("mesh_crop", t0)
+        t0 = time.monotonic()
+        out = model.infer(roi)
+        self._lt_add("mesh_infer", t0)
+        t0 = time.monotonic()
+        lm, presence = landmark_post.decode(out, roi_map, FACEMESH_SIZE)
         if presence < 0.5:
+            self._lt_add("mesh_post", t0)
             return None
         m = drowsiness.compute_metrics(
             lm, ear_threshold=float(self._lv_cfg.ear_threshold))
+        self._lt_add("mesh_post", t0)
         return float(m.avg_ear) if m.valid else None
 
     def _sample_liveness(self, frame, det: dict, state: TrackState,
@@ -456,11 +479,13 @@ class FaceRecognitionApp(App):
         motion_score = None
         kps = det.get("kps")
         if kps is not None:
+            t0 = time.monotonic()
             try:
                 _res, _corr, motion_score = lt.update_motion(
                     lv, now, kps, face_px, self._lv_cfg)
             except Exception as e:              # noqa: BLE001
                 print(f"[face-recognition] motion update failed: {e}", flush=True)
+            self._lt_add("motion", t0)
 
         capturing = self._capture is not None
         # A track already judged live keeps its verdict and only re-checks every
@@ -473,14 +498,16 @@ class FaceRecognitionApp(App):
         if due:
             state.last_texture = self._frame_idx
             lv.last_heavy_frame = self._frame_idx
+            t0 = time.monotonic()
             try:
-                bgr = np.ascontiguousarray(np.asarray(frame.data)[..., ::-1])
                 p_v2, p_v1se, mean = liveness_mod.infer_texture_ensemble(
-                    bgr, (x1, y1, x2 - x1, y2 - y1),
-                    self._model(LIVENESS_ID), self._model(LIVENESS_V1SE_ID))
+                    frame.data, (x1, y1, x2 - x1, y2 - y1),
+                    self._model(LIVENESS_ID), self._model(LIVENESS_V1SE_ID),
+                    rgb_input=True)
                 lv.update_texture(mean, self._lv_cfg.texture_ema_alpha)
             except Exception as e:              # noqa: BLE001
                 print(f"[face-recognition] liveness failed: {e}", flush=True)
+            self._lt_add("texture", t0)
 
         ear = None
         interval = max(1, int(self._lv_cfg.facemesh_interval))
@@ -501,10 +528,12 @@ class FaceRecognitionApp(App):
         depth_score = None
         if self._lv_cfg.depth_enabled:
             if due and lt.depth_allowed(face_px, self._lv_cfg, capturing):
+                t0 = time.monotonic()
                 try:
                     lv.depth = depth_liveness.depth_flatness(frame.data, det["box"])
                 except Exception as e:          # noqa: BLE001
                     print(f"[face-recognition] depth failed: {e}", flush=True)
+                self._lt_add("depth", t0)
             d = lv.depth
             depth_score = None if d is None else d.get("score")
 
@@ -701,6 +730,7 @@ class FaceRecognitionApp(App):
             if self.gallery_error:
                 extra["gallery_error"] = self.gallery_error
             self.emit([], t, results=results, extra=extra)
+            self._lt_report()
 
             # After emit: the rows for THIS frame are already written, so the
             # deadline closes the file with a complete frame in it.
