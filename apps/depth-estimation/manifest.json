@@ -1,0 +1,193 @@
+{
+  "id": "depth-estimation",
+  "name": "Depth Estimation",
+  "name_zh": "单目深度估计",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/depth-estimation.png",
+  "type": "self-hosted",
+  "scene": "Automation",
+  "scene_zh": "自动化",
+  "description": "Monocular relative depth over the live camera. Runs MiDaS v2.1 small (256x256, FP16) on the RV1126B NPU and publishes frame depth statistics, a near/mid/far zone grid and the nearest zone in frame. Depth is relative and unitless -- nothing here is a distance in metres.",
+  "description_zh": "实时单目相对深度。在 RV1126B NPU 上运行 MiDaS v2.1 small（256×256 FP16），输出整帧深度统计、近/中/远网格分区与画面中最近的分区。深度为相对值、无单位，不代表实际距离。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "capabilities": [
+    "output"
+  ],
+  "tags": [
+    "depth",
+    "monocular",
+    "proximity"
+  ],
+  "models": [
+    {
+      "id": "depth",
+      "file": "models/depth_midas_v21_small_256_fp16.rknn",
+      "task": "depth",
+      "input": [
+        1,
+        256,
+        256,
+        3
+      ],
+      "quant": "fp16",
+      "norm": "in-graph (ImageNet); RKNN built with mean 0 / std 255, feed raw uint8 RGB",
+      "output": "[1,256,256] relative inverse depth; LARGER = NEARER",
+      "role": "depth",
+      "note": "MiDaS v2.1 small, ONNX unity/inference-engine-midas model-small_opset19. ~51 ms/frame on RV1126B; see apps/face-recognition/evaluation/depth-model-selection.md"
+    }
+  ],
+  "model_tag": "rv1126b:midas_v21_small_256@fp16",
+  "postproc": "none",
+  "render": {
+    "boxes": {
+      "color_by": "label",
+      "line_width": 2
+    }
+  },
+  "output": {
+    "sink": "ws",
+    "port": 8124,
+    "schema": "results[]{box,label,cls,cls_name,score} + events[]{kind:'depth',nearest_value,nearest_near,nearest_box,nearest_row,nearest_col,min,max,mean,p5,p95,grid} + extra{depth{unit,smaller_is_nearer,source_size,valid_roi,min,max,mean,p5,p95}, grid[][], nearest{box,value,near,row,col}, rois[], depth_map, model_tag, inference_time_ms}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {"name": "zone_box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Grid zone rectangle, original-frame xyxy pixels"},
+      {"name": "zone_label", "from": "results[].label", "type": "string", "description": "Coarse proximity bucket of the zone: near / mid / far"},
+      {"name": "zone_score", "from": "results[].score", "type": "float", "description": "Mean proximity of the zone, 0 = farthest, 1 = nearest content in frame"},
+      {"name": "depth_kind", "from": "events[kind=depth].kind", "type": "string", "event_kind": "depth", "description": "Event kind, always 'depth'; one event per published frame"},
+      {"name": "nearest_value", "from": "events[kind=depth].nearest_value", "type": "float", "event_kind": "depth", "description": "Mean proximity of the nearest zone, 0..1 -- the zone-level reading a sensor should follow"},
+      {"name": "nearest_near", "from": "events[kind=depth].nearest_near", "type": "float", "event_kind": "depth", "description": "The nearest zone's near_percentile proximity, i.e. how near its nearest content is; saturates at 1.0 whenever the zone holds content at the near end of the range, which is why it selects the zone but is not the reported value"},
+      {"name": "nearest_row", "from": "events[kind=depth].nearest_row", "type": "integer", "event_kind": "depth", "description": "Row index of the nearest zone in the grid, 0 = top"},
+      {"name": "nearest_col", "from": "events[kind=depth].nearest_col", "type": "integer", "event_kind": "depth", "description": "Column index of the nearest zone in the grid, 0 = left"},
+      {"name": "nearest_box", "from": "events[kind=depth].nearest_box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "depth", "description": "Rectangle of the nearest zone, original-frame xyxy pixels"},
+      {"name": "depth_min", "from": "events[kind=depth].min", "type": "float", "unit": "relative", "event_kind": "depth", "description": "Minimum relative inverse depth over the valid region"},
+      {"name": "depth_max", "from": "events[kind=depth].max", "type": "float", "unit": "relative", "event_kind": "depth", "description": "Maximum relative inverse depth over the valid region"},
+      {"name": "depth_mean", "from": "events[kind=depth].mean", "type": "float", "unit": "relative", "event_kind": "depth", "description": "Mean relative inverse depth over the valid region"},
+      {"name": "depth_p5", "from": "events[kind=depth].p5", "type": "float", "unit": "relative", "event_kind": "depth", "description": "5th percentile, the far end of the stabilised range"},
+      {"name": "depth_p95", "from": "events[kind=depth].p95", "type": "float", "unit": "relative", "event_kind": "depth", "description": "95th percentile, the near end of the stabilised range"},
+      {"name": "smaller_is_nearer", "from": "events[kind=depth].smaller_is_nearer", "type": "boolean", "event_kind": "depth", "description": "Sign convention of the raw values; false for MiDaS inverse depth (larger = nearer)"},
+      {"name": "grid", "from": "events[kind=depth].grid", "type": "array<array<float>>", "event_kind": "depth", "description": "grid_rows x grid_cols mean proximity per zone, row-major, 0..1"},
+      {"name": "grid_size", "from": "events[kind=depth].grid_size", "type": "array<integer>", "event_kind": "depth", "description": "[grid_cols, grid_rows] the grid was computed with"},
+      {"name": "depth_valid_roi", "from": "depth.valid_roi", "type": "bbox<float>[4]", "coord": "pixel_xywh", "description": "Letterbox content rectangle the statistics were computed over, original-frame pixels; extra-only"},
+      {"name": "roi_planarity", "from": "rois[].planarity", "type": "float", "optional": true, "description": "How flat the configured ROI is; 1.0 = a perfect plane (a photo or a screen); extra-only"},
+      {"name": "roi_relief", "from": "rois[].relief", "type": "float", "optional": true, "description": "Peak-to-peak plane-fit residual of the ROI, normalised by the frame depth range; extra-only"},
+      {"name": "inference_time_ms", "from": "inference_time_ms", "type": "float", "unit": "ms", "description": "NPU time for the depth model on this frame"},
+      {"name": "model_tag", "from": "model_tag", "type": "string", "description": "Backend + model identity; depth values are only comparable within one tag"}
+    ],
+    "default_mapping": [
+      {"source": "(events.depth | last).nearest_value", "target": "nearest_depth", "topic": "recamera/{{ app }}/depth", "task": "classification"},
+      {"source": "(events.depth | last).mean", "target": "depth_mean", "topic": "recamera/{{ app }}/depth", "task": "classification"},
+      {"source": "(events.depth | last).grid", "target": "grid", "topic": "recamera/{{ app }}/depth", "task": "classification"},
+      {"source": "detection.entries", "target": "zones", "topic": "recamera/{{ app }}/zones", "task": "detection"}
+    ]
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "zones",
+        "title": "Zone grid",
+        "title_zh": "分区网格",
+        "items": [
+          {
+            "key": "grid_cols",
+            "type": "integer",
+            "apply": "live",
+            "title": "Grid columns",
+            "title_zh": "网格列数",
+            "default": 4,
+            "min": 1,
+            "max": 8,
+            "step": 1
+          },
+          {
+            "key": "grid_rows",
+            "type": "integer",
+            "apply": "live",
+            "title": "Grid rows",
+            "title_zh": "网格行数",
+            "default": 3,
+            "min": 1,
+            "max": 8,
+            "step": 1
+          },
+          {
+            "key": "near_percentile",
+            "type": "number",
+            "apply": "live",
+            "title": "Near percentile",
+            "title_zh": "近距分位数",
+            "description": "Percentile of a zone's proximity taken as its nearest content. Selects which zone is reported as nearest; the value reported for it is that zone's mean.",
+            "description_zh": "取分区内该分位数的相对深度作为其最近内容，用于选出最近分区；上报的数值是该分区的均值。",
+            "default": 95,
+            "min": 50,
+            "max": 100,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "key": "output",
+        "title": "Output",
+        "title_zh": "输出",
+        "items": [
+          {
+            "key": "emit_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "Publish every N frames",
+            "title_zh": "每 N 帧输出一次",
+            "description": "Frames between inferences. 1 runs the model on every frame; a higher value skips the inference too, not just the publish.",
+            "description_zh": "两次推理之间间隔的帧数。1 表示每帧都推理；更大的值会连推理一起跳过，而不只是跳过发送。",
+            "default": 1,
+            "min": 1,
+            "max": 30,
+            "step": 1
+          },
+          {
+            "key": "publish_map",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Publish debug depth map",
+            "title_zh": "输出调试深度图",
+            "description": "Attach a 64x48 base64 PNG of the proximity map to every frame. Debugging aid; costs bandwidth on the result stream.",
+            "description_zh": "在每帧结果中附带 64×48 的 base64 PNG 深度预览图。用于调试，会占用结果流带宽。",
+            "default": false
+          },
+          {
+            "key": "depth_roi",
+            "type": "string",
+            "apply": "live",
+            "title": "Planarity ROIs (JSON)",
+            "title_zh": "平面度 ROI（JSON）",
+            "description": "JSON list of normalised [x, y, w, h] boxes. Each one gets a plane fit reported as planarity / relief -- 1.0 means the region is flat, i.e. a photo or a screen. Empty disables it.",
+            "description_zh": "归一化 [x, y, w, h] 框的 JSON 数组。每个 ROI 会做平面拟合并输出 planarity / relief——1.0 表示该区域是平面（照片或屏幕）。留空则关闭。",
+            "default": ""
+          }
+        ]
+      }
+    ]
+  },
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "nearest_depth",
+      "name": "Nearest Depth",
+      "value_template": "{{ value_json.summary.nearest_value }}",
+      "state_class": "measurement",
+      "icon": "mdi:altimeter"
+    },
+    {
+      "component": "sensor",
+      "object_id": "depth_mean",
+      "name": "Mean Relative Depth",
+      "value_template": "{{ value_json.summary.mean }}",
+      "state_class": "measurement",
+      "icon": "mdi:image-filter-hdr"
+    }
+  ]
+}
