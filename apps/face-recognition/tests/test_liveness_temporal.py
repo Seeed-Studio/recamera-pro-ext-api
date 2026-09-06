@@ -316,3 +316,22 @@ def test_result_dict_exports_only_scalar_depth_fields():
                 "box": (1, 2, 3, 4), "n": 1600, "note": "x"}
     out = lt.result_dict(st, None)
     assert out["depth"] == {"planarity": 0.84, "relief": 0.02, "score": 0.16, "n": 1600.0}
+
+
+def test_cost_gates_and_live_recheck():
+    cfg = lt.LivenessConfig.from_config({"liveness_min_face_px": 100,
+                                         "liveness_depth_min_face_px": 150,
+                                         "liveness_live_recheck_interval": 15})
+    assert (cfg.min_face_px, cfg.depth_min_face_px, cfg.live_recheck_interval) == (100, 150, 15)
+    assert not lt.facemesh_allowed(60, cfg, capturing=False)
+    assert lt.facemesh_allowed(60, cfg, capturing=True)
+    assert lt.facemesh_allowed(120, cfg, capturing=False)
+    assert not lt.depth_allowed(120, cfg, capturing=False)
+    assert lt.depth_allowed(160, cfg, capturing=False)
+    st = lt.LivenessState()
+    st.decision = lt.LIVE; st.last_heavy_frame = 100
+    assert lt.skip_heavy_for_live(st, 110, cfg, capturing=False)
+    assert not lt.skip_heavy_for_live(st, 115, cfg, capturing=False)
+    assert not lt.skip_heavy_for_live(st, 110, cfg, capturing=True)
+    st.decision = lt.PENDING
+    assert not lt.skip_heavy_for_live(st, 110, cfg, capturing=False)

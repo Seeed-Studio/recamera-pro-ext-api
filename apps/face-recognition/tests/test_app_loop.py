@@ -541,8 +541,11 @@ class TestLiveness(_Base):
     def test_a_spoof_frame_wipes_the_evidence_a_live_frame_built(self):
         self.enroll(alice=0)
         self.p_fn = lambda k: (0.99 if k == 0 else 0.01)
+        # recheck interval 1: a live track is re-evaluated every frame here so
+        # the spoof frame right after the live one is actually observed.
         sink, _app = self.run_app(liveness_min_samples=1,
-                                  liveness_texture_ema_alpha=1.0, **self.LIVE)
+                                  liveness_texture_ema_alpha=1.0,
+                                  liveness_live_recheck_interval=1, **self.LIVE)
         labels = [p["results"][0]["label"] for p, _ in sink.payloads]
         assert labels == ["alice", "unknown", "unknown"]
 

@@ -583,6 +583,45 @@
             "default": 2
           },
           {
+            "key": "liveness_min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face (px) for FaceMesh",
+            "title_zh": "FaceMesh 最小人脸（像素）",
+            "description": "Below this short side FaceMesh is skipped: the eye aspect ratio carries no signal on a tiny face and the 192x192 model is the largest per-face cost. Capture mode ignores the gate.",
+            "description_zh": "人脸短边小于此值不跑 FaceMesh：小脸上 EAR 没有信号，而 192x192 模型是每张脸最大的开销。采样模式不受此限制。",
+            "min": 0,
+            "max": 400,
+            "step": 10,
+            "default": 100
+          },
+          {
+            "key": "liveness_depth_min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face (px) for depth",
+            "title_zh": "深度证据最小人脸（像素）",
+            "description": "Depth planarity needs tens of depth pixels inside the face box (256x256 map over a 1280-wide frame), so smaller faces skip it.",
+            "description_zh": "平面度需要人脸框内有几十个深度像素（1280 宽画面对应 256x256 深度图），更小的脸跳过。",
+            "min": 0,
+            "max": 600,
+            "step": 10,
+            "default": 150
+          },
+          {
+            "key": "liveness_live_recheck_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "Re-check a live track every N frames",
+            "title_zh": "已判活 track 每 N 帧复查",
+            "description": "Once a track is live its verdict is kept and texture/FaceMesh/depth run again only every N frames, which is where most of the per-frame cost goes on a busy scene.",
+            "description_zh": "track 判为活体后保持结论，纹理/FaceMesh/深度每 N 帧才再跑一次；多人场景的每帧开销主要来自这里。",
+            "min": 1,
+            "max": 60,
+            "step": 1,
+            "default": 15
+          },
+          {
             "key": "liveness_ear_threshold",
             "type": "number",
             "apply": "live",

@@ -463,10 +463,16 @@ class FaceRecognitionApp(App):
                 print(f"[face-recognition] motion update failed: {e}", flush=True)
 
         capturing = self._capture is not None
+        # A track already judged live keeps its verdict and only re-checks every
+        # live_recheck_interval frames -- FaceMesh is the single largest cost.
+        if lt.skip_heavy_for_live(lv, self._frame_idx, self._lv_cfg, capturing) \
+                and state.liveness is not None:
+            return state.liveness
         p_v2 = p_v1se = None
         due = capturing or (self._frame_idx - state.last_texture) >= self.embed_interval
         if due:
             state.last_texture = self._frame_idx
+            lv.last_heavy_frame = self._frame_idx
             try:
                 bgr = np.ascontiguousarray(np.asarray(frame.data)[..., ::-1])
                 p_v2, p_v1se, mean = liveness_mod.infer_texture_ensemble(
@@ -478,7 +484,9 @@ class FaceRecognitionApp(App):
 
         ear = None
         interval = max(1, int(self._lv_cfg.facemesh_interval))
-        if self._frame_idx % interval == 0:
+        if self._frame_idx % interval == 0 and \
+                lt.facemesh_allowed(face_px, self._lv_cfg, capturing):
+            lv.last_heavy_frame = self._frame_idx
             try:
                 ear = self._facemesh_ear(frame, det["box"])
             except Exception as e:              # noqa: BLE001
@@ -492,7 +500,7 @@ class FaceRecognitionApp(App):
         # per frame. Between runs the last result is reused.
         depth_score = None
         if self._lv_cfg.depth_enabled:
-            if due:
+            if due and lt.depth_allowed(face_px, self._lv_cfg, capturing):
                 try:
                     lv.depth = depth_liveness.depth_flatness(frame.data, det["box"])
                 except Exception as e:          # noqa: BLE001

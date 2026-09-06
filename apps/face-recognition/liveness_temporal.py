@@ -67,6 +67,12 @@ class LivenessConfig:
     correlation_low: float = 0.15
     correlation_high: float = 0.65
     facemesh_interval: int = 2
+    # Cost gates (capture mode ignores them): FaceMesh EAR is meaningless on
+    # tiny faces and depth needs a face patch of tens of pixels; a track that
+    # is already live is only re-checked every live_recheck_interval frames.
+    min_face_px: int = 100
+    depth_min_face_px: int = 150
+    live_recheck_interval: int = 15
     ear_threshold: float = 0.21
     blink_min_samples: int = 1
     blink_max_samples: int = 3
@@ -106,6 +112,7 @@ class LivenessState:
     ear: Optional[float] = None
     closed_samples: int = 0
     blink_seen: bool = False
+    last_heavy_frame: int = -(10 ** 9)   # frame index of the last texture/mesh/depth pass
     decision: str = PENDING           # pending|live|spoof
     score: Optional[float] = None
     reason: str = "insufficient_samples"
@@ -382,3 +389,21 @@ def result_dict(state: LivenessState, depth_score: Optional[float] = None) -> Di
     elif depth_score is not None:
         out["depth"] = {"score": float(depth_score)}
     return out
+
+
+def skip_heavy_for_live(state: LivenessState, frame_idx: int, cfg: LivenessConfig,
+                        capturing: bool) -> bool:
+    """True when a track already judged live can keep its verdict this frame
+    without spending FaceMesh/texture/depth inference."""
+    if capturing or state.decision != LIVE:
+        return False
+    return (frame_idx - state.last_heavy_frame) < max(1, int(cfg.live_recheck_interval))
+
+
+def facemesh_allowed(face_px: float, cfg: LivenessConfig, capturing: bool) -> bool:
+    return capturing or face_px >= float(cfg.min_face_px)
+
+
+def depth_allowed(face_px: float, cfg: LivenessConfig, capturing: bool) -> bool:
+    return capturing or face_px >= float(cfg.depth_min_face_px)
+
