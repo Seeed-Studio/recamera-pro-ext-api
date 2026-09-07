@@ -557,8 +557,13 @@ def normalize_app_payload(payload: dict, identity: dict,
     envelopes: List[dict] = []
     is_metrics = legacy_type in ("metric", "metrics", "meta")
     is_status = legacy_type in ("status", "summary", "state")
+    # An explicit empty result snapshot clears the previous frame even when a
+    # producer also reports metrics/workout events.  Suppressing it would keep
+    # stale detections visible and prevent recording-rule debounce from decaying.
+    # Event-only messages without a results field retain their existing shape.
     wants_frame = bool(results or primitives) or (
-        legacy_type in ("result", "results", "frame") and not events)
+        legacy_type in ("result", "results", "frame")
+        and (isinstance(payload.get("results"), list) or not events))
     if wants_frame:
         envelopes.append(_base_envelope(
             message_type="frame", message_id=f"{app_id}:{generation}:{seq}:frame",

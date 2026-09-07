@@ -120,6 +120,16 @@ class AppCoordinator:
                     app_id, current.get("reason") or "retry stop"
                 )
             )
+        if running is None and self._has_run_record(app_id):
+            # A persisted PID/PGID/boot-id tuple is an active process fence even
+            # when its leader is gone.  A helper may still own native resources,
+            # and replacing current below would destroy the exact identity that
+            # stop() needs to contain it.  Boot and periodic reconciliation must
+            # retire that record first; no start path may mint over it.
+            raise CoordinatorError(
+                "previous generation process identity remains for %s; "
+                "retry teardown before start" % app_id
+            )
         if running is not None:
             # Idempotent max_instances=1: never spawn a second process for the
             # same app.  Reconstruct a minimal observation if this process came
@@ -181,17 +191,56 @@ class AppCoordinator:
                 )
             return self._result(app_id, current, running, idempotent=True)
 
-        instance_id = uuid.uuid4().hex
-        rec = self.state.begin_start(app_id, instance_id,
-                                     version=manifest.get("version"),
-                                     launch_mode=launch_mode,
-                                     reset_restart_history=reset_restart_history)
-        generation = int(rec["generation"])
         plan = resources.plan_manifest(
             manifest, appconfig.effective_values(manifest, app_id))
         frame_stream_contract = supervisor.managed_frame_stream_contract(
             plan.as_dict())
 
+        # A dependency/resource wait has not spawned a process and therefore
+        # still represents the same launch attempt.  Reusing that attempt's
+        # identity is important for two reasons: it makes reserve() idempotent
+        # if appmgr died after persisting a reservation, and it avoids minting
+        # a new instance/generation (plus several state-file rewrites) on every
+        # one-second reconciler tick while a resource remains unavailable.
+        #
+        # Restrict reuse to recovery of that explicit wait.  A user start,
+        # restart, crash restart or newly published release must continue to
+        # receive a fresh generation so delayed exits cannot release its leases.
+        # Boot restore is included because reserve() may have reached its
+        # durable journal immediately before the previous daemon exited.
+        reuse_wait_identity = bool(
+            operation in ("boot_restore", "reconcile_wait")
+            and current
+            and current.get("desired_state") == state.DESIRED_RUNNING
+            and current.get("observed_state") in
+                ("waiting_dependency", "waiting_resource")
+            and current.get("launch_mode") == launch_mode
+            and current.get("version") == manifest.get("version")
+            and current.get("resource_plan") == plan.as_dict()
+            and current.get("instance_id")
+            and not current.get("teardown_pending")
+            # A runtime hard-stop ended a process that already used this
+            # identity.  Its first cooldown retry must mint one fresh
+            # generation; later start-admission waits may then reuse that one.
+            and not current.get("runtime_guard")
+        )
+        try:
+            waiting_generation = int((current or {}).get("generation", 0))
+        except (TypeError, ValueError):
+            waiting_generation = 0
+        reuse_wait_identity = reuse_wait_identity and waiting_generation > 0
+
+        if reuse_wait_identity:
+            instance_id = str(current["instance_id"])
+            generation = waiting_generation
+            rec = current
+        else:
+            instance_id = uuid.uuid4().hex
+            rec = self.state.begin_start(
+                app_id, instance_id, version=manifest.get("version"),
+                launch_mode=launch_mode,
+                reset_restart_history=reset_restart_history)
+            generation = int(rec["generation"])
         # Scheduled NPU is a service dependency, not a claim on the direct
         # inference-control owner.  Until inferenced exists, keep the desired
         # application visible as waiting_dependency rather than silently falling
@@ -208,10 +257,21 @@ class AppCoordinator:
                       if isinstance(dependency, dict) else None)
             reason = "scheduled inference service unavailable: %s%s" % (
                 self.inference_service_sock, ": " + detail if detail else "")
-            rec = self.state.transition(app_id, "waiting_dependency",
-                                        reason=reason, resource_plan=plan.as_dict(),
-                                        frame_stream_contract=frame_stream_contract,
-                                        dependency=dependency)
+            if (reuse_wait_identity
+                    and current.get("observed_state") == "waiting_dependency"
+                    and current.get("reason") == reason
+                    and current.get("dependency") == dependency
+                    and current.get("frame_stream_contract") ==
+                        frame_stream_contract):
+                # An unchanged one-second readiness probe must not rewrite the
+                # durable state file (and flash journal) forever.
+                rec = current
+            else:
+                rec = self.state.transition(
+                    app_id, "waiting_dependency", reason=reason,
+                    resource_plan=plan.as_dict(),
+                    frame_stream_contract=frame_stream_contract,
+                    dependency=dependency)
             return self._result(app_id, rec, None, accepted=True)
 
         inference_policy = None
@@ -227,19 +287,30 @@ class AppCoordinator:
                 )
                 raise
 
-        self.state.transition(app_id, "waiting_resource", reason=None,
-                              blocked_resource=None, resource_owners=[],
-                              dependency=None, runtime_guard=None,
-                              resource_plan=plan.as_dict(),
-                              frame_stream_contract=frame_stream_contract)
+        if (reuse_wait_identity
+                and current.get("observed_state") == "waiting_resource"):
+            waiting_rec = current
+        else:
+            waiting_rec = self.state.transition(
+                app_id, "waiting_resource", reason=None,
+                blocked_resource=None, resource_owners=[],
+                dependency=None, runtime_guard=None,
+                resource_plan=plan.as_dict(),
+                frame_stream_contract=frame_stream_contract)
         try:
             allocations = self.resources.reserve(app_id, instance_id,
                                                  generation, plan)
         except resources.ResourceBusy as exc:
-            rec = self.state.transition(
-                app_id, "waiting_resource", reason=str(exc),
-                blocked_resource=exc.resource, resource_owners=exc.owners,
-                resource_plan=plan.as_dict())
+            if (waiting_rec.get("reason") == str(exc)
+                    and waiting_rec.get("blocked_resource") == exc.resource
+                    and list(waiting_rec.get("resource_owners") or []) ==
+                        list(exc.owners)):
+                rec = waiting_rec
+            else:
+                rec = self.state.transition(
+                    app_id, "waiting_resource", reason=str(exc),
+                    blocked_resource=exc.resource, resource_owners=exc.owners,
+                    resource_plan=plan.as_dict())
             return self._result(app_id, rec, None, accepted=True)
 
         allocation_ids = [a["allocation_id"] for a in allocations]
@@ -622,7 +693,11 @@ class AppCoordinator:
                 self.stop(app_id, desired=state.DESIRED_RUNNING)
                 rec = self.state.transition(
                     app_id, "waiting_resource",
-                    pid=None, pgid=None, allocations=[],
+                    # stop() has fully retired the generation that actually
+                    # ran.  Do not present that consumed identity as a reusable
+                    # pre-spawn admission attempt; the first cooldown retry
+                    # must mint a fresh generation.
+                    instance_id=None, pid=None, pgid=None, allocations=[],
                     frame_stream_contract={"id": "", "kind": "none"},
                     blocked_resource=violation["resource"],
                     resource_owners=[], reason=violation["message"],
@@ -773,12 +848,46 @@ class AppCoordinator:
         }
 
     def reconcile_allocations(self) -> list:
-        live = []
-        for app_id, rec in self.state.app_states().items():
+        live = set()
+        app_states = self.state.app_states()
+        allocation_snapshot = self.resources.snapshot().get("allocations", [])
+        allocation_apps = {
+            item.get("app_id") for item in allocation_snapshot
+            if isinstance(item, dict)
+            and isinstance(item.get("app_id"), str)
+            and paths.valid_app_id(item.get("app_id"))
+        }
+        for app_id in set(app_states) | allocation_apps:
+            rec = app_states.get(app_id) or {}
+            running = self.supervisor.is_running(app_id) is not None
+            has_record = self._has_run_record(app_id)
+            if has_record:
+                # A prior buggy retry may have replaced state.instance_id while
+                # the run record still identifies an older generation.  Until
+                # that process fence is retired, preserve every allocation for
+                # this app rather than releasing the old helper's camera/NPU
+                # lease based on the already-mismatched state document.
+                live.update(
+                    item.get("instance_id") for item in allocation_snapshot
+                    if isinstance(item, dict)
+                    and item.get("app_id") == app_id
+                    and item.get("instance_id")
+                )
+            # Process liveness is not the only ownership fence.  reserve()
+            # commits before the lifecycle advances from waiting_resource to
+            # starting, and a crashed process must retain its lease until its
+            # inference authorization has been revoked.  Most importantly,
+            # stop() deliberately leaves teardown_pending when that revocation
+            # fails.  Releasing the journal here would defeat that fail-closed
+            # barrier and let a replacement overlap the old authorization.
+            identity_phase = rec.get("observed_state") in (
+                "waiting_dependency", "waiting_resource", "starting",
+                "ready", "running", "degraded", "stopping",
+            )
             if (rec.get("instance_id")
-                    and (self.supervisor.is_running(app_id) is not None
-                         or self._has_run_record(app_id))):
-                live.append(rec["instance_id"])
+                    and (running or has_record
+                         or rec.get("teardown_pending") or identity_phase)):
+                live.add(rec["instance_id"])
         return self.resources.reconcile(live)
 
     def inference_status(self) -> dict:

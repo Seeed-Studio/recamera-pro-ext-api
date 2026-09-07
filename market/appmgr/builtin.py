@@ -1,12 +1,12 @@
 """
-builtin.py -- driver for the firmware's built-in inference, exposed to appmgr as
-a first-class "builtin" app (DESIGN-inference-as-app §1.2/§3.3).
+builtin.py -- system adapter for the firmware's built-in inference pipeline.
 
-The official detection pipeline is NOT an appmgr-supervised process: it runs
+The firmware's built-in detection pipeline is NOT an appmgr-supervised process: it runs
 inside the shipped firmware (rkipc + entry.cgi). This module drives it through
-the very endpoints the firmware already exposes over nginx + entry.cgi, so the
-UI can list / activate / configure it exactly like a self-hosted app, with the
-appmgr HTTP surface returning the SAME shapes (list entry, GET/POST config).
+the endpoints the firmware already exposes over nginx + entry.cgi.  Dedicated
+system surfaces can activate/configure it and consume its recording/results,
+but it is intentionally absent from App Center application lists: it is neither
+an installed package nor an appmgr-supervised application process.
 
 Endpoints (localhost 443, self-signed, no JWT -- mirrors kit/adapters/cgi_control.py):
   * GET/POST /cgi-bin/entry.cgi/model/inference
@@ -357,18 +357,23 @@ def set_model_metrics(model: str, updates: Dict[str, Any]) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# synthesized manifest (bundled with appmgr, never downloaded)
+# internal compatibility descriptor (bundled with appmgr, never downloaded)
 # --------------------------------------------------------------------------- #
 def manifest() -> dict:
-    """The built-in app's manifest. type:"builtin"; every config item carries a
-    bind{endpoint,field} + apply:"restart" (DESIGN §1.2, verified §6)."""
+    """Describe builtin config and system-source presentation metadata.
+
+    This is not an installable application manifest and is never returned as an
+    App Center list item.  ``type: builtin`` preserves the existing internal
+    config/recording compatibility contract; every config item carries a
+    bind{endpoint,field} + apply:"restart" (DESIGN §1.2, verified §6).
+    """
     return {
         "id": BUILTIN_ID,
-        "name": "Official Detection",
-        "name_zh": "官方检测",
+        "name": "Built-in Detection",
+        "name_zh": "系统内置检测",
         "type": "builtin",
-        "scene": "official",
-        "scene_zh": "官方",
+        "scene": "system",
+        "scene_zh": "系统",
         "version": "firmware",
         "image": "/appcenter/apps/builtin.png",
         "author": "reCamera (firmware)",

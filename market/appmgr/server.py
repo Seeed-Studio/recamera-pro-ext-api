@@ -120,23 +120,27 @@ def remove_result_observer(callback) -> bool:
 def do_get_recording_sources() -> dict:
     """List trusted recording-rule sources without exposing app payload claims."""
     listing = do_v1_apps()
-    sources = []
+    # ``builtin`` is a system inference source, not an installed application.
+    # Keep it available to the recording subsystem even though the App Center
+    # application lists intentionally contain installed packages only.
+    builtin_manifest = builtin.manifest()
+    builtin_running = _builtin_running()
+    sources = [{
+        "id": builtin.BUILTIN_ID,
+        "kind": "builtin",
+        "name": builtin_manifest.get("name") or "Built-in AI",
+        "name_zh": builtin_manifest.get("name_zh") or "内置 AI",
+        "version": builtin_manifest.get("version"),
+        "installed": True,
+        "running": builtin_running,
+        "status": "running" if builtin_running else "stopped",
+        "supports_roi": True,
+        # Built-in classes follow the currently selected model and are fetched
+        # from rkipc by the recording page itself.
+        "signals": [],
+    }]
     for app in listing.get("apps") or []:
         if app.get("id") == builtin.BUILTIN_ID:
-            sources.append({
-                "id": builtin.BUILTIN_ID,
-                "kind": "builtin",
-                "name": app.get("name") or "Built-in AI",
-                "name_zh": app.get("name_zh") or "内置 AI",
-                "version": app.get("version"),
-                "installed": True,
-                "running": bool(app.get("running")),
-                "status": app.get("status") or "stopped",
-                "supports_roi": True,
-                # Built-in classes follow the currently selected model and are
-                # fetched from rkipc by the recording page itself.
-                "signals": [],
-            })
             continue
         source = apprecording.source_view(app)
         if source is not None:
@@ -562,8 +566,8 @@ def busy_gate(*, wait_timeout: float = 0.0,
 # operations
 # --------------------------------------------------------------------------- #
 # --------------------------------------------------------------------------- #
-# read-path caches (GET /list is polled by the App Center page; it was doing
-# 9 JSON parses + ~36 icon stats + a TLS round-trip to entry.cgi on EVERY call)
+# read-path caches (GET /list is polled by the App Center page; keep its repeated
+# manifest parses and icon stats bounded)
 #
 # Every cache below is keyed on an OS-observed identity of the thing it caches,
 # never on a timer alone, so a change is picked up on the next call:
@@ -1012,7 +1016,9 @@ def do_list() -> dict:
             # extraction) contain a dot -> never a valid app id -> not listed.
             if not os.path.isdir(d) or not paths.valid_app_id(name):
                 continue
-            if name == "kit":       # shared runtime, not an app
+            if name in ("kit", builtin.BUILTIN_ID):
+                # ``kit`` is the shared runtime; ``builtin`` is the reserved
+                # system-inference identity. Neither is an installed app card.
                 continue
             man = _read_manifest(name)
             if man is None:
@@ -1053,9 +1059,9 @@ def do_list() -> dict:
                 # older manifests without them still list cleanly.
                 # ★i18n★: the *_zh variants are passed through RAW -- the backend
                 # never picks a language, the front end does that per locale
-                # (RENDER_DECLARATION_SPEC §5 P0-2). _builtin_entry() below has
-                # always passed them; installed apps used to drop them silently,
-                # so a third-party app could ship Chinese copy that never showed.
+                # (RENDER_DECLARATION_SPEC §5 P0-2). Installed apps used to drop
+                # them silently, so a third-party app could ship Chinese copy
+                # that never showed.
                 "image": man.get("image"),
                 # Formal v2 package-local icon declaration.  icon_url remains
                 # the browser-facing transport and also serves legacy packages;
@@ -1110,12 +1116,13 @@ def do_list() -> dict:
     for cache in (_manifest_cache, _icon_cache):
         for gone in [k for k in cache if k not in seen]:
             cache.pop(gone, None)
-    apps.append(_builtin_entry(active))
+    # The firmware's built-in inference pipeline is a system facility, not an
+    # installed application.  Its driver and dedicated control/result surfaces
+    # remain available, but it must not appear as an App Center card.
     snapshot = state.load()
     result = {
         "active_app": active,
-        "running_apps": [a["id"] for a in apps
-                         if a.get("running") and a.get("id") != builtin.BUILTIN_ID],
+        "running_apps": [a["id"] for a in apps if a.get("running")],
         "state_revision": snapshot.get("revision", 0),
         "apps": apps,
     }
@@ -1130,13 +1137,8 @@ def do_list() -> dict:
     return result
 
 
-# ★The one network call on the list path★. builtin.is_running() is an HTTPS
-# request to entry.cgi on 127.0.0.1:443 -- TLS handshake + a CGI process fork per
-# call, with a 10 s timeout. Unthrottled that is one such round-trip per /list,
-# and the App Center page polls /list; a slow or wedged entry.cgi therefore
-# stalls the whole listing.
-#
-# Cached for _BUILTIN_TTL, and this cache is TIME-based because iEnable lives
+# Internal builtin status reads use HTTPS entry.cgi on 127.0.0.1:443.  Cache
+# them for _BUILTIN_TTL; this cache is TIME-based because iEnable lives
 # behind an HTTP endpoint -- there is no inode to watch. Correctness comes from
 # explicit invalidation instead: appmgr is the only writer of iEnable it needs to
 # care about (do_activate / do_stop / do_set_config all go through this process),
@@ -1151,7 +1153,7 @@ _builtin_probe = None
 
 
 def _builtin_invalidate() -> None:
-    """Force the next list to re-read /model/inference (call after any write)."""
+    """Force the next builtin status consumer to re-read /model/inference."""
     global _builtin_probe
     _builtin_probe = None
 
@@ -1173,46 +1175,6 @@ def _builtin_running() -> bool:
 
 def _npu_broker_present() -> bool:
     return os.path.exists(paths.INFERENCE_CONTROL_SOCK)
-
-
-def _builtin_entry(active_self: str) -> dict:
-    """Synthesize the built-in inference list entry (DESIGN §3.1). running/active
-    derive from /model/inference's iEnable, NOT a run.pid; a best-effort read
-    (endpoint may be momentarily unreachable) degrades to running=False rather
-    than dropping the entry."""
-    man = builtin.manifest()
-    running = _builtin_running()
-    return {
-        "id": builtin.BUILTIN_ID,
-        "name": man.get("name"),
-        "name_zh": man.get("name_zh"),
-        "version": man.get("version"),
-        "type": "builtin",
-        "image": man.get("image"),
-        "description": man.get("description"),
-        "description_zh": man.get("description_zh"),
-        "scene": man.get("scene"),
-        "scene_zh": man.get("scene_zh"),
-        "author": man.get("author"),
-        "render": man.get("render"),
-        "installed": True,
-        "running": running,
-        "pid": None,
-        # The built-in pipeline is not an appmgr child (it lives behind
-        # /model/inference), so there is no wait status to report -- always null,
-        # kept so every /list entry has the same shape.
-        "last_exit": None,
-        # active = iEnable AND no self-hosted app is active (mutual exclusion is
-        # maintained by do_activate; this AND is belt-and-braces for the UI).
-        "active": running and not active_self,
-        "desired_state": "running" if running else "stopped",
-        "observed_state": "running" if running else "stopped",
-        "state_reason": None,
-        "instance_id": None,
-        "generation": 0,
-        "allocations": [],
-        "endpoints": {},
-    }
 
 
 # Upload filename whitelist: a bare basename, package suffix, no separators.
@@ -2666,10 +2628,8 @@ def do_v1_apps() -> dict:
     for raw in listing.get("apps") or []:
         app_id = raw.get("id")
         item = dict(raw)
-        manifest = (builtin.manifest() if app_id == builtin.BUILTIN_ID
-                    else (_read_manifest(app_id) or {}))
-        if (app_id != builtin.BUILTIN_ID and manifest
-                and isinstance(manifest.get("render"), dict)):
+        manifest = _read_manifest(app_id) or {}
+        if manifest and isinstance(manifest.get("render"), dict):
             # Do not mutate the stat-keyed manifest cache.  This read-only
             # projection keeps the Web capability list consistent with the
             # Result Hub's trusted legacy-box compatibility decision.
@@ -3915,31 +3875,96 @@ def _reconcile_install_transaction() -> Optional[dict]:
         return {"app_id": app_id, "phase": phase, "action": "rolled_back"}
 
 
-def _boot_restore_locked() -> None:
-    """Restore desired apps while the caller owns the mutation gate."""
-    coord = _coordinator()
-    # Complete any fail-closed teardown before deciding which allocations are
-    # stale.  Across a reboot, persisted PID/PGID numbers are deliberately
-    # cleanup-only; coordinator.stop retires that cross-boot identity, releases
-    # its exact generation, and preserves the original desired intent so the
-    # normal restore loop below can launch it again.  A same-boot residual group
-    # still alive fails closed here and keeps its identity/resources fenced.
+def _recover_incomplete_teardowns(
+        coord, *, audit_prefix: str, swept_apps=(),
+        recover_stale_lifecycle: bool = False) -> None:
+    """Retire process fences without losing their original desired intent.
+
+    ``supervisor.sweep_stale`` runs first at each caller.  It removes a
+    cross-boot identity without ever signalling its untrusted numeric PGID, but
+    deliberately retains a same-boot record while any residual helper remains.
+    This pass then finishes lifecycle/inference/resource cleanup for an explicit
+    teardown and actively retries a retained process fence.  Apps whose stale
+    record was just cleared still pass through stop() so their exact inference
+    authorization is revoked before a replacement is admitted.  During boot,
+    an active durable phase without any process record is likewise an
+    interrupted prior-daemon generation and is closed before restore.  A failed
+    stop keeps the exact old identity and allocations; callers may safely
+    continue only with fail-closed reconciliation.
+    """
+    swept = {
+        app_id for app_id in (swept_apps or ())
+        if isinstance(app_id, str) and paths.valid_app_id(app_id)
+    }
     for app_id, rec in state.app_states().items():
-        if (rec.get("observed_state") != "stopping"
-                and not rec.get("teardown_pending")):
+        try:
+            running = supervisor.is_running(app_id)
+            has_record = supervisor.has_run_record(app_id)
+        except Exception as exc:
+            _audit(audit_prefix + "_teardown_inspection_failed",
+                   id=app_id, error=repr(exc))
+            continue
+        incomplete = (rec.get("observed_state") == "stopping"
+                      or bool(rec.get("teardown_pending")))
+        residual_fence = running is None and has_record
+        swept_fence = running is None and app_id in swept
+        stale_lifecycle = bool(
+            recover_stale_lifecycle
+            and running is None
+            and not has_record
+            and rec.get("observed_state") in
+                ("preparing_env", "starting", "ready", "running", "degraded")
+        )
+        # stop() persists desired=stopped before it enters the stopping phase.
+        # If the daemon exits between those two writes, boot restoration will
+        # not enumerate the app and the old process/reservation would otherwise
+        # survive forever in direct conflict with the user's stop intent.
+        stopped_intent_active = bool(
+            rec.get("desired_state") == state.DESIRED_STOPPED
+            and (
+                running is not None
+                or has_record
+                or rec.get("teardown_pending")
+                or rec.get("observed_state") in (
+                    "preparing_env", "waiting_dependency", "waiting_resource",
+                    "starting", "ready", "running", "degraded", "stopping",
+                )
+            )
+        )
+        if (not incomplete and not residual_fence
+                and not swept_fence and not stale_lifecycle
+                and not stopped_intent_active):
             continue
         desired = rec.get("desired_state")
         if desired not in state.DESIRED_STATES:
             desired = state.DESIRED_STOPPED
         try:
             coord.stop(app_id, desired=desired)
-            _audit("boot_teardown_recovered", id=app_id, desired=desired)
+            _audit(audit_prefix + "_teardown_recovered",
+                   id=app_id, desired=desired)
         except Exception as exc:
-            _audit("boot_teardown_pending", id=app_id, error=repr(exc))
-            print("[appmgr] boot teardown retry for %s remains pending: %r" %
-                  (app_id, exc), flush=True)
+            _audit(audit_prefix + "_teardown_pending",
+                   id=app_id, error=repr(exc))
+            print("[appmgr] %s teardown retry for %s remains pending: %r" %
+                  (audit_prefix, app_id, exc), flush=True)
+
+
+def _boot_restore_locked() -> None:
+    """Restore desired apps while the caller owns the mutation gate."""
+    coord = _coordinator()
 
     try:
+        # Persistent run records are cleanup-only once their saved boot id no
+        # longer matches this kernel boot.  Sweep them before deciding which
+        # instance ids keep durable allocations; doing this in the opposite
+        # order makes a dead pre-reboot instance look live for one last check,
+        # after which its exclusive app.instance lease can block boot restore
+        # forever.  Same-boot live leaders and residual process groups remain
+        # fenced by sweep_stale(), so this ordering does not weaken containment.
+        swept = supervisor.sweep_stale()
+        _recover_incomplete_teardowns(
+            coord, audit_prefix="boot", swept_apps=swept,
+            recover_stale_lifecycle=True)
         stale = coord.reconcile_allocations()
         if stale:
             print(f"[appmgr] released stale allocations: {stale}", flush=True)
@@ -3973,6 +3998,11 @@ def _boot_restore_locked() -> None:
                        result.get("pid")), flush=True)
                 continue
             rec = state.get_app(app_id) or {}
+            if (rec.get("observed_state") == "stopping"
+                    or rec.get("teardown_pending")):
+                # A same-boot residual process group could not be contained.
+                # Keep its exact identity/leases and never mint over the fence.
+                continue
             if rec.get("launch_mode") == "legacy" and app_id == active:
                 proof = _prepare_external_start("boot_restore", app_id)
                 pid = _coordinated_legacy_start(
@@ -4024,19 +4054,29 @@ def _reconcile_once() -> list:
         supervisor.drain_exits()
     except Exception:
         pass
+    coord = _coordinator()
     # Stale-record cleanup can kill a verified same-boot orphan group and is
     # therefore a mutation, not a GET side effect.  Serialize it with starts,
-    # stops and CLI processes using the same flock.  If another mutation owns
-    # the gate, skip this tick; liveness reads remain accurate without cleanup.
+    # stops and CLI processes using the same flock.  Reconcile allocations in
+    # that same critical section and only after the process-record sweep.  This
+    # closes the recovery window where sweep_stale() removed a cross-boot run
+    # record but its old app.instance/NPU/camera leases otherwise survived for
+    # the lifetime of the daemon.  If another mutation owns the gate, skip this
+    # tick; liveness reads remain accurate without cleanup.
     try:
         with busy_gate():
-            supervisor.sweep_stale()
+            swept = supervisor.sweep_stale()
+            _recover_incomplete_teardowns(
+                coord, audit_prefix="reconcile", swept_apps=swept)
+            stale = coord.reconcile_allocations()
+            if stale:
+                print(f"[appmgr] released stale allocations: {stale}",
+                      flush=True)
     except BusyError:
         pass
     except Exception:
         pass
     results = []
-    coord = _coordinator()
     for app_id in state.desired_apps():
         rec = state.get_app(app_id) or {}
         # Public legacy activate/switch applications are not auto-restarted,

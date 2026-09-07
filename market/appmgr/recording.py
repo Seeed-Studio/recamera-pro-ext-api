@@ -12,6 +12,7 @@ from collections import deque
 import math
 import re
 import threading
+import time
 from typing import Any, Callable, Dict, Optional
 
 from . import manifest as appmanifest
@@ -22,6 +23,9 @@ _APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 MAX_RECORD_ITEMS = 64
 DEFAULT_QUEUE_SIZE = 128
 RESET_WAIT_SECONDS = 2.0
+# All managed applications share record@1's 60/s connection budget. Keep a
+# small margin for timer precision; lifecycle resets are separately exempt.
+DATA_INTERVAL_SECONDS = 1.0 / 50.0
 
 
 class _ResetToken:
@@ -227,6 +231,7 @@ class RecordingTriggerBridge:
         self._duplicates = 0
         self._send_errors = 0
         self._last_error = ""
+        self._next_data_at = 0.0
 
     def start(self) -> "RecordingTriggerBridge":
         with self._condition:
@@ -292,12 +297,15 @@ class RecordingTriggerBridge:
 
         if kind != "events":
             # Frame observations are snapshots.  Keep only the newest pending
-            # snapshot for this source/generation; this both bounds latency and
-            # leaves queue capacity for one-shot events.
+            # snapshot for this source/generation; preserve an intervening
+            # empty/nonempty transition so a later positive cannot replace the
+            # clearing frame that deasserts an earlier detection.
             for index in range(len(self._queue) - 1, -1, -1):
                 queued = self._queue[index]
                 if (queued[0] not in ("reset", "events")
                         and queued[1] == source_id and queued[2] == epoch):
+                    if bool(queued[4]) != bool(_payload):
+                        break
                     self._queue[index] = action
                     self._dropped += 1
                     self._frame_dropped += 1
@@ -305,7 +313,7 @@ class RecordingTriggerBridge:
                     return
         while len(self._queue) >= self._max_queue:
             victim = next((index for index, item in enumerate(self._queue)
-                           if item[0] not in ("reset", "events")), None)
+                           if item[0] not in ("reset", "events") and item[4]), None)
             if victim is None:
                 self._dropped += 1
                 if kind == "events":
@@ -653,12 +661,26 @@ class RecordingTriggerBridge:
     def _run(self) -> None:
         while True:
             with self._condition:
-                while not self._queue and not self._closing:
-                    self._condition.wait(timeout=0.5)
+                while True:
+                    if not self._queue:
+                        if self._closing:
+                            break
+                        self._condition.wait(timeout=0.5)
+                        continue
+                    wait = self._next_data_at - time.monotonic()
+                    if self._queue[0][0] != "reset" and wait > 0:
+                        # Re-examine the queue after every wake: reset/close
+                        # must interrupt the budget wait, and a new EVENT must
+                        # overtake a FRAME before either leaves the queue.
+                        self._condition.wait(timeout=wait)
+                        continue
+                    break
                 if not self._queue and self._closing:
                     break
                 action = self._queue.popleft()
             self._dispatch(action)
+            if action[0] != "reset":
+                self._next_data_at = time.monotonic() + DATA_INTERVAL_SECONDS
         self._close_sink()
 
     def status(self) -> dict:
@@ -678,6 +700,11 @@ class RecordingTriggerBridge:
                 "frame_coalesced": self._frame_coalesced,
                 "duplicates": self._duplicates,
                 "send_errors": self._send_errors,
+                "data_rate_limit": 50,
+                # record@1 is a one-way data protocol. These are submitted
+                # datagrams, not receiver ACKs; native probe.record_events
+                # separately reports delivery, expiry, overflow and revocation.
+                "delivery_confirmation": "native_probe",
                 "last_error": self._last_error,
             }
 

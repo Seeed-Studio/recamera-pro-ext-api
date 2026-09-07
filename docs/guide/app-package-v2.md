@@ -112,6 +112,26 @@ cover `camera.frames`, `audio.capture`, `npu.rknn`, `rga`, `codec.decode`,
 
 ## Managed recording triggers
 
+Compatibility with pre-managed recording: existing rules **without `dSource`**
+continue to consume builtin and validated ordinary `ResultSink` FRAME results.
+Read/edit/save preserves that omission. New explicit BUILTIN/APP rules are
+strict: ordinary result-in cannot satisfy APP even if its peer-derived id equals
+the app id, because provenance is assigned internally at native ingress. The
+wire marker `sKind: "LEGACY"` is invalid; legacy is represented only by omission.
+This preserves established local ResultSink authority for old rules, not access
+to the private socket or authority to impersonate a managed application. Existing
+explicit BUILTIN rules are not automatically downgraded; restoring one to legacy
+requires an explicit user choice while retaining its filters and ROI.
+
+For managed FRAME snapshots, send `results: []` when the previous detection is
+no longer present, including when the same message also carries business events.
+An event-only message must omit the results snapshot (or use `type: "event"`).
+The bridge retains empty/nonempty transitions, paces data to 50 messages/s and
+prioritizes one-shot events. Native record@1 retains the existing admission
+limits and temporarily queues events (32 items / 256 KiB / 2 seconds), purged
+on source reset or disconnect. Overload is visible in probe `record_events`;
+`sent` confirms datagram submission, not rule matching or recording completion.
+
 An optional `record_trigger` lets an installed managed application appear as a
 recording-rule source. It is a closed manifest v2 contract, not a capability
 that an application may claim in its result payload. The declaration requires

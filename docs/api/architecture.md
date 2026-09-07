@@ -29,8 +29,8 @@
 
 1. **进程边界即契约**。方案商代码与固件代码分属不同进程，交界面是 socket 上的线格式（wire format），不是共享的头文件或链接的库。契约冻结后可跨固件版本演进（§6 扩展五规则）。
 2. **不 fork 固件**。设计文档的出发点：方案商拿不到、也不该 fork 固件源码。交付物是一个跑在设备上的可执行程序（C/C++ 二进制或 Python 脚本），而非一份定制固件。
-3. **复用官方基础设施**。公开结果回注复用官方 OSD 与 notify 通路；录像触发则由 appmgr 按 manifest 授权后桥接到 Vigil，使普通应用进程不能直接提交录像来源或绕过应用配置。前端扩展复用 nginx + JWT 会话，观测面复用帧代理的 fd 传递代码。当前所有应用仍以 root 运行，因此这不是对恶意 root 代码的沙箱边界；未签名本地安装的 root-code 风险仍须由安装确认与签名策略承担。
-4. **在分发入口划清信任边界**。内建推理由 `rc_result_dispatch()` 规范化为 `builtin` 后进入 Vigil / notify / OSD；普通外部结果由 `rc_result_dispatch_external_ir()` 只进入 notify / OSD；唯一可把 APP 来源送入 Vigil 的外部入口是经 appmgr 身份认证的 `record-in.sock`。
+3. **复用官方基础设施**。公开结果回注复用官方 OSD、notify 与无 `dSource` 旧录像规则；显式 APP 录像触发由 appmgr 按 manifest 授权后桥接到 Vigil，使普通应用进程不能伪造 managed 来源。前端扩展复用 nginx + JWT 会话，观测面复用帧代理的 fd 传递代码。当前所有应用仍以 root 运行，因此这不是对恶意 root 代码的沙箱边界；未签名本地安装的 root-code 风险仍须由安装确认与签名策略承担。
+4. **在分发入口划清信任边界**。内建推理由 `rc_result_dispatch()` 规范化为 `builtin` 后进入 Vigil / notify / OSD；普通外部结果由 `rc_result_dispatch_external_ir()` 进入 notify / OSD / legacy-only Vigil；唯一可把 APP provenance 送入 Vigil 的外部入口是经 appmgr 身份认证的 `record-in.sock`。
 
 ---
 
@@ -54,7 +54,8 @@
 │  │  扩展端点（新增，main.c:414-416 启动）                              │  │
 │  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐               │  │
 │  │  │ frame_export │ │ rc_result_in │ │ rc_record_in │  ← 端点层      │  │
-│  │  │  (VI chn1)   │ │(→OSD/notify) │ │ (→Vigil)     │               │  │
+│  │  │  (VI chn1)   │ │(→OSD/notify/ │ │ (→APP Vigil) │               │  │
+│  │  │              │ │legacy Vigil)│ │              │               │  │
 │  │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘               │  │
 │  │                         rc_probe (infer tap)                        │  │
 │  │       rc_inference_control（builtin/external NPU 单 owner）         │  │
@@ -192,13 +193,15 @@ sequenceDiagram
     D->>OSD: 单 canvas 合成叠加
 ```
 
-**一句话**：方案商发一条 `InferenceResult` 到 `result-in.sock`；端点校验并把 `source_id` 钉成 peercred 身份（外部禁用 `"builtin"`，`rc_result_in.c handle_result`），再交给 `rc_result_dispatch_external_ir()`，仅扇出到 notify 与 OSD。它不会进入 Vigil、不会启动录像；OSD 会自然出现在已经进行的编码录像中。
+**一句话**：方案商发一条 `InferenceResult` 到 `result-in.sock`；端点校验并把 `source_id` 钉成 peercred 身份（外部禁用 `"builtin"`，`rc_result_in.c handle_result`），再交给 `rc_result_dispatch_external_ir()`，扇出到 notify、OSD 与 legacy-only Vigil。它保留无 `dSource` 旧规则的录像行为，但不能匹配显式 BUILTIN/APP。
 
 ### 4.3 托管应用触发录像（Result Hub → appmgr → record-in → Vigil）
 
 应用在 manifest v2 的 `record_trigger` 中声明可用于录像规则的 detection、classification 或 event 信号。appmgr 只转发声明过的 label / event kind，并在停止、升级或能力变化时发送带 ACK 的 source reset。`record-in.sock` 使用 `record@1`，由 rkipc 通过 `SO_PEERCRED`、root-owned appmgr pidfile 与 `/proc` 三重核验连接身份；正常启动的普通应用进程不能通过该认证。由于 v1 尚未沙箱化，已取得 root 的恶意代码不属于该进程身份校验能够防御的威胁模型。
 
 Vigil 规则显式保存来源（`builtin` 或稳定 app id）和投递语义（`FRAME` / `EVENT`）：FRAME 沿用逐帧 debounce，EVENT 是单条正事件触发且不跨消息累计。record-in 数据不进入 OSD、notify 或公共 Result Hub，因此“展示结果”和“触发录像”是相互独立的权限。
+
+旧规则若没有 `dSource`，保存时继续省略，保留 builtin + validated ResultSink 的历史 FRAME 语义；新增显式来源不应静默改写旧意图。Vigil 的内部 provenance 区分 LegacyExternal/Builtin/ManagedApp，普通 protobuf id 无法冒充 APP。record@1 的有界 EVENT 重试、空帧保留与 probe 计数见 [spec §3.6](./spec.md#36-托管应用触发录像record-insock)；普通 result@1 限流保持不变。
 
 ### 4.4 观测（rc_infer tap → probe worker → memfd → 方案商）
 
@@ -328,7 +331,7 @@ struct frame_hdr {
 | 4 | **任务类型演进走 oneof 追加** | `InferenceResult` 新任务 = 新 oneof 分支（tag 15+），旧读者跳过未知分支 |
 | 5 | **只增不减** | `/run/recamera/` 存在期间，v1 端点 `frame@1`/`result@1`/`osd@1`/`record@1`/`probe@1`/`inference-control@1` 与其线格式不移除；安全边界调整须在 SDK 版本说明中显式记录 |
 
-配套 schema 纪律：proto tag 永不复用；删字段必 `reserved`；中转组件（notify-server）转发外来 payload **透传原始字节，禁止 decode→re-encode**。公开 result-in 的原始规范化字节只交给 notify/OSD；Vigil 只接收可信 builtin 或 record-in 的规范化消息。
+配套 schema 纪律：proto tag 永不复用；删字段必 `reserved`；中转组件（notify-server）转发外来 payload **透传原始字节，禁止 decode→re-encode**。公开 result-in 的规范化字节交给 notify/OSD/legacy-only Vigil；APP 规则只接收 record-in 规范化消息。
 
 ### 6.2 兼容性工程（CI 化，规格 §8.3）
 
@@ -343,7 +346,7 @@ struct frame_hdr {
 
 | 能力 | 里程碑 | 端点 / 对接方式 | 状态 |
 |---|---|---|---|
-| 结果注入（OSD+推送，不触发录像） | M1 | `result-in.sock` / `rc_ext_result_*` / `ResultSink` | 现成可用 |
+| 结果注入（OSD+推送+旧规则录像） | M1 | `result-in.sock` / `rc_ext_result_*` / `ResultSink` | 现成可用 |
 | 托管应用触发录像 | M1.5 | manifest `record_trigger` → appmgr `RecordSink` → `record-in.sock` → source-aware Vigil | host/交叉构建通过，待目标板 E2E |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | `frame.sock` / `rc_ext_frame_*` / `FrameSource` | 现成可用（G1–G4 真机 PASS） |
 | 音频 PCM | M0 | `arecord -D ai_asr`（ALSA dsnoop） | 现成可用 |

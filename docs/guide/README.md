@@ -28,7 +28,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 扩展 API 能做什么：
 
 - **拿帧（帧代理）**：从摄像头零拷贝取到 NV12 帧，喂给你自己的模型/算法。
-- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到编码视频（RTSP 与正在进行的录像），并分发到 WS/MQTT/HTTP/UART；它本身不启动录像。
+- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到编码视频，并分发到 WS/MQTT/HTTP/UART；保留无 `dSource` 旧规则的录像行为，但不能伪造显式 APP 来源。
 - **应用触发录像**：托管应用在 manifest v2 声明 `record_trigger`，由 appmgr 将获准的结果送入受保护的 Vigil 录制入口。
 - **音频**：从预留的 ALSA PCM 通道取麦克风原始音频。
 - **GPIO 触发**：用推理结果驱动引脚（继电器/LED/告警）。
@@ -41,7 +41,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 |---|---|---|---|
 | **Python AI 工作流 API**（typed errors / buffer / RGA / RKNN / lifecycle） | Python + native 源码已接通；host/交叉构建通过，待目标板完整 E2E | `recamera_ext` + `kit` + appmgr managed launch | [python-ai-api.md](./python-ai-api.md) |
 | **帧代理**（零拷贝取帧） | 服务端/client 源码已恢复；重启屏障与 host 测试已补，待目标板回归 | `FrameSource` / C ABI `rc_ext_frame_*`，`/run/recamera/frame.sock` | 本文 §3 |
-| **结果注入**（OSD+推送，不触发录像） | 服务端/client 源码已恢复；Python `send_*` 已封装，待目标板回归 | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
+| **结果注入**（OSD+推送+旧规则录像） | 服务端/client 源码已恢复；Python `send_*` 已封装，待目标板回归 | `ResultSink` / C ABI `rc_ext_result_*`，`/run/recamera/result-in.sock` | 本文 §4 |
 | **托管应用触发录像** | manifest 校验、appmgr 过滤桥接、Vigil 按来源规则已实现，待目标板回归 | manifest v2 `record_trigger` → appmgr → 受保护的 `/run/recamera/record-in.sock` | [app-package-v2.md](./app-package-v2.md#managed-recording-triggers) |
 | **NPU 独占仲裁** | `inference-control@1` broker + Python lease + appmgr 路由已实现；host kill/HUP 测试通过，待目标板压力测试 | `InferenceLease` / `ExternalNpuLease`，`/run/recamera/inference-control.sock` | [python-ai-api.md](./python-ai-api.md#6-externalnpulease-与-rkipc-broker) |
 | **音频 PCM** | 现成可用 | `arecord -D ai_asr`（ALSA dsnoop 共享） | [audio-pcm.md](./audio-pcm.md) |
@@ -66,7 +66,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 
 > **帧代理 vs 结果注入 vs 应用触发录像 vs notify 的选择**：
 > - 要拿摄像头画面自己推理 → **帧代理**（§3）。
-> - 要让你的结果出现在视频叠加 + 推送 → **结果注入**（§4，`result-in.sock`）；叠加也会出现在已经进行的录像中，但不会据此启动录像。
+> - 要让你的结果出现在视频叠加 + 推送 → **结果注入**（§4，`result-in.sock`）；保留无 `dSource` 旧规则录像兼容。
 > - 要让已安装的托管应用按 AI 结果启动录像 → 在 manifest 声明 **`record_trigger`**；应用不能直接访问内部录制 socket。
 > - 只要把结果推给外部消费者、不需要叠加/录像 → **notify**（`result-push.md`）。
 
@@ -287,14 +287,16 @@ with FrameSource(FrameConfig(fps_divisor=2)) as src:
 
 ## 4. 结果注入 API（M1 — `result-in.sock`）
 
-把你算出的推理结果（检测 / 分类 / 分割 / 跟踪 / 关键点）送回 rkipc，进入公开结果链路的两类下游：
+把你算出的推理结果（检测 / 分类 / 分割 / 跟踪 / 关键点）送回 rkipc，进入公开结果链路的下游：
 
 1. **OSD 叠加**：`osd_manager_draw_infer()` 画进 RTSP/预览叠加层，按 `source_id` 哈希分配颜色；
 2. **推送**：`rc_notify_send_inference()` 转发 WS（本机 `127.0.0.1:8123` / 外部 `/ws/inference/results`）/ MQTT / HTTP / UART。
 
-> **安全边界**：公开的 `result-in.sock` 不进入 Vigil，也不会启动录像。OSD 已经
-> 画进编码视频，因此会自然出现在一段已经开始的录像中，这与“由该结果触发
-> 录像”是两回事。托管应用需要触发录像时，应在 manifest v2 声明
+3. **旧规则录像**：经身份规范化和校验后进入 legacy-only Vigil，仅匹配未设置 `dSource` 的传统规则；分割不参与规则。
+
+> **安全边界**：公开 `result-in.sock` 保留传统规则的既有录像权限，但不能匹配
+> 显式 BUILTIN/APP，即使外部 peer id 与 app id 相同。规则省略 `dSource` 时
+> 编辑/保存仍省略，不静默转成内建来源。托管应用要成为显式 APP 录像来源，应在 manifest v2 声明
 > `record_trigger`，由 appmgr 过滤后桥接到仅 appmgr 可访问的
 > `record-in.sock`；应用进程不得直接连接该内部端点。
 
@@ -462,7 +464,7 @@ with ResultSink(source_id="my-app") as sink:
 
 > ⚠️ **坐标契约（务必遵守）：所有 box 坐标与 keypoint 点坐标均为归一化 `[0,1]`（相对画面宽高的比例），不是像素。** 设备 OSD 渲染器（`osd_infer.c`：`osd_infer_box_to_rect` / `osd_infer_norm_to_pixel`）对坐标 `clamp(0,1)` 后再乘画面宽高。**若传像素值（如 240、300），会被 clamp 到 1.0 → 框缩成右下角 1 像素 → 画面上看不见框。** 早期 header 曾误标"pixels"（v1.2.0 已更正），按像素接入的框不显示即此原因。把你的像素结果除以画面宽高转成 `[0,1]` 再注入。
 
-各任务类型注入后进入 OSD 叠加与 WS·MQTT·HTTP·UART 推送。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；公开结果注入不进入 Vigil。OSD 画面渲染的真机端到端验证程度不同：
+各任务类型注入后进入 OSD 叠加与 WS·MQTT·HTTP·UART 推送。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；除分割外还可匹配无 `dSource` 旧 Vigil 规则。OSD 画面渲染的真机端到端验证程度不同：
 
 | 任务类型 | 注入 + WS 推送 | OSD 画面渲染 | 端到端真机验证 |
 |---|---|---|---|
@@ -495,7 +497,7 @@ with ResultSink(source_id="my-app") as sink:
 
 ### 4.7 结果去向 vs notify 的区别
 
-`result-in.sock`（本 API）= OSD + 推送，**不触发录像**；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API；托管应用要按结果启动录像则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
+`result-in.sock`（本 API）= OSD + 推送 + 无 `dSource` 旧规则录像兼容；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API；托管应用要成为显式 APP 录像来源则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 
 ### 4.8 观测面 probe（`rc_ext_probe_*` / `ProbeSource`，v1.2.0）
 
@@ -668,7 +670,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 
 | 能力 | 里程碑 | 状态 |
 |---|---|---|
-| 结果注入（OSD+推送，不触发录像） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
+| 结果注入（OSD+推送+旧规则录像） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
 | 托管应用触发录像（manifest + appmgr + source-aware Vigil） | M1.5 | host/交叉构建与自动化测试通过，待目标板端到端回归 |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | client/server 源码已恢复；runtime video restart 屏障与 host 生命周期测试通过，待真机回归 |
 | 音频 PCM / notify / 前端挂载 / rkipc 文档化 | M0 | 现成可用 |

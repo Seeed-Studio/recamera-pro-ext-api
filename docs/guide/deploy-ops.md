@@ -308,7 +308,7 @@ reboot / 部署后依次核对：
 - [ ] **rkipc md5**：`md5sum /oem/usr/bin/rkipc` = `9826e9ecf8ed543a6dc78e3731102e0f`（或热替换目标值）
 - [ ] **六 socket**：`ls -l /run/recamera/` 有 `frame.sock` `result-in.sock` `osd-in.sock` `record-in.sock` `probe.sock` `inference-control.sock`（+ `apps.d/`）
 - [ ] **RTSP 出流**：`rtsp://<ip>:554/...` 有画面
-- [ ] **内建推理**：官方检测框正常上 OSD / RTSP（内建走同一条 `rc_result_dispatch`）
+- [ ] **内建推理**：系统内置检测框正常上 OSD / RTSP（内建走同一条 `rc_result_dispatch`）
 - [ ] **结果回注端到端**：外部脚本 / SDK 向 `result-in.sock` 注入高辨识度检测 → RTSP 看到框+标签 → WS 收到 `source_id≠"builtin"` 的结果；确认它不会启动 Vigil 录像；冒充 `"builtin"` 被拒；超速被丢+计数
 - [ ] **托管应用录像触发**：安装带 `record_trigger` 的 app → `/api/app-center/v1/recording/sources` 可见其来源 → Vigil 选择该信号后，匹配结果能启动录像；停止/升级 app 后旧 debounce 状态已清除
 - [ ] **SDK 握手**（任何人可连）：

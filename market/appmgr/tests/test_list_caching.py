@@ -12,7 +12,6 @@ INVALIDATION test:
   * icon dropped in after install   -> next list grows an icon_url
   * icon removed                    -> next list drops it
   * app uninstalled                 -> entry (and its cache slot) disappear
-  * builtin activated/stopped       -> cached liveness invalidated immediately
 
 Two mechanisms are pinned explicitly because they are the ones that break
 silently:
@@ -96,8 +95,8 @@ class _Pinned(unittest.TestCase):
         shutil.rmtree(paths.app_dir(APP) + ".prev", ignore_errors=True)
         paths.ensure_dirs()
         server.cache_clear()
-        # entry.cgi does not exist off-device; keep the built-in entry cheap and
-        # deterministic so these tests are about the filesystem caches.
+        # entry.cgi does not exist off-device; keep direct builtin cache tests
+        # deterministic while the application-list tests assert it is not used.
         self._real_is_running = builtin.is_running
         builtin.is_running = lambda: False
 
@@ -261,7 +260,7 @@ class IconCacheInvalidationTests(_Pinned):
 
 
 # --------------------------------------------------------------------------- #
-# built-in liveness cache (the one network call on the list path)
+# internal built-in liveness cache (not part of either application list)
 # --------------------------------------------------------------------------- #
 class BuiltinLivenessCacheTests(_Pinned):
     def setUp(self):
@@ -276,36 +275,57 @@ class BuiltinLivenessCacheTests(_Pinned):
             return self.value
         builtin.is_running = _probe
 
-    def test_repeated_lists_hit_entry_cgi_once(self):
+    def test_repeated_internal_reads_hit_entry_cgi_once(self):
         for _ in range(5):
-            server.do_list()
+            server._builtin_running()
         self.assertEqual(len(self.calls), 1,
-                         "entry.cgi probed once per list instead of once per TTL")
+                         "entry.cgi probed once per read instead of once per TTL")
 
-    def test_activate_invalidates_immediately(self):
-        self.assertTrue(self._entry("builtin")["running"])
+    def test_invalidate_forces_immediate_internal_refresh(self):
+        self.assertTrue(server._builtin_running())
         self.value = False
-        self.assertTrue(self._entry("builtin")["running"], "TTL not in effect")
+        self.assertTrue(server._builtin_running(), "TTL not in effect")
         server._builtin_invalidate()
-        self.assertFalse(self._entry("builtin")["running"],
+        self.assertFalse(server._builtin_running(),
                          "invalidate() did not force a re-probe")
 
     def test_ttl_expiry_re_probes(self):
         saved = server._BUILTIN_TTL
         server._BUILTIN_TTL = 0.0
         try:
-            server.do_list()
-            server.do_list()
+            server._builtin_running()
+            server._builtin_running()
             self.assertEqual(len(self.calls), 2)
         finally:
             server._BUILTIN_TTL = saved
 
     def test_transport_failure_is_not_cached(self):
         self.value = builtin.BuiltinError("entry.cgi down")
-        self.assertFalse(self._entry("builtin")["running"])
+        self.assertFalse(server._builtin_running())
         self.value = True
-        self.assertTrue(self._entry("builtin")["running"],
+        self.assertTrue(server._builtin_running(),
                         "a failed probe pinned running=False for the whole TTL")
+
+
+class ApplicationListScopeTests(_Pinned):
+    def test_legacy_and_web_lists_exclude_builtin_without_driver_probe(self):
+        self._write_manifest(_manifest("1.0.0"))
+        builtin_dir = paths.app_dir("builtin")
+        os.makedirs(builtin_dir, exist_ok=True)
+        self.addCleanup(shutil.rmtree, builtin_dir, True)
+        with open(os.path.join(builtin_dir, "manifest.json"), "w") as sink:
+            json.dump({"id": "builtin", "name": "Must stay hidden"}, sink)
+
+        def unexpected_probe():
+            self.fail("application listing must not query builtin inference")
+
+        builtin.is_running = unexpected_probe
+        legacy = server.do_list()
+        web = server.do_v1_apps()
+        self.assertEqual([item["id"] for item in legacy["apps"]], [APP])
+        self.assertEqual([item["id"] for item in web["apps"]], [APP])
+        self.assertNotIn("builtin", {item["id"] for item in legacy["apps"]})
+        self.assertNotIn("builtin", {item["id"] for item in web["apps"]})
 
 
 # --------------------------------------------------------------------------- #

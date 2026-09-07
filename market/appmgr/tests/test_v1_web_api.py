@@ -1485,19 +1485,110 @@ def test_polled_app_list_does_not_mutate_start_identity_or_allocations(
 
 def test_reconciler_sweeps_only_after_acquiring_mutation_gate(
         layout, monkeypatch):
-    swept = []
+    events = []
+
+    class Coordinator:
+        @staticmethod
+        def reconcile_allocations():
+            events.append("resource-reconcile")
+            return []
+
     monkeypatch.setattr(server.supervisor, "reap_children", lambda: 0)
     monkeypatch.setattr(server.supervisor, "drain_exits", lambda: [])
     monkeypatch.setattr(
-        server.supervisor, "sweep_stale", lambda: swept.append("sweep") or [])
+        server.supervisor, "sweep_stale",
+        lambda: events.append("sweep") or [])
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
     state.save({"active_app": None, "active_version": None})
 
     with server.busy_gate():
         assert server._reconcile_once() == []
-        assert swept == []
+        assert events == []
 
     assert server._reconcile_once() == []
-    assert swept == ["sweep"]
+    assert events == ["sweep", "resource-reconcile"]
+
+
+def test_reconciler_closes_teardown_after_sweep_before_restore(
+        layout, monkeypatch):
+    app_id = "teardown-recovery"
+    directory = paths.app_dir(app_id)
+    os.makedirs(directory)
+    with open(os.path.join(directory, "manifest.json"), "w") as output:
+        json.dump({
+            "id": app_id, "version": "1.0.0", "entry": "app.py",
+        }, output)
+    state.save({"active_app": None, "active_version": None})
+    state.begin_start(
+        app_id, "retained-generation", version="1.0.0",
+        launch_mode="managed")
+    state.transition(
+        app_id, "stopping", pid=8181, pgid=8181,
+        allocations=["retained-allocation"], teardown_pending=True)
+    record = {"present": True}
+    events = []
+
+    class Coordinator:
+        @staticmethod
+        def stop(stopped_id, *, desired):
+            assert stopped_id == app_id
+            assert record["present"] is False
+            events.append("finish-teardown")
+            state.set_desired(app_id, desired)
+            state.transition(
+                app_id, "stopped", pid=None, pgid=None, allocations=[],
+                teardown_pending=False)
+            return {"stopped": app_id}
+
+        @staticmethod
+        def reconcile_allocations():
+            events.append("resource-reconcile")
+            return ["retained-allocation"]
+
+        @staticmethod
+        def reconcile_one(restored_id, **_kwargs):
+            assert restored_id == app_id
+            current = state.get_app(app_id)
+            assert current["observed_state"] == "stopped"
+            assert current["teardown_pending"] is False
+            events.append("restore")
+            state.transition(app_id, "running", pid=9191, pgid=9191)
+            return {
+                "id": app_id, "action": "restored", "pid": 9191,
+                "observed_state": "running",
+            }
+
+    def sweep():
+        events.append("sweep")
+        record["present"] = False
+        return [app_id]
+
+    class EventSink:
+        @staticmethod
+        def publish(*_args, **_kwargs):
+            return None
+
+    class Operations:
+        events = EventSink()
+
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: None)
+    monkeypatch.setattr(server, "_operation_manager", lambda: Operations())
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(server.supervisor, "reap_children", lambda: 0)
+    monkeypatch.setattr(server.supervisor, "drain_exits", lambda: [])
+    monkeypatch.setattr(server.supervisor, "sweep_stale", sweep)
+    monkeypatch.setattr(server.supervisor, "is_running", lambda _app: None)
+    monkeypatch.setattr(
+        server.supervisor, "has_run_record",
+        lambda _app: record["present"])
+
+    assert server._reconcile_once() == [{
+        "id": app_id, "action": "restored", "pid": 9191,
+        "observed_state": "running",
+    }]
+    assert events == ["sweep", "finish-teardown",
+                      "resource-reconcile", "restore"]
 
 
 def test_sse_subscriber_count_and_each_subscriber_queue_are_bounded():
@@ -1570,7 +1661,9 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
         connection.request("GET", "/api/app-center/v1/apps")
         response = connection.getresponse()
         assert response.status == 200
-        assert "apps" in json.loads(response.read())
+        payload = json.loads(response.read())
+        assert "apps" in payload
+        assert "builtin" not in {item["id"] for item in payload["apps"]}
     finally:
         connection.close()
         httpd.shutdown()
@@ -1596,11 +1689,6 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
         ],
     }
     monkeypatch.setattr(server, "do_v1_apps", lambda: {"apps": [
-        {
-            "id": "builtin", "name": "Built-in AI", "version": "system",
-            "installed": True, "running": True, "status": "running",
-            "manifest": {},
-        },
         {
             "id": "person-detector", "name": "Person detector",
             "version": "1.2.3", "installed": True,
@@ -1652,6 +1740,7 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
             },
         },
     ]})
+    monkeypatch.setattr(server, "_builtin_running", lambda: True)
 
     expected_bridge_status = {
         "running": True, "active_sources": ["fall-alarm", "person-detector"],
@@ -1682,8 +1771,8 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
 
         builtin_source, fall_source, detector_source = payload["sources"]
         assert builtin_source == {
-            "id": "builtin", "kind": "builtin", "name": "Built-in AI",
-            "name_zh": "内置 AI", "version": "system",
+            "id": "builtin", "kind": "builtin", "name": "Built-in Detection",
+            "name_zh": "系统内置检测", "version": "firmware",
             "installed": True, "running": True, "status": "running",
             "supports_roi": True, "signals": [],
         }

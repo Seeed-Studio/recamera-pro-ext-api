@@ -14,9 +14,8 @@ transport was broken":
         (raster-only whitelist + size cap), appmgr serves it at
         GET /api/appMgr/icon?id=<id>, and /list hands out that URL as `icon_url`.
 
-  P0-2  do_list() dropped name_zh / description_zh / scene_zh, while
-        _builtin_entry() in the SAME file passed them through -- so the built-in
-        entry was bilingual and every installed app was not.
+  P0-2  do_list() dropped name_zh / description_zh / scene_zh, so installed
+        third-party applications could not expose their bilingual copy.
 
 Everything runs on temp dirs against real .tar.gz packages, so the installer's
 member vetting is exercised for real.
@@ -452,17 +451,14 @@ class I18nPassthroughTests(_Pinned):
             self.assertIsNone(entry.get(k), f"{k} should be null, not invented")
         self.assertEqual(entry["name"], "Demo App")
 
-    def test_installed_entry_and_builtin_entry_expose_the_same_keys(self):
-        """The original bug was an inconsistency between the two entry builders
-        in the same file, so assert they agree on the presentation keys."""
+    def test_installed_entry_exposes_all_presentation_keys_without_builtin(self):
         installer.install(make_pkg(man=manifest(**self.ZH)))
         listing = server.do_list()["apps"]
         installed = [e for e in listing if e["id"] == APP][0]
-        builtin = [e for e in listing if e["type"] == "builtin"][0]
         keys = {"name", "name_zh", "description", "description_zh",
                 "scene", "scene_zh", "image", "author", "render"}
         self.assertTrue(keys <= set(installed), keys - set(installed))
-        self.assertTrue(keys <= set(builtin), keys - set(builtin))
+        self.assertNotIn("builtin", {entry["id"] for entry in listing})
 
 
 # --------------------------------------------------------------------------- #

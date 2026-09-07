@@ -118,6 +118,43 @@ def test_bridge_projects_only_manifest_authorized_detection_classes():
     assert sink.closed
 
 
+def test_hub_preserves_empty_detection_frames_alongside_business_events():
+    from appmgr.result_hub import normalize_app_payload
+
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    signal = {"id": "people", "type": "detection", "classes": ["person"],
+              "supports_roi": True}
+    identity = {"app_id": "demo-app", "instance_id": "demo-instance",
+                "generation": 1}
+    person = {"box": [20, 10, 100, 60], "score": .9, "cls_name": "person"}
+    try:
+        token = bridge.invalidate_source(
+            "demo-app", identity=_identity(), capability=_capability(signal))
+        assert bridge.wait_invalidation(token)
+        for seq, results in enumerate(([person], [], [person]), 1):
+            raw = {"type": "results", "seq": seq,
+                   "frame": {"width": 200, "height": 100},
+                   "results": results,
+                   "events": [{"kind": "metrics", "occupancy": len(results)}]}
+            envelopes = normalize_app_payload(
+                raw, identity, trusted_geometry={"results": {"box": "pixel_xyxy"}})
+            assert [item["type"] for item in envelopes] == ["frame", "event"]
+            for envelope in envelopes:
+                bridge.observe(envelope)
+            calls = _wait_for(sink, lambda values: sum(
+                value[0] == "detections" for value in values) == seq)
+        assert [len(value[3]) for value in calls
+                if value[0] == "detections"] == [1, 0, 1]
+
+        event_only = normalize_app_payload(
+            {"type": "results", "events": [{"kind": "fall"}]}, identity)
+        assert [item["type"] for item in event_only] == ["event"]
+    finally:
+        assert bridge.close()
+
+
 def test_event_signal_uses_one_shot_delivery_and_generation_fence_resets_state():
     recording = _module()
     sink = _Sink()
@@ -351,6 +388,59 @@ def test_edge_survives_frame_pressure_and_is_dispatched_first():
         assert status["frame_coalesced"] >= 1
     finally:
         release.set()
+        assert bridge.close()
+
+
+def test_budget_wait_preserves_empty_boundary_and_prioritizes_events(monkeypatch):
+    recording = _module()
+    monkeypatch.setattr(recording, "DATA_INTERVAL_SECONDS", .15)
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    detection = {"id": "people", "type": "detection", "classes": ["person"],
+                 "supports_roi": True}
+    event = {"id": "fall", "type": "event", "event_kind": "fall",
+             "supports_roi": False}
+    box = {"box": [20, 10, 100, 60], "score": .9, "cls_name": "person",
+           "spaces": {"box": "pixel_xyxy"}}
+    try:
+        token = bridge.invalidate_source(
+            "demo-app", identity=_identity(), capability=_capability(detection, event))
+        assert bridge.wait_invalidation(token)
+        bridge.observe(_envelope("frame", results=[box], message_id="positive-1"))
+        _wait_for(sink, lambda values: any(value[0] == "detections" for value in values))
+        bridge.observe(_envelope("frame", results=[], message_id="empty"))
+        bridge.observe(_envelope("frame", results=[box], message_id="positive-2"))
+        bridge.observe(_envelope("event", events=[{"kind": "fall"}], message_id="edge"))
+        calls = _wait_for(sink, lambda values: sum(
+            value[0] == "detections" for value in values) == 3)
+        data = [value for value in calls if value[0] in ("detections", "events")]
+        assert [value[0] for value in data] == ["detections", "events", "detections", "detections"]
+        assert [len(value[3]) for value in data if value[0] == "detections"] == [1, 0, 1]
+    finally:
+        assert bridge.close()
+
+
+def test_lifecycle_reset_and_close_interrupt_data_budget_wait(monkeypatch):
+    recording = _module()
+    monkeypatch.setattr(recording, "DATA_INTERVAL_SECONDS", 10.0)
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    signal = {"id": "people", "type": "detection", "classes": ["person"],
+              "supports_roi": True}
+    try:
+        token = bridge.invalidate_source(
+            "demo-app", identity=_identity(), capability=_capability(signal))
+        assert bridge.wait_invalidation(token)
+        bridge.observe(_envelope("frame", message_id="first"))
+        _wait_for(sink, lambda values: any(value[0] == "detections" for value in values))
+        bridge.observe(_envelope("frame", message_id="must-not-send"))
+        started = time.monotonic()
+        token = bridge.invalidate_source("demo-app")
+        assert bridge.wait_invalidation(token, timeout=.5)
+        assert bridge.close()
+        assert time.monotonic() - started < .5
+        assert sum(value[0] == "detections" for value in sink.calls) == 1
+    finally:
         assert bridge.close()
 
 

@@ -220,6 +220,9 @@ def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
     )
     assert held["observed_state"] == "waiting_resource"
     assert fake.is_running("thermal-app") is None
+    held_identity = (held["instance_id"], held["generation"])
+    assert held_identity[0] != started["instance_id"]
+    assert held_identity[1] > started["generation"]
 
     sample["temperature_c"] = 99.9
     restored = coord.reconcile_one(
@@ -229,6 +232,82 @@ def test_runtime_hard_thermal_guard_releases_generation_and_waits_for_cooldown(
     )
     assert restored["observed_state"] == "running"
     assert restored["generation"] > started["generation"]
+    assert (restored["instance_id"], restored["generation"]) == held_identity
+
+
+def test_waiting_resource_retries_reuse_one_unspawned_generation(managed):
+    coord, fake, _manager = managed
+    claim = {
+        "name": "camera.frames", "mode": "exclusive", "required": True,
+    }
+    owner_manifest = _manifest("camera-owner", [claim])
+    waiter_manifest = _manifest("camera-waiter", [claim])
+    assert coord.start("camera-owner", manifest=owner_manifest)["pid"] is not None
+
+    first = coord.start("camera-waiter", manifest=waiter_manifest)
+    assert first["observed_state"] == "waiting_resource"
+    identity = (first["instance_id"], first["generation"])
+    waiting_revision = state.load()["revision"]
+    assert [app_id for app_id, _kwargs in fake.starts] == ["camera-owner"]
+
+    boot_retry = coord.start(
+        "camera-waiter", manifest=waiter_manifest, operation="boot_restore")
+    assert boot_retry["observed_state"] == "waiting_resource"
+    assert (boot_retry["instance_id"], boot_retry["generation"]) == identity
+    assert state.load()["revision"] == waiting_revision
+
+    for offset in (10.0, 20.0, 30.0):
+        waiting = coord.reconcile_one(
+            "camera-waiter", manifest=waiter_manifest,
+            launch=lambda **kwargs: fake.start("camera-waiter", **kwargs),
+            now=time.time() + offset, retry_interval=0.01,
+        )
+        assert waiting["observed_state"] == "waiting_resource"
+        assert (waiting["instance_id"], waiting["generation"]) == identity
+        assert [app_id for app_id, _kwargs in fake.starts] == ["camera-owner"]
+    assert state.load()["revision"] == waiting_revision
+
+    coord.stop("camera-owner")
+    restored = coord.reconcile_one(
+        "camera-waiter", manifest=waiter_manifest,
+        launch=lambda **kwargs: fake.start("camera-waiter", **kwargs),
+        now=time.time() + 40.0, retry_interval=0.01,
+    )
+    assert restored["observed_state"] == "running"
+    assert (restored["instance_id"], restored["generation"]) == identity
+
+
+def test_waiting_dependency_retries_reuse_one_unspawned_generation(managed):
+    coord, fake, _manager = managed
+    dependency = {"available": False, "error": "starting"}
+    coord.dependency_probe = lambda _path: dict(dependency)
+    manifest = _manifest("dependency-waiter", [{
+        "name": "npu.rknn", "mode": "scheduled", "required": True,
+    }])
+
+    first = coord.start("dependency-waiter", manifest=manifest)
+    assert first["observed_state"] == "waiting_dependency"
+    identity = (first["instance_id"], first["generation"])
+    waiting_revision = state.load()["revision"]
+    for offset in (10.0, 20.0, 30.0):
+        waiting = coord.reconcile_one(
+            "dependency-waiter", manifest=manifest,
+            launch=lambda **kwargs: fake.start("dependency-waiter", **kwargs),
+            now=time.time() + offset, retry_interval=0.01,
+        )
+        assert waiting["observed_state"] == "waiting_dependency"
+        assert (waiting["instance_id"], waiting["generation"]) == identity
+        assert fake.starts == []
+    assert state.load()["revision"] == waiting_revision
+
+    dependency.update({"available": True, "error": None})
+    restored = coord.reconcile_one(
+        "dependency-waiter", manifest=manifest,
+        launch=lambda **kwargs: fake.start("dependency-waiter", **kwargs),
+        now=time.time() + 40.0, retry_interval=0.01,
+    )
+    assert restored["observed_state"] == "running"
+    assert (restored["instance_id"], restored["generation"]) == identity
 
 
 def test_unbound_starting_observation_is_not_misclassified_as_a_crash(managed):
@@ -441,6 +520,41 @@ def test_supervisor_stop_error_retains_generation_and_allocations(
             manager.allocations_for(started["instance_id"])] == allocation_ids
 
 
+def test_revoke_failure_keeps_generation_allocations_through_reconcile(
+        managed, monkeypatch):
+    coord, fake, manager = managed
+    app_id = "revoke-fence"
+    claims = [{"name": "npu.rknn", "mode": "scheduled", "required": True}]
+    started = coord.start(app_id, manifest=_manifest(app_id, claims))
+    allocation_ids = list(started["allocations"])
+    registry = coord.inference_registry
+    real_revoke = registry.revoke
+
+    def failed_revoke(*_args, **_kwargs):
+        raise OSError("authorization journal is unavailable")
+
+    monkeypatch.setattr(registry, "revoke", failed_revoke)
+    with pytest.raises(coordinator.CoordinatorError,
+                       match="authorization revoke failed"):
+        coord.stop(app_id)
+
+    retained = state.get_app(app_id)
+    assert fake.is_running(app_id) is None
+    assert retained["observed_state"] == "stopping"
+    assert retained["teardown_pending"] is True
+    assert retained["instance_id"] == started["instance_id"]
+    assert retained["generation"] == started["generation"]
+    assert retained["allocations"] == allocation_ids
+    assert coord.reconcile_allocations() == []
+    assert [item["allocation_id"] for item in manager.allocations_for(
+        started["instance_id"])] == allocation_ids
+
+    monkeypatch.setattr(registry, "revoke", real_revoke)
+    coord.stop(app_id)
+    assert state.get_app(app_id)["teardown_pending"] is False
+    assert manager.allocations_for(started["instance_id"]) == []
+
+
 def test_start_process_fence_retains_generation_resources_and_reconcile_waits(
         managed):
     coord, fake, manager = managed
@@ -503,6 +617,15 @@ def test_allocation_reconcile_treats_retained_run_record_as_live(managed):
     # same-boot identity for a helper that survived containment.
     fake.running.pop(app_id)
     fake.run_records.add(app_id)
+    # Reproduce the historical corruption observed on-device: a wait retry
+    # replaced lifecycle state with instance B while the run record and bound
+    # leases still belonged to instance A.  A live process fence must protect
+    # every allocation for this app, not only state.instance_id.
+    mismatched = state.begin_start(
+        app_id, "incorrect-new-instance", version="1.0.0",
+        launch_mode="managed")
+    state.transition(app_id, "waiting_resource", allocations=[])
+    assert mismatched["instance_id"] != instance_id
     assert coord.reconcile_allocations() == []
     assert [item["allocation_id"] for item in
             manager.allocations_for(instance_id)] == allocation_ids
@@ -514,6 +637,27 @@ def test_allocation_reconcile_treats_retained_run_record_as_live(managed):
     assert manager.allocations_for(instance_id) == []
 
 
+def test_start_never_mints_over_a_retained_process_fence(managed):
+    coord, fake, manager = managed
+    app_id = "retained-fence"
+    manifest = _manifest(app_id)
+    started = coord.start(app_id, manifest=manifest)
+    fake.running.pop(app_id)
+    fake.run_records.add(app_id)
+    before = state.get_app(app_id)
+    allocations = manager.snapshot()["allocations"]
+
+    with pytest.raises(coordinator.CoordinatorError,
+                       match="process identity remains"):
+        coord.start(app_id, manifest=manifest)
+
+    after = state.get_app(app_id)
+    assert after["instance_id"] == before["instance_id"] == started["instance_id"]
+    assert after["generation"] == before["generation"] == started["generation"]
+    assert manager.snapshot()["allocations"] == allocations
+    assert len(fake.starts) == 1
+
+
 def test_crash_observation_revokes_without_waiting_for_cooperative_stop(managed):
     coord, fake, manager = managed
     claims = [
@@ -523,6 +667,13 @@ def test_crash_observation_revokes_without_waiting_for_cooperative_stop(managed)
     started = coord.start("crashed", manifest=_manifest("crashed", claims))
     assert started["frame_stream_contract"]["kind"] == "frame.sock"
     fake.crash("crashed", code=137)
+
+    # The server's global resource pass runs before per-app crash observation.
+    # It must not release this generation until observe() has revoked the exact
+    # inference authorization.
+    assert coord.reconcile_allocations() == []
+    assert [item["allocation_id"] for item in manager.allocations_for(
+        started["instance_id"])] == started["allocations"]
 
     offset = len(fake.events)
     observed = coord.observe("crashed", None, fake.last_exit("crashed"))

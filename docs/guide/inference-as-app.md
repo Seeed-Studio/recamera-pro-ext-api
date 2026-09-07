@@ -1,15 +1,15 @@
-# 推理即应用：配置热更、内建一等 app、单活切换
+# 推理控制：配置热更、内建系统适配器、单活切换
 
 > 事实来源：
 > - 热更：`kit/app.py`（`on_config_reload` + SIGHUP，`app.py:63-133`）、`market/appmgr/server.py`（`do_set_config:288` 按 `apply` 分流）、`kit/config.py` / appmgr `config.py`（`write_user_config` merge、`config_schema` 校验）。
 > - 内建 driver：`market/appmgr/builtin.py`（封装 entry.cgi `/model/inference` + `/model/info` + `/notify`）。
-> - 单活/分派：`market/appmgr/server.py`（`_builtin_entry:130`、`do_activate:309`、config 分派 `server.py:374+`）。
+> - 单活/分派：`market/appmgr/server.py`（`do_activate`、builtin config 分派）。
 > - 前端：`recamera_web_react/`（wsl2-local）`components/inference/`（推理应用页）+ `SchemaForm` + `AppContext`。
 > - 衔接：[kit-design.md](./kit-design.md)（分层）、[app-center-publishing.md](./app-center-publishing.md)（manifest / appMgr API）、[per-app-dependencies.md](./per-app-dependencies.md)（interpreter/依赖）、[adapter-bootstrap.md](./adapter-bootstrap.md)（适配层）。
 
 ## 0. 定位
 
-把"固件内建推理"和"自建 kit 应用"收敛成**同一套应用模型**：都在 `/api/appMgr/list` 里以 app 条目出现、都能被 `activate` 单活切换、都有 `config_schema` 驱动的动态配置面板。差异只在 driver 层。本文讲三件事：**① 配置热更（live vs restart）② 内建变一等 app ③ 单活切换契约**。manifest / 打包 / 依赖分发不在本文，见上方衔接文档。
+固件内建推理与自建 kit 应用复用部分配置和单活控制机制，但两者不是同一种可安装对象：`/api/appMgr/list` 与 `/api/app-center/v1/apps` 只列真实安装包；内建推理由系统专用入口控制，并继续作为结果与录制来源。本文讲三件事：**① 配置热更（live vs restart）② 内建系统适配器 ③ 单活切换契约**。manifest / 打包 / 依赖分发不在本文，见上方衔接文档。
 
 ## 1. 配置热更：`apply: "live" | "restart"`
 
@@ -49,11 +49,11 @@
 
 > 收益：调阈值/ROI 这类高频调参不打断摄像头链路（不抢相机、不闪流）；换模型/换输入分辨率这类重操作才重启。
 
-## 2. 内建推理 = 一等 app（builtin driver）
+## 2. 内建推理系统适配器（builtin driver）
 
 ### 2.1 driver（`builtin.py`）
 
-`builtin.py` 把固件内建推理封成一个 id=`"builtin"` 的 app driver，全部经 entry.cgi HTTP（localhost 免 JWT）：
+`builtin.py` 把固件内建推理封成内部 id=`"builtin"` 的系统 driver，全部经 entry.cgi HTTP（localhost 免 JWT）。该 id 用于专用控制、配置、结果鉴权和录制来源，不代表已安装应用：
 
 | driver 动作 | entry.cgi 端点 | 说明 |
 |---|---|---|
@@ -66,11 +66,11 @@
 
 > 踩坑（`builtin.py:22-25`，2026-08-13 核实）：单独 `POST /model/info` 改模型**不触发重载**；driver 在内建已启用时把 `/model/info` 变更与一次 `/model/inference` POST 配对，强制 `rc_model_infer_restart`。
 
-### 2.2 注入 list
+### 2.2 与应用列表隔离
 
-`server.do_list()` 在应用列表里注入 builtin 条目（`_builtin_entry:130`）：`{id:"builtin", type:"builtin", running, active, ...}`。`running` 从 `/model/inference` 的 `iEnable` 派生，不是 run.pid。
+`server.do_list()` 和 `do_v1_apps()` 不注入 builtin，应用中心只显示 `/userdata/local/apps/<id>` 中的真实安装包。系统仍可通过 builtin 生命周期/config 路由管理内建推理；`GET /api/app-center/v1/recording/sources` 会独立返回 `kind:"builtin"` 的系统来源，Result Hub 的 builtin 身份与结果链路也保持不变。其运行态从 `/model/inference` 的 `iEnable` 派生，不使用 run.pid。
 
-## 3. 单活切换契约（`activate`）
+## 3. 旧 `activate` 兼容切换契约
 
 `POST /api/appMgr/activate {id}`（`server.py:do_activate:309`）——**单活互斥**，内建与自建互斥：
 
@@ -78,9 +78,9 @@
 |---|---|
 | `"builtin"` | 停当前 active 的自建 app → `builtin.start()`（iEnable=1，保留固件持久化的 model/fps） |
 | 自建 app id | `builtin.stop()`（先关内建检测）→ 停旧 active → 起目标 → 置 active |
-| `"none"` / 空 | 停当前 active 自建 app（内建保持其 iEnable 态） |
+| `"none"` / 空 | 停当前 active 自建 app，并关闭内建推理 |
 
-- 互斥语义：**同一时刻只有一个推理源在跑**（内建 XOR 一个自建 app），避免双份 NPU/相机争用。builtin 的 active = `/model/inference` 的 iEnable；自建的 active 由 state.json 维护。`_builtin_entry` 里 `active = iEnable AND 无自建 active` 是给 UI 的双保险（`server.py:154-155`）。
+- 互斥语义仅属于旧 `activate` 的“所选源”兼容路径：它在 builtin 与一个 legacy active 自建 app 之间切换。Web v1 `start` 走 coordinator；CPU 应用以及 `npu.mode=scheduled` 的托管应用可按资源声明并发，NPU 由 broker/inferenced 调度，不能把旧 active 字段理解成全系统只能运行一个应用。builtin 运行态来自 `/model/inference` 的 iEnable；legacy 自建 active 由 state.json 维护。
 - config 分派也认 builtin：`GET/POST /api/appMgr/config?id=builtin` 转 driver 的 `get_config`/`set_config`（`server.py:374+`），返回与自建 app 同构的 `{config_schema, values, defaults}`，前端一套面板通吃。
 
 > 与 `switch` 的关系：`switch` 是旧的自建-only 切换；`activate` 是把 builtin 纳入后的统一单活入口。完整 appMgr 端点表见 [app-center-publishing.md](./app-center-publishing.md) §7。
@@ -90,8 +90,8 @@
 官方 React `/app-center` 的推理页改造（`components/inference/`）：
 
 - **`SchemaForm`**：读 app 的 `config_schema` 渲染表单；每项按 `apply` 标 chip——`live` 显示"即时生效"、`restart` 显示"需重启"。控件类型对齐 manifest schema（number/boolean/enum/string/zone/line，见 app-center-publishing.md §manifest）。
-- **`AppContext`**：维护 `active` 态；切换应用（含 builtin）走 `activate`，list/config 随 active 刷新。
-- 原"AI 推理"页替换成**"推理应用"**：单选激活（内建 + 自建同列）+ 动态配置面板，保留模型仓库与输出监控。
+- **`AppContext`**：应用中心只维护真实安装应用的列表与运行态，不再把 builtin 作为应用卡片。
+- 需要管理内建推理的系统页面仍可调用专用 builtin lifecycle/config 接口；它不通过应用中心列表发现。
 
 ## 5. `inferenced` 模型连接的空闲语义
 
@@ -108,4 +108,4 @@ DoS 边界保持有界：Hello 前的静默 socket 最多保留 5 秒，`control
 
 ## 6. 一句话
 
-内建推理与自建应用统一成一套 app 模型：`list` 同列、`activate` 单活互斥、`config_schema`+`SchemaForm` 一套动态面板。配置改动按 `apply` 分流——`live` 走 SIGHUP 热重读（kit 自动重绑参数 + `on_params_changed`，不重启不抢相机），`restart` 才重启进程。内建的 driver（`builtin.py`）把 entry.cgi 的 `/model/inference`+`/model/info` 反组装成同构 config，前端无需为内建单独写页面。
+应用中心只列真实安装包；内建推理作为独立系统能力保留专用 lifecycle/config、录制来源和 Result Hub 链路。自建应用的配置改动按 `apply` 分流——`live` 走 SIGHUP 热重读（kit 自动重绑参数 + `on_params_changed`，不重启不抢相机），`restart` 才重启进程；内建 driver 则继续把 entry.cgi 的 `/model/inference` 与 `/model/info` 映射成系统控制接口。

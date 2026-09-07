@@ -22,7 +22,7 @@
 | socket | 客户端 | 作用 |
 |---|---|---|
 | `frame.sock` | `FrameSource` | 零拷贝拿相机原始帧（全分辨率 NV12，不预 letterbox），自己推理 |
-| `result-in.sock` | `ResultSink` | 把结果回注官方 OSD / 录像 / 推送三路分发 |
+| `result-in.sock` | `ResultSink` | 回注 OSD / 推送，并保留无 `dSource` 旧录像规则；不能伪造显式 APP 来源 |
 | `probe.sock` | `ProbeSource` | 只读观测内建推理流水线各级张量/指标 |
 | `inference-control.sock` | `InferenceLease` / `ExternalNpuLease` | 停妥内建模型后授予 external RKNN 单 owner 的连接生命周期租约 |
 
@@ -33,7 +33,7 @@
 - **坐标一律归一化 `[0,1]`**：所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）及关键点 point 的 x/y 均为相对画面宽高的比例。**传像素值会被 OSD clamp 成 1px 隐形框**——手头是像素就除以帧宽/帧高。分割 mask 是行主序原始字节（非坐标）。这是最常见的 BUG。
 - **Python 用 uv，不裸 `pip install`**：`uv run pytest` / `uv add`。
 - **OSD 单槽后写覆盖**：同一 `source_id` 的结果后写覆盖前写；空 `send_detections` 用于清屏。
-- **seg 不上 OSD**：分割 mask 不渲染到 OSD（只走推送/录像元数据）。
+- **seg 不上 OSD、不触发录像**：分割 mask 只走结果推送，Vigil 不转换此任务。
 - **`source_id` 不能用保留字 `"builtin"`**（内建推理专用，外部用被拒 EAUTH）。
 - **限速 60 msg/s/连接**（burst 15）+ 全局 120（burst 30），单条 payload ≤ 64KB，并发注入连接 ≤ 4。超限丢弃+计数，别超过帧率发。
 - **`pts_us`**：要与某帧对齐叠加时传该帧的 `frame.pts_us`（同 VI 帧 PTS 时钟）；`0` 表示不与具体帧关联。

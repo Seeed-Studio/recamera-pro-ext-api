@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
-from appmgr import (config as appconfig, installer, paths, pythonenv, server,
-                    state, supervisor, visualization)  # noqa: E402
+from appmgr import (config as appconfig, installer, paths, pythonenv, resources,
+                    server, state, supervisor, visualization)  # noqa: E402
 
 
 APP_ID = "upgrade-fence"
@@ -752,6 +752,261 @@ def test_boot_restore_retries_stopping_generation_before_resource_reconcile(
     assert restored["desired_state"] == state.DESIRED_RUNNING
     assert restored["observed_state"] == "running"
     assert restored["instance_id"] == "restored-instance"
+
+
+def test_boot_restore_reclaims_cross_boot_running_lease_before_new_start(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    manifest = server._read_manifest(APP_ID)
+    old = state.begin_start(
+        APP_ID, "pre-reboot-instance", version="1.0.0",
+        launch_mode="managed")
+    manager = server._coordinator().resources
+    old_allocations = manager.reserve(
+        APP_ID, old["instance_id"], old["generation"],
+        resources.plan_manifest(manifest, {}))
+    manager.bind(old["instance_id"], old["generation"])
+    old_ids = [item["allocation_id"] for item in old_allocations]
+    state.transition(
+        APP_ID, "running", pid=8181, pgid=8181,
+        allocations=old_ids, started_at=1.0)
+    for pathname, value in (
+            (paths.pidfile(APP_ID), "8181"),
+            (paths.pgidfile(APP_ID), "8181"),
+            (paths.bootfile(APP_ID), "previous-kernel-boot")):
+        with open(pathname, "w") as output:
+            output.write(value)
+
+    events = []
+    real_sweep = supervisor.sweep_stale
+    real_reconcile = manager.reconcile
+
+    def tracked_sweep():
+        events.append("sweep")
+        return real_sweep()
+
+    def tracked_reconcile(live_instances):
+        events.append("resource-reconcile")
+        return real_reconcile(live_instances)
+
+    def launch(**kwargs):
+        events.append("launch")
+        kwargs["on_spawn"](9191)
+        return 9191
+
+    monkeypatch.setattr(server.supervisor, "sweep_stale", tracked_sweep)
+    monkeypatch.setattr(manager, "reconcile", tracked_reconcile)
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: launch)
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+
+    server._boot_restore_locked()
+
+    assert events == ["sweep", "resource-reconcile", "launch"]
+    restored = state.get_app(APP_ID)
+    assert restored["observed_state"] == "running"
+    assert restored["pid"] == 9191
+    assert restored["instance_id"] != old["instance_id"]
+    assert restored["generation"] > old["generation"]
+    current = manager.snapshot()["allocations"]
+    assert current
+    assert not {item["allocation_id"] for item in current}.intersection(old_ids)
+    assert {item["instance_id"] for item in current} == {
+        restored["instance_id"]}
+
+
+def test_boot_restore_reuses_reservation_committed_before_state_advance(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    manifest = server._read_manifest(APP_ID)
+    plan = resources.plan_manifest(manifest, {})
+    old = state.begin_start(
+        APP_ID, "reserved-before-daemon-exit", version="1.0.0",
+        launch_mode="managed")
+    state.transition(
+        APP_ID, "waiting_resource", resource_plan=plan.as_dict(),
+        frame_stream_contract=supervisor.managed_frame_stream_contract(
+            plan.as_dict()))
+    manager = server._coordinator().resources
+    reserved = manager.reserve(
+        APP_ID, old["instance_id"], old["generation"], plan)
+    reserved_ids = [item["allocation_id"] for item in reserved]
+    assert reserved_ids
+    assert state.get_app(APP_ID)["allocations"] == []
+
+    events = []
+    real_reconcile = manager.reconcile
+
+    def tracked_reconcile(live_instances):
+        events.append("resource-reconcile")
+        return real_reconcile(live_instances)
+
+    def launch(**kwargs):
+        events.append("launch")
+        kwargs["on_spawn"](9292)
+        return 9292
+
+    monkeypatch.setattr(
+        server.supervisor, "sweep_stale",
+        lambda: events.append("sweep") or [])
+    monkeypatch.setattr(manager, "reconcile", tracked_reconcile)
+    monkeypatch.setattr(server, "_managed_launch", lambda *_args: launch)
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+
+    server._boot_restore_locked()
+
+    assert events == ["sweep", "resource-reconcile", "launch"]
+    restored = state.get_app(APP_ID)
+    assert restored["observed_state"] == "running"
+    assert restored["pid"] == 9292
+    assert restored["instance_id"] == old["instance_id"]
+    assert restored["generation"] == old["generation"]
+    assert restored["allocations"] == reserved_ids
+    current = manager.allocations_for(old["instance_id"])
+    assert [item["allocation_id"] for item in current] == reserved_ids
+    assert {item["state"] for item in current} == {"bound"}
+
+
+def test_boot_finishes_interrupted_stop_intent_for_live_generation(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    manifest = server._read_manifest(APP_ID)
+    old = state.begin_start(
+        APP_ID, "live-stop-intent", version="1.0.0",
+        launch_mode="managed")
+    manager = server._coordinator().resources
+    allocations = manager.reserve(
+        APP_ID, old["instance_id"], old["generation"],
+        resources.plan_manifest(manifest, {}))
+    manager.bind(old["instance_id"], old["generation"])
+    allocation_ids = [item["allocation_id"] for item in allocations]
+    state.transition(
+        APP_ID, "running", pid=8383, pgid=8383,
+        allocations=allocation_ids, started_at=1.0)
+    # Reproduce a daemon exit after stop() persisted desired=stopped but before
+    # it could publish the stopping phase or signal the old generation.
+    state.set_desired(APP_ID, state.DESIRED_STOPPED)
+    live = {"pid": 8383}
+    events = []
+
+    monkeypatch.setattr(
+        server.supervisor, "sweep_stale",
+        lambda: events.append("sweep") or [])
+    monkeypatch.setattr(
+        server.supervisor, "is_running", lambda _app: live["pid"])
+    monkeypatch.setattr(
+        server.supervisor, "has_run_record",
+        lambda _app: live["pid"] is not None)
+
+    def stop_process(app_id, **_kwargs):
+        events.append("stop-process")
+        pid = live["pid"]
+        live["pid"] = None
+        return {"app": app_id, "pid": pid, "signalled": True,
+                "killed": False}
+
+    real_reconcile = manager.reconcile
+
+    def tracked_reconcile(live_instances):
+        events.append("resource-reconcile")
+        return real_reconcile(live_instances)
+
+    monkeypatch.setattr(server.supervisor, "stop", stop_process)
+    monkeypatch.setattr(manager, "reconcile", tracked_reconcile)
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+
+    server._boot_restore_locked()
+
+    assert events == ["sweep", "stop-process", "resource-reconcile"]
+    stopped = state.get_app(APP_ID)
+    assert stopped["desired_state"] == state.DESIRED_STOPPED
+    assert stopped["observed_state"] == "stopped"
+    assert stopped["allocations"] == []
+    assert manager.allocations_for(old["instance_id"]) == []
+
+
+def test_boot_releases_interrupted_stop_intent_waiting_reservation(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    manifest = server._read_manifest(APP_ID)
+    plan = resources.plan_manifest(manifest, {})
+    old = state.begin_start(
+        APP_ID, "waiting-stop-intent", version="1.0.0",
+        launch_mode="managed")
+    state.transition(APP_ID, "waiting_resource", resource_plan=plan.as_dict())
+    manager = server._coordinator().resources
+    manager.reserve(APP_ID, old["instance_id"], old["generation"], plan)
+    state.set_desired(APP_ID, state.DESIRED_STOPPED)
+    stops = []
+
+    monkeypatch.setattr(server.supervisor, "sweep_stale", lambda: [])
+    monkeypatch.setattr(server.supervisor, "is_running", lambda _app: None)
+    monkeypatch.setattr(server.supervisor, "has_run_record", lambda _app: False)
+    monkeypatch.setattr(
+        server.supervisor, "stop",
+        lambda app_id, **_kwargs: stops.append(app_id) or {
+            "app": app_id, "pid": None, "signalled": False, "killed": False,
+        })
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+
+    server._boot_restore_locked()
+
+    stopped = state.get_app(APP_ID)
+    assert stops == [APP_ID]
+    assert stopped["desired_state"] == state.DESIRED_STOPPED
+    assert stopped["observed_state"] == "stopped"
+    assert stopped["allocations"] == []
+    assert manager.allocations_for(old["instance_id"]) == []
+
+
+def test_boot_restore_never_mints_over_same_boot_residual_fence(
+        layout, monkeypatch):
+    server.do_install(_package(layout, "1.0.0"))
+    old = state.begin_start(
+        APP_ID, "same-boot-residual", version="1.0.0",
+        launch_mode="managed")
+    state.transition(
+        APP_ID, "running", pid=8181, pgid=8181,
+        allocations=["old-exclusive-lease"], started_at=1.0)
+    before = state.get_app(APP_ID)
+    events = []
+
+    class Coordinator:
+        @staticmethod
+        def stop(app_id, *, desired):
+            events.append("stop-fence")
+            state.set_desired(app_id, desired)
+            state.transition(
+                app_id, "stopping", teardown_pending=True,
+                reason="same-boot process group remains")
+            raise RuntimeError("same-boot process group remains")
+
+        @staticmethod
+        def reconcile_allocations():
+            events.append("resource-reconcile")
+            return []
+
+        @staticmethod
+        def start(*_args, **_kwargs):
+            events.append("launch")
+            raise AssertionError("must not mint over a retained process fence")
+
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(
+        server.supervisor, "sweep_stale",
+        lambda: events.append("sweep-retained") or [])
+    monkeypatch.setattr(server.supervisor, "is_running", lambda _app: None)
+    monkeypatch.setattr(server.supervisor, "has_run_record", lambda _app: True)
+    monkeypatch.setattr(server, "_audit", lambda *_args, **_kwargs: None)
+
+    server._boot_restore_locked()
+
+    assert events == ["sweep-retained", "stop-fence", "resource-reconcile"]
+    retained = state.get_app(APP_ID)
+    assert retained["observed_state"] == "stopping"
+    assert retained["teardown_pending"] is True
+    assert retained["instance_id"] == before["instance_id"] == old["instance_id"]
+    assert retained["generation"] == before["generation"] == old["generation"]
+    assert retained["allocations"] == ["old-exclusive-lease"]
 
 
 def test_new_install_with_stale_running_state_remains_stopped(

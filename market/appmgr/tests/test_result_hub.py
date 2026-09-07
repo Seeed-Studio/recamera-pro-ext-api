@@ -1078,12 +1078,12 @@ def test_event_replay_is_bounded_namespaced_and_deduplicated(tmp_path):
         formatter=NoopFormatter(), event_replay=2)
     app_a = _authorize(hub, _identity("app-a", "a", 1), camera=False)
     app_b = _authorize(hub, _identity("app-b", "b", 8), camera=False)
-    first = _app_payload(events=[{"kind": "fall", "event_id": "same"}], seq=1)
+    first = _app_payload(type="event", events=[{"kind": "fall", "event_id": "same"}], seq=1)
     assert len(hub.publish_app(first, app_a)) == 1
     assert hub.publish_app(first, app_a) == []
     # The same producer id in another app/generation cannot collide globally.
     assert len(hub.publish_app(first, app_b)) == 1
-    third = _app_payload(events=[{"kind": "wake", "event_id": "third"}], seq=2)
+    third = _app_payload(type="event", events=[{"kind": "wake", "event_id": "third"}], seq=2)
     assert len(hub.publish_app(third, app_a)) == 1
 
     events = [record.raw for record in hub.snapshot_records()
@@ -1097,7 +1097,7 @@ def test_event_replay_is_bounded_namespaced_and_deduplicated(tmp_path):
 
 
 def test_event_delivery_classification_and_state_producer_id_collision():
-    envelopes = normalize_app_payload(_app_payload(events=[
+    envelopes = normalize_app_payload(_app_payload(type="event", events=[
         {"kind": "pose_state", "event_id": 7, "state": "fallen"},
         {"kind": "fall", "event_id": 7, "state": "fallen"},
         {"kind": "workout", "rep_completed": False, "reps": 2},
@@ -1136,7 +1136,7 @@ def test_edge_priority_ring_state_latest_wins_and_preflight_skips_format(tmp_pat
     _authorize(hub, identity, camera=False)
 
     def publish(seq, event):
-        return hub.publish_app(_app_payload(seq=seq, events=[event]), identity)
+        return hub.publish_app(_app_payload(type="event", seq=seq, events=[event]), identity)
 
     assert publish(1, {"kind": "metrics", "value": 1})
     assert publish(2, {"kind": "fall", "event_id": "fall-1"})
@@ -1180,12 +1180,12 @@ def test_stable_qrcode_state_is_deduplicated_then_changed_state_replaces(tmp_pat
     identity = _authorize(hub, _identity(), camera=False)
     event = {"kind": "qrcode", "text": "same-code", "event_id": 1,
              "quad": [[0, 0], [1, 0], [1, 1], [0, 1]]}
-    assert hub.publish_app(_app_payload(seq=1, events=[event]), identity)
+    assert hub.publish_app(_app_payload(type="event", seq=1, events=[event]), identity)
     assert hub.publish_app(_app_payload(
-        seq=2, events=[dict(event, event_id=2)]), identity) == []
+        type="event", seq=2, events=[dict(event, event_id=2)]), identity) == []
     moved = dict(event, event_id=3,
                  quad=[[2, 2], [3, 2], [3, 3], [2, 3]])
-    assert hub.publish_app(_app_payload(seq=3, events=[moved]), identity)
+    assert hub.publish_app(_app_payload(type="event", seq=3, events=[moved]), identity)
     records = [value.raw for value in hub.snapshot_records()
                if value.raw["type"] == "event"]
     assert len(records) == 1
@@ -1232,8 +1232,8 @@ def test_identical_producerless_transcripts_are_distinct_edges(tmp_path):
                     formatter=formatter)
     identity = _authorize(hub, _identity(), camera=False)
     event = {"kind": "transcript", "text": "same words"}
-    first = hub.publish_app(_app_payload(seq=10, events=[event]), identity)
-    second = hub.publish_app(_app_payload(seq=11, events=[event]), identity)
+    first = hub.publish_app(_app_payload(type="event", seq=10, events=[event]), identity)
+    second = hub.publish_app(_app_payload(type="event", seq=11, events=[event]), identity)
     assert first and second
     assert first[0]["id"] != second[0]["id"]
     assert first[0]["id"].startswith("evt:demo:1:e-10-")
@@ -2148,7 +2148,7 @@ def test_ws_initial_replay_delivers_default_full_edge_ring(tmp_path):
     try:
         for index in range(128):
             assert hub.publish_app(_app_payload(
-                seq=index + 1,
+                type="event", seq=index + 1,
                 events=[{"kind": "fall", "event_id": "fall-%s" % index}],
             ), identity)
         assert hub.status()["event_replay"]["edge"] == 128
