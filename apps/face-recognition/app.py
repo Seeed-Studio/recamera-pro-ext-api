@@ -499,7 +499,10 @@ class FaceRecognitionApp(App):
                 and state.liveness is not None:
             return state.liveness
         p_v2 = p_v1se = None
-        due = capturing or (self._frame_idx - state.last_texture) >= self.embed_interval
+        priming = (self._lv_cfg.prime
+                   and lv.texture_samples < max(1, int(self._lv_cfg.min_samples)))
+        due = (capturing or priming
+               or (self._frame_idx - state.last_texture) >= self.embed_interval)
         if due:
             state.last_texture = self._frame_idx
             lv.last_heavy_frame = self._frame_idx
@@ -773,6 +776,15 @@ class FaceRecognitionApp(App):
         Once one embedding is in, `embed_interval` takes over: the embedder is
         the second-largest cost in the frame and an identified face does not
         need seven of them a second.
+
+        ★Measured, and deliberately NOT changed★ priming the first
+        `min_track_frames` embeddings onto consecutive frames was tried on the
+        same replay bench and cost **+40 ms** at p50 (665 ms vs 625 ms) while
+        buying nothing: the gate reads the NAME, and the name is published on
+        the FIRST embedding — `min_track_frames` only gates the `stable` flag,
+        which no gate decision consults. The extra embeddings made those frames
+        slower and moved nothing else. See `unmanned-store-access`
+        `evaluation/runs/2026-09-08-open-door-latency-opt/`.
         """
         return (st.samples == 0
                 or (self._frame_idx - st.last_embed) >= self.embed_interval)

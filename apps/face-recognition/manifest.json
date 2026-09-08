@@ -492,6 +492,16 @@
             "default": 3
           },
           {
+            "key": "liveness_prime",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Prime the first texture samples on consecutive frames",
+            "title_zh": "首批纹理样本逐帧采集",
+            "description": "Take the first 'Texture samples before a verdict' MiniFAS passes on consecutive frames instead of on the re-embed cadence. Still that many independent passes over that many different frames, and the motion, blink and timeout terms are untouched; they just arrive earlier, so the verdict is not 'pending' for two re-embed intervals. Turn it off to restore the old cadence.",
+            "description_zh": "把「结论所需纹理样本数」的前几次 MiniFAS 推理放在连续帧上采，而不是跟着重提特征的节奏。仍然是同样多次独立推理、同样多张不同的帧，运动、眨眼与超时项都不变，只是更早拿到，结论不必在两个重提周期里一直 pending。关掉即恢复旧节奏。",
+            "default": true
+          },
+          {
             "key": "liveness_motion_window_sec",
             "type": "number",
             "apply": "live",

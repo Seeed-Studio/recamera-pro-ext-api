@@ -67,6 +67,21 @@ class LivenessConfig:
     correlation_low: float = 0.15
     correlation_high: float = 0.65
     facemesh_interval: int = 2
+    #: Take the first `min_samples` texture samples on CONSECUTIVE frames
+    #: instead of on the embedding cadence.
+    #:
+    #: The texture term used to ride `embed_interval` from the very first frame,
+    #: so the third sample — the one that lets `fuse_liveness` leave
+    #: `insufficient_samples` — landed 2 x embed_interval frames after the track
+    #: appeared: at the measured 7 fps that alone is ~1.4 s of the door's
+    #: reaction time, spent before the embedder is even allowed to run.
+    #:
+    #: Priming does NOT weaken the evidence: it is still `min_samples`
+    #: independent MiniFAS passes over three different frames, folded through
+    #: the same EMA, and the motion / blink terms and the `timeout_sec` window
+    #: are untouched. What changes is only WHEN they are taken. Once the track
+    #: has its `min_samples`, the cadence goes back to `embed_interval`.
+    prime: bool = True
     # Cost gates (capture mode ignores them): FaceMesh EAR is meaningless on
     # tiny faces and depth needs a face patch of tens of pixels; a track that
     # is already live is only re-checked every live_recheck_interval frames.
