@@ -1,28 +1,144 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
-  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
-  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "release": {
+    "sequence": 5,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.2,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
   "artifacts": [
-    {"id": "ocr-detector", "kind": "rknn", "source": "bundled", "file": "models/ppocr_det_fp16.rknn", "sha256": "c18ec85219ebbe6d926a28007c06d5c2d3ab5c0036ddfb1f2b79a90a6360ecef", "size": 2103164, "mount": "models/ppocr_det_fp16.rknn", "required": true, "share_scope": "content"},
-    {"id": "ocr-recognizer", "kind": "rknn", "source": "bundled", "file": "models/ppocr_rec_fp16.rknn", "sha256": "0ffcd71dd350bcad8e57809f7ee1d072527dbef0d8793dc26c57add22716d87c", "size": 6758713, "mount": "models/ppocr_rec_fp16.rknn", "required": true, "share_scope": "content"},
-    {"id": "ocr-dictionary", "kind": "dictionary", "source": "bundled", "file": "models/ppocr_keys_v1.txt", "sha256": "28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7", "size": 26249, "mount": "models/ppocr_keys_v1.txt", "required": true, "share_scope": "content"}
+    {
+      "id": "ocr-detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/ppocr_det_fp16.rknn",
+      "sha256": "c18ec85219ebbe6d926a28007c06d5c2d3ab5c0036ddfb1f2b79a90a6360ecef",
+      "size": 2103164,
+      "mount": "models/ppocr_det_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "ocr-recognizer",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/ppocr_rec_fp16.rknn",
+      "sha256": "0ffcd71dd350bcad8e57809f7ee1d072527dbef0d8793dc26c57add22716d87c",
+      "size": 6758713,
+      "mount": "models/ppocr_rec_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "ocr-dictionary",
+      "kind": "dictionary",
+      "source": "bundled",
+      "file": "models/ppocr_keys_v1.txt",
+      "sha256": "28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7",
+      "size": 26249,
+      "mount": "models/ppocr_keys_v1.txt",
+      "required": true,
+      "share_scope": "content"
+    }
   ],
-  "resources": {"claims": [
-    {"name": "camera.frames", "mode": "shared", "required": true},
-    {"name": "npu.rknn", "mode": "scheduled", "required": true},
-    {"name": "rga", "mode": "shared", "required": true},
-    {"name": "result.publish", "mode": "brokered", "required": true}
-  ], "limits": {"memory_mb": 384, "cpu_percent": 300, "storage_mb": 32, "shutdown_grace_sec": 10}},
-  "permissions": {"sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
-  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 120, "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 384,
+      "cpu_percent": 300,
+      "storage_mb": 32,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "ppocr-reader",
   "name": "PP-OCR Reader",
   "name_zh": "文字识别",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/ppocr-reader.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "scene": "OCR & Text",
   "scene_zh": "文字识别",
@@ -36,7 +152,14 @@
   "record_trigger": {
     "version": 1,
     "signals": [
-      {"id": "text", "type": "detection", "classes": ["text"], "supports_roi": true}
+      {
+        "id": "text",
+        "type": "detection",
+        "classes": [
+          "text"
+        ],
+        "supports_roi": true
+      }
     ]
   },
   "models": [
@@ -76,7 +199,11 @@
   "postproc": "db_ocr",
   "render": {
     "schema_version": 1,
-    "quads": {"points": "quad", "label": "text", "line_width": 2},
+    "quads": {
+      "points": "quad",
+      "label": "text",
+      "line_width": 2
+    },
     "events": {
       "text": {
         "as": "badge",
@@ -94,24 +221,116 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'text'"},
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Text box, original-frame xyxy pixels"},
-      {"name": "quad", "from": "results[].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "description": "Text quadrilateral, original-frame pixels"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Detection (box) score"},
-      {"name": "cls_name", "from": "results[].cls_name", "type": "string", "description": "Literal 'text' tag; NOT the recognized string"},
-      {"name": "text", "from": "results[].text", "type": "string", "optional": true, "description": "Recognized string (may be empty). Preferred label source over cls_name"},
-      {"name": "rec_conf", "from": "results[].rec_conf", "type": "float", "description": "Recognition (CTC) confidence"},
-      {"name": "text_kind", "from": "events[kind=text].kind", "type": "string", "event_kind": "text", "description": "Event kind, always 'text'"},
-      {"name": "text_box", "from": "events[kind=text].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "text", "description": "Text box of the event"},
-      {"name": "text_quad", "from": "events[kind=text].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "event_kind": "text", "description": "Text quadrilateral of the event"},
-      {"name": "text_text", "from": "events[kind=text].text", "type": "string", "event_kind": "text", "optional": true, "description": "Recognized string of the event (may be empty)"},
-      {"name": "text_score", "from": "events[kind=text].score", "type": "float", "event_kind": "text", "description": "Detection score of the event"},
-      {"name": "text_rec_conf", "from": "events[kind=text].rec_conf", "type": "float", "event_kind": "text", "description": "Recognition confidence of the event"}
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Result kind, always 'text'"
+      },
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Text box, original-frame xyxy pixels"
+      },
+      {
+        "name": "quad",
+        "from": "results[].quad",
+        "type": "quad<float>[4][2]",
+        "coord": "pixel_quad",
+        "description": "Text quadrilateral, original-frame pixels"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Detection (box) score"
+      },
+      {
+        "name": "cls_name",
+        "from": "results[].cls_name",
+        "type": "string",
+        "description": "Literal 'text' tag; NOT the recognized string"
+      },
+      {
+        "name": "text",
+        "from": "results[].text",
+        "type": "string",
+        "optional": true,
+        "description": "Recognized string (may be empty). Preferred label source over cls_name"
+      },
+      {
+        "name": "rec_conf",
+        "from": "results[].rec_conf",
+        "type": "float",
+        "description": "Recognition (CTC) confidence"
+      },
+      {
+        "name": "text_kind",
+        "from": "events[kind=text].kind",
+        "type": "string",
+        "event_kind": "text",
+        "description": "Event kind, always 'text'"
+      },
+      {
+        "name": "text_box",
+        "from": "events[kind=text].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "text",
+        "description": "Text box of the event"
+      },
+      {
+        "name": "text_quad",
+        "from": "events[kind=text].quad",
+        "type": "quad<float>[4][2]",
+        "coord": "pixel_quad",
+        "event_kind": "text",
+        "description": "Text quadrilateral of the event"
+      },
+      {
+        "name": "text_text",
+        "from": "events[kind=text].text",
+        "type": "string",
+        "event_kind": "text",
+        "optional": true,
+        "description": "Recognized string of the event (may be empty)"
+      },
+      {
+        "name": "text_score",
+        "from": "events[kind=text].score",
+        "type": "float",
+        "event_kind": "text",
+        "description": "Detection score of the event"
+      },
+      {
+        "name": "text_rec_conf",
+        "from": "events[kind=text].rec_conf",
+        "type": "float",
+        "event_kind": "text",
+        "description": "Recognition confidence of the event"
+      }
     ],
     "default_mapping": [
-      {"source": "events.text | length", "target": "count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "events.text | map(attribute='text') | reject('equalto','') | list | last", "target": "last_text", "topic": "recamera/{{ app }}/text", "task": "detection"},
-      {"source": "events.text | map(attribute='text') | reject('equalto','') | list", "target": "texts", "topic": "recamera/{{ app }}/text", "task": "detection"}
+      {
+        "source": "events.text | length",
+        "target": "count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "events.text | map(attribute='text') | reject('equalto','') | list | last",
+        "target": "last_text",
+        "topic": "recamera/{{ app }}/text",
+        "task": "detection"
+      },
+      {
+        "source": "events.text | map(attribute='text') | reject('equalto','') | list",
+        "target": "texts",
+        "topic": "recamera/{{ app }}/text",
+        "task": "detection"
+      }
     ]
   },
   "config_schema": {
@@ -153,6 +372,17 @@
             "max": 3.5,
             "step": 0.1,
             "default": 2.0
+          },
+          {
+            "key": "min_size",
+            "type": "number",
+            "apply": "live",
+            "title": "Min text blob short side (detector px)",
+            "title_zh": "最小文本块短边（检测空间像素）",
+            "min": 1.0,
+            "max": 16.0,
+            "step": 0.5,
+            "default": 3.0
           },
           {
             "key": "max_boxes",
