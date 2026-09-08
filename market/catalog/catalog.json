@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-04T23:26:33Z",
+  "generated": "2026-09-07T13:33:30Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -22,6 +22,32 @@
         "sha256": "1e0be2166660915b51b80597a390fc0926f747f2e2e726348af04c51ac9f1c61",
         "size": 7281468,
         "signature": "MEUCIQDleEeie+gKmgkPloqLcOIfEsKMQ0s0yEspQCotnM0DXQIgcIjuiCxKcGfy/8G0P0T/HjIoFwHPtJCtaQJSuKpPXs4=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "f1-access",
+      "name": "F1 Door Access",
+      "version": "0.1.0",
+      "description": "Unmanned-store door access on one device. The recognition cascade is the face-recognition app's, unchanged: SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, matched 1:N against the enrolled gallery by cosine similarity over accumulated per-track evidence, with a fused anti-spoofing verdict that suppresses printed photos and phone screens. On top of it this app owns the door: an allowed decision closes a dry contact on one sysfs GPIO for a bounded pulse, and every decision -- allowed or not -- is published as an access/v1/events record carrying the score, the threshold, the liveness verdict, the face-library version and the model hash. The face library is pulled from a signed HTTP manifest and swapped atomically; no image and no embedding leaves the device. The gate is fail-safe by construction: the pin returns to its idle level on exit, on SIGKILL and on power loss, and a missing or inconsistent access config leaves the gate unarmed rather than open.",
+      "image": "/appcenter/apps/f1-access.png",
+      "scene": "Access & Attendance",
+      "author": "Seeed unmanned-store-access",
+      "name_zh": "F1 门禁",
+      "description_zh": "单台设备上的无人店门禁。识别级联沿用 face-recognition 应用，未做改动：SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态对齐后提取 512 维特征，与已注册人脸库做 1:N 余弦比对，身份取该人多帧证据累积后的最高票，并由融合活体判定抑制照片与手机屏幕翻拍。在此之上本应用还管门：判定放行时把一路 sysfs GPIO 上的干接点闭合一段有界脉宽，且每一次判定（放行与拒绝）都产出一条 access/v1/events 记录，带分数、阈值、活体结论、人脸库版本与模型哈希。人脸库经签名 manifest 从局域网拉取并原子切换，图像与特征均不出设备。门控按失效安全设计：进程退出、被 SIGKILL、掉电，引脚都回到未触发电平；门禁配置缺失或与识别不一致时，门禁整块不装，而不是敞开。",
+      "scene_zh": "门禁考勤",
+      "capabilities": [
+        "output"
+      ],
+      "kit": ">=1.6.4",
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.0-arm64.tar.gz",
+        "filename": "f1-access-0.1.0-arm64.tar.gz",
+        "sha256": "09b13c6180aafe4d4e88f1d4239214d9a7c0df1eb7a8ec07f5dfa8de8ee8a081",
+        "size": 41085674,
+        "signature": "MEUCIDCleu2TRol3ktFklPOUZPGlc0NfzOzLcJDW0YeyJnakAiEAyKE5Ppl2zwbp6EK7dU5+RAbDsDqzMUAvtN2olH1BGcA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
