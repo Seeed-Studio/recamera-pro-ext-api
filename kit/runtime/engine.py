@@ -243,6 +243,48 @@ def _default_runtime_factory():
     return RKNNLite()
 
 
+def _ctypes_spec_supported(spec: ModelSpec) -> bool:
+    """Return whether the declared contract is safe for the low-level path."""
+    if len(spec.inputs) != 1:
+        return False
+    tensor = spec.inputs[0]
+    return (
+        tensor.dtype == "uint8"
+        and tensor.layout == "NHWC"
+        and len(tensor.shape) == 4
+        and all(dim > 0 for dim in tensor.shape)
+    )
+
+
+def _runtime_for_spec(spec: ModelSpec, *, legacy_uint8: bool = False):
+    """Select a backend before any native model load occurs."""
+    choice = str(os.environ.get("ESK_RKNN_BACKEND", "auto")).strip().lower()
+    if choice not in {"auto", "rknnlite", "ctypes"}:
+        raise ConfigurationError(
+            f"unsupported ESK_RKNN_BACKEND value {choice!r}",
+            operation="model.backend",
+        )
+    eligible = _ctypes_spec_supported(spec)
+    # An old RknnModel has no metadata.  The ctypes runtime validates the
+    # actual graph after init, so it remains a useful compatibility path when
+    # its shared library is present.
+    legacy = not spec.inputs and legacy_uint8
+    if choice == "ctypes":
+        if not (eligible or not spec.inputs):
+            raise ConfigurationError(
+                "ctypes backend requires one static uint8 NHWC input",
+                operation="model.backend",
+                code="ctypes_unsupported_model",
+            )
+        from kit.runtime.ctypes_rknn import CtypesRknnModel
+        return CtypesRknnModel()
+    if choice == "auto" and (eligible or legacy):
+        from kit.runtime.ctypes_rknn import CtypesRknnModel, library_path
+        if eligible or library_path():
+            return CtypesRknnModel()
+    return _default_runtime_factory()
+
+
 class RknnSession:
     """Own one RKNN runtime context and its process-level NPU lease.
 
@@ -315,8 +357,12 @@ class RknnSession:
                     exc_info=True)
             raise
         try:
-            factory = runtime_factory or _default_runtime_factory
-            self._runtime = factory()
+            # Preserve the zero-argument injection hook used by existing
+            # tests and vendors.  Only the built-in default participates in
+            # backend selection.
+            self._runtime = (runtime_factory() if runtime_factory is not None
+                             else _runtime_for_spec(
+                                 self.spec, legacy_uint8=not self.strict_inputs))
             ret = self._runtime.load_rknn(self.path)
             if ret != 0:
                 raise ModelLoadError(
