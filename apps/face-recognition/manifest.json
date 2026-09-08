@@ -108,7 +108,7 @@
       "quant": "fp16",
       "optional": true,
       "role": "stage4_blink",
-      "description": "MediaPipe FaceMesh 468-point landmarks on a 192x192 padded square ROI, sampled every liveness_facemesh_interval frames. Only the 6-point eye aspect ratio is consumed, to detect a blink; a blink is positive proof of liveness, and its absence is never treated as a spoof."
+      "description": "MediaPipe FaceMesh 468-point landmarks on a 192x192 padded square ROI, sampled every liveness_facemesh_interval frames. Only the 6-point eye aspect ratio is consumed, to detect a blink; a blink adds liveness_blink_bonus to the fused score, and its absence is never treated as a spoof."
     },
     {
       "id": "depth",
@@ -237,7 +237,7 @@
         "from": "extra.faces[].liveness.decision",
         "type": "string",
         "optional": true,
-        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending"
+        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending. A texture EMA below liveness_texture_spoof_max is 'spoof' regardless of the other terms"
       },
       {
         "name": "liveness_reason",
@@ -715,12 +715,25 @@
             "apply": "live",
             "title": "Blink bonus",
             "title_zh": "眨眼加分",
-            "description": "Added to the reported score once a blink has been observed. A blink also sets the verdict to live outright: it is the strongest passive evidence available, and no amount of texture uncertainty should override it.",
-            "description_zh": "观察到眨眼后加到报告分数上的增量。眨眼同时直接把结论置为 live：这是被动检测中最强的证据，纹理上的不确定性不应推翻它。",
+            "description": "Added to the fused score once a blink has been observed, before the liveness_t_live / liveness_t_spoof band is applied. A blink does not decide the verdict on its own: a screen replay reproduces the blinks of the person it is replaying, so blink is scored as a bonus and never as a bypass.",
+            "description_zh": "观察到眨眼后加到融合分数上的增量，在 liveness_t_live / liveness_t_spoof 判定之前叠加。眨眼不单独决定结论：屏幕翻拍会一并回放被拍者的眨眼，因此眨眼只作加分项，不作直通项。",
             "min": 0.0,
             "max": 1.0,
             "step": 0.05,
-            "default": 1.0
+            "default": 0.1
+          },
+          {
+            "key": "liveness_texture_spoof_max",
+            "type": "number",
+            "apply": "live",
+            "title": "Texture spoof veto",
+            "title_zh": "纹理判假否决线",
+            "description": "Texture EMA below which the verdict is spoof unconditionally, checked before motion, blink and depth and not subject to the hysteresis band. Offline track-level fit over 68 real / 127 print / 42 screen tracks puts every real track above 0.35 and every spoof track below it.",
+            "description_zh": "纹理 EMA 低于该值直接判为 spoof，在运动、眨眼、深度之前判定，且不受迟滞带影响。离线按 track 拟合（68 真人 / 127 打印 / 42 屏幕）中，所有真人 track 高于 0.35，所有攻击 track 低于 0.35。",
+            "min": 0.0,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.35
           },
           {
             "key": "liveness_debug_frames",

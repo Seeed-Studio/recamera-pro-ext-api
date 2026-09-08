@@ -16,9 +16,19 @@ Three independent pieces of evidence, combined by `fuse_liveness`:
     the fit. Residuals are normalised by the face's short side so the same
     threshold holds at 80 px and at 300 px.
   * **blink** — a 1..3-sample dip of the FaceMesh EAR below threshold followed
-    by an open sample. A blink is positive proof and latches for the lifetime
-    of the track; the *absence* of a blink is never evidence of a spoof (people
-    stare, and FaceMesh is only sampled every K frames).
+    by an open sample. A blink latches for the lifetime of the track; the
+    *absence* of a blink is never evidence of a spoof (people stare, and
+    FaceMesh is only sampled every K frames).
+
+★Blink is a bonus, never a bypass★ up to 0.1.0 a latched blink returned LIVE
+directly, before the fused score and before the T_live/T_spoof band. A screen
+replay of a real person replays that person's blinks, so the single term that a
+display attack reproduces perfectly was also the one term that could decide the
+verdict on its own — the texture head, which is the only feature with any
+discriminative power on this data (offline fit: ensemble AUC 0.9975, motion
+0.503, depth 0.426), was skipped entirely. Blink now enters as `blink_bonus`
+added to the fused score, and a texture EMA below `texture_spoof_max` is a hard
+SPOOF that no other term can lift.
 
 ★Why a residual and not a displacement★ the naive "did the landmarks move?"
 test is satisfied by holding a photo unsteadily. Removing the similarity
@@ -94,9 +104,18 @@ class LivenessConfig:
     w_texture: float = 0.70
     w_motion: float = 0.30
     w_depth: float = 0.20
-    blink_bonus: float = 1.0
+    #: Added to the fused score when a blink has latched. It is a nudge across
+    #: the hysteresis band, NOT a verdict: 0.10 moves a score sitting inside
+    #: the 0.35..0.55 band up by a fifth of the band's width.
+    blink_bonus: float = 0.10
     t_live: float = 0.55
     t_spoof: float = 0.35
+    #: Hard veto. A texture EMA below this is a spoof whatever motion, blink
+    #: and depth say, and it is checked BEFORE any of them. Track-level offline
+    #: numbers (237 tracks, 68 real / 127 print / 42 screen) put every real
+    #: track above 0.35 and every spoof track below it, so the veto costs no
+    #: real track at the default while removing the blink bypass outright.
+    texture_spoof_max: float = 0.35
     depth_enabled: bool = False
     #: Print one line per face per frame with the liveness fields
     #: (score / texture / motion / blink / decision / reason). Off by default:
@@ -341,14 +360,17 @@ def fuse_liveness(
 
       1. Fewer than `min_samples` texture samples -> pending. Nothing is
          published on a single MiniFAS frame.
-      2. A latched blink -> live, immediately, with `blink_bonus` folded into
-         the reported score. Passive liveness has no stronger positive.
+      2. Texture EMA below `texture_spoof_max` -> spoof, immediately and
+         unconditionally. This runs BEFORE blink and before the hysteresis:
+         it is the one judgement no other term is allowed to overturn.
       3. Otherwise a weighted mean of the available evidence, weights
-         renormalised over exactly the terms that are present, then the
-         T_live/T_spoof hysteresis. Motion that is absent (still face, short
-         window) is DROPPED, never scored as zero.
-      4. Before `timeout_sec` a face with no usable motion stays pending;
-         after it, texture (plus optional depth) decides on its own.
+         renormalised over exactly the terms that are present, plus
+         `blink_bonus` when a blink has latched, then the T_live/T_spoof
+         hysteresis. Motion that is absent (still face, short window) is
+         DROPPED, never scored as zero.
+      4. Before `timeout_sec` a face with no usable motion and no blink stays
+         pending; a latched blink is enough to decide early, and after the
+         timeout texture (plus optional depth) decides on its own.
     """
     tex = state.texture_ema
     if state.texture_samples < max(1, int(cfg.min_samples)) or tex is None:
@@ -357,15 +379,16 @@ def fuse_liveness(
         state.score = tex
         return result_dict(state, depth_score)
 
-    if state.blink_seen:
-        state.decision = LIVE
-        state.reason = "blink"
-        base = float(tex)
-        state.score = min(1.0, base + float(cfg.blink_bonus))
+    # ★The veto★ no amount of blinking, deformation or depth makes a surface
+    # the texture head has already called a print or a display into a face.
+    if float(tex) < float(cfg.texture_spoof_max):
+        state.decision = SPOOF
+        state.reason = "texture_spoof"
+        state.score = float(tex)
         return result_dict(state, depth_score)
 
     timed_out = (float(now) - float(first_seen)) >= float(cfg.timeout_sec)
-    if motion_score is None and not timed_out:
+    if motion_score is None and not timed_out and not state.blink_seen:
         state.decision = PENDING
         state.reason = "awaiting_motion"
         state.score = float(tex)
@@ -382,6 +405,9 @@ def fuse_liveness(
 
     wsum = sum(w for w, _ in terms)
     score = sum(w * s for w, s in terms) / wsum if wsum > 0 else float(tex)
+    if state.blink_seen:
+        score += float(cfg.blink_bonus)
+        used.append("blink")
     score = min(1.0, max(0.0, float(score)))
 
     prev = state.decision
