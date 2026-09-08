@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recamera-pro-kit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reusable Python application and inference kit for reCamera Pro"
 requires-python = ">=3.11,<3.12"
 license = "Apache-2.0"

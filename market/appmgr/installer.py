@@ -31,7 +31,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from . import config as appconfig, manifest as manifest_contract, paths, pythonenv, signing
+from . import (config as appconfig, kitversion, manifest as manifest_contract,
+               paths, pythonenv, signing)
 
 
 class InstallError(Exception):
@@ -611,6 +612,10 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
     manifest = _read_manifest_from_tar(tar)
     try:
         manifest_contract.check_platform_compatibility(manifest)
+        try:
+            kitversion.check(manifest)
+        except kitversion.KitIncompatible as exc:
+            raise InstallError("kit compatibility check failed: %s" % exc) from exc
         records = _package_records(tar, members)
         manifest_contract.validate_package_files(manifest, records)
         _validate_declared_icon_payload(tar, manifest)

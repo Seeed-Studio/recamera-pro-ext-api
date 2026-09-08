@@ -32,7 +32,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from . import mqtt as mqttcfg, paths, pythonenv, voiceruntime
+from . import kitversion, mqtt as mqttcfg, paths, pythonenv, voiceruntime
 
 
 class SupervisorError(Exception):
@@ -1125,6 +1125,12 @@ def start(app_id: str, *, wait_ready: bool = True,
     if existing:
         return existing
 
+    manifest = _load_manifest(app_id)
+    try:
+        kitversion.check(manifest)
+    except kitversion.KitIncompatible as exc:
+        raise SupervisorError("kit compatibility check failed: %s" % exc) from exc
+
     # A previous leader may have died while a helper stayed in its process
     # group.  start_new_session makes a new leader safe from that old group, but
     # it would leave both generations consuming resources.  Reclaim a persisted
@@ -1140,7 +1146,6 @@ def start(app_id: str, *, wait_ready: bool = True,
             "launch an app whose orphan PGID could not be validated" %
             BOOT_ID_PATH)
 
-    manifest = _load_manifest(app_id)
     cmd = _build_cmd(app_id, manifest)
 
     os.makedirs(paths.logdir(app_id), exist_ok=True)
