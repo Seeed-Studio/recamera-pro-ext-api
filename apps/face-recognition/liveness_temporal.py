@@ -413,4 +413,3 @@ def facemesh_allowed(face_px: float, cfg: LivenessConfig, capturing: bool) -> bo
 
 def depth_allowed(face_px: float, cfg: LivenessConfig, capturing: bool) -> bool:
     return capturing or face_px >= float(cfg.depth_min_face_px)
-
