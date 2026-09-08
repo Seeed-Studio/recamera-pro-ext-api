@@ -1,29 +1,79 @@
 {
   "schema": 1,
-  "generated": "2026-08-17T02:29:23Z",
+  "generated": "2026-09-08T02:07:03Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
+      "id": "crayfish-fight",
+      "name": "Crayfish Fight Monitor",
+      "version": "0.1.2",
+      "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close -- screened per frame, then confirmed by an 8-frame temporal classifier that sees the motion. Reports events (never video) plus a quota-limited image dump for retraining.",
+      "image": "/appcenter/apps/crayfish-fight.png",
+      "author": "Seeed reCamera Pro",
+      "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为——单帧粗筛，再由 8 帧时序分类器看运动做确认；只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+      "capabilities": [
+        "output"
+      ],
+      "kit": ">=0.1.0",
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/crayfish-fight-0.1.2-arm64.tar.gz",
+        "filename": "crayfish-fight-0.1.2-arm64.tar.gz",
+        "sha256": "1e0be2166660915b51b80597a390fc0926f747f2e2e726348af04c51ac9f1c61",
+        "size": 7281468,
+        "signature": "MEUCIQDleEeie+gKmgkPloqLcOIfEsKMQ0s0yEspQCotnM0DXQIgcIjuiCxKcGfy/8G0P0T/HjIoFwHPtJCtaQJSuKpPXs4=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "f1-access",
+      "name": "F1 Door Access",
+      "version": "0.1.0",
+      "description": "Unmanned-store door access on one device. The recognition cascade is the face-recognition app's, unchanged: SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, matched 1:N against the enrolled gallery by cosine similarity over accumulated per-track evidence, with a fused anti-spoofing verdict that suppresses printed photos and phone screens. On top of it this app owns the door: an allowed decision closes a dry contact on one sysfs GPIO for a bounded pulse, and every decision -- allowed or not -- is published as an access/v1/events record carrying the score, the threshold, the liveness verdict, the face-library version and the model hash. The face library is pulled from a signed HTTP manifest and swapped atomically; no image and no embedding leaves the device. The gate is fail-safe by construction: the pin returns to its idle level on exit, on SIGKILL and on power loss, and a missing or inconsistent access config leaves the gate unarmed rather than open.",
+      "image": "/appcenter/apps/f1-access.png",
+      "scene": "Access & Attendance",
+      "author": "Seeed unmanned-store-access",
+      "name_zh": "F1 门禁",
+      "description_zh": "单台设备上的无人店门禁。识别级联沿用 face-recognition 应用，未做改动：SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态对齐后提取 512 维特征，与已注册人脸库做 1:N 余弦比对，身份取该人多帧证据累积后的最高票，并由融合活体判定抑制照片与手机屏幕翻拍。在此之上本应用还管门：判定放行时把一路 sysfs GPIO 上的干接点闭合一段有界脉宽，且每一次判定（放行与拒绝）都产出一条 access/v1/events 记录，带分数、阈值、活体结论、人脸库版本与模型哈希。人脸库经签名 manifest 从局域网拉取并原子切换，图像与特征均不出设备。门控按失效安全设计：进程退出、被 SIGKILL、掉电，引脚都回到未触发电平；门禁配置缺失或与识别不一致时，门禁整块不装，而不是敞开。",
+      "scene_zh": "门禁考勤",
+      "capabilities": [
+        "output"
+      ],
+      "kit": ">=1.6.4",
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.0-arm64.tar.gz",
+        "filename": "f1-access-0.1.0-arm64.tar.gz",
+        "sha256": "09b13c6180aafe4d4e88f1d4239214d9a7c0df1eb7a8ec07f5dfa8de8ee8a081",
+        "size": 41085674,
+        "signature": "MEUCIDCleu2TRol3ktFklPOUZPGlc0NfzOzLcJDW0YeyJnakAiEAyKE5Ppl2zwbp6EK7dU5+RAbDsDqzMUAvtN2olH1BGcA=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
       "id": "face-analysis",
       "name": "Face Analysis",
-      "version": "0.1.0",
-      "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Emits per-face attribute events plus a simple time-windowed demographic aggregation (gender / age / race / emotion histograms). Privacy-first: faces can be flagged for blurring and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
+      "version": "0.2.0",
+      "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Faces are tracked, so each reported attribute is a vote over that person's accumulated frames rather than one frame's argmax, faces too small to classify are gated out instead of guessed at, and the time-windowed demographic histogram counts each person once instead of once per frame. Privacy-first: every detected face carries a blur flag and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
       "image": "/appcenter/apps/face-analysis.png",
       "scene": "Retail & Audience",
       "author": "Seeed reCamera Pro",
       "name_zh": "客群分析",
-      "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
+      "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。人脸带跟踪，每个属性结论是该人多帧证据的投票结果而非单帧 argmax；过小的人脸直接门控跳过而不是猜一个标签；分时段客群直方图按人计数一次，而不是每帧计一次。隐私优先：每个检出人脸都带模糊标记，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
       "scene_zh": "零售客群",
       "capabilities": [
         "output"
       ],
+      "kit": ">=1.6.4",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-analysis-0.1.0-arm64.tar.gz",
-        "filename": "face-analysis-0.1.0-arm64.tar.gz",
-        "sha256": "afbdef12fe2a9d64e86bcb6b13e59470d5470db5c7c2c54d855d80d4a978bbad",
-        "size": 52838757,
-        "signature": "MEYCIQC585kHqmkBvxHdzD3UKHkn37aVGMH9TSzHwlF1JCaOOwIhAK5kN9rdb3e0cy2KBsgSk0gutkCwm/yoDYTIKdYfyvnn",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-analysis-0.2.0-arm64.tar.gz",
+        "filename": "face-analysis-0.2.0-arm64.tar.gz",
+        "sha256": "842f1371afd9b99688cfd73bfc01c62f090672eec6b9a735916fa13ec7dc51b5",
+        "size": 52843771,
+        "signature": "MEYCIQDhdHV+U2c8xTWUi9SK9QB/XT02AFcHPdPykJbpdiXhNAIhALdBGxWFYm/yfH0J7hbHp7q5zu6q5PQHs6Ek9ieNJX6f",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -104,9 +154,40 @@
       "models": []
     },
     {
+      "id": "inspection-assembly",
+      "name": "Assembly Inspection",
+      "version": "0.1.1",
+      "description": "Defect detection and OK/NG judgement on the camera itself. Each frame is letterboxed to 640x640 and run through YOLOX-tiny on the RV1126B NPU, trained on DeepPCB (MIT) for six bare-board defect classes: open, short, mousebite, spur, copper and pin-hole. Boxes above the frozen score become defects, the verdict engine turns them into one OK or NG per frame, and the same verdict leaves the device three ways at once: an MQTT record on inspection/{stream_id}/results validated against the project contract, a Modbus TCP register block a PLC can read (holding registers 0-11 written atomically before coil 0/1 flips, so a PLC that sees the coil already has the matching data), and a loopback HTTP panel with /healthz and /metrics. The detection, judgement and output code is the same core this project runs on Jetson Orin (TensorRT) and Raspberry Pi 5 (Hailo-8) -- only the frame source and the NPU backend differ. Measured on the 205-image DeepPCB validation split on this device: mAP50 0.9870 against 0.9876 for the fp32 CPU reference, 30.9 ms median inference.",
+      "image": "/appcenter/apps/inspection-assembly.png",
+      "scene": "Industrial Inspection",
+      "author": "Seeed edge-inspection-assembly",
+      "name_zh": "装配检测",
+      "description_zh": "缺陷检测与 OK/NG 判定在摄像头上完成。每一帧 letterbox 到 640x640，由 YOLOX-tiny 在 RV1126B NPU 上推理，模型在 DeepPCB（MIT 许可）上训练，覆盖六个裸板缺陷类：断路、短路、鼠咬、毛刺、余铜、漏孔。高于冻结阈值的框计为缺陷，判定引擎按帧给出 OK 或 NG，同一个判定同时从三条出口离开设备：inspection/{stream_id}/results 上的 MQTT 记录（按本项目契约校验）、PLC 可读的 Modbus TCP 寄存器块（保持寄存器 0-11 先原子写入，再翻转线圈 0/1，PLC 看到线圈时数据已经就位）、以及带 /healthz 与 /metrics 的回环 HTTP 面板。检测、判定与出口代码与本项目在 Jetson Orin（TensorRT）、树莓派 5（Hailo-8）上跑的是同一份 core，只有取帧口与 NPU 后端不同。在本设备上用 DeepPCB 验证集 205 张实测：mAP50 0.9870，fp32 CPU 参考为 0.9876，推理时延中位数 30.9 ms。",
+      "scene_zh": "工业检测",
+      "kit": ">=1.6.0",
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/inspection-assembly-0.1.1-arm64.tar.gz",
+        "filename": "inspection-assembly-0.1.1-arm64.tar.gz",
+        "sha256": "5bc6e00105fab854181f7ab403a58e516615b92b1727ff44f397fff9c422b873",
+        "size": 61173,
+        "signature": "MEQCIBbdPby2wwFWhTHI3QZBKpT2yG10Iy2dQNl0/ey52yysAiATg12B9byDrZkEZzf5txH+boyfdWfeEAL45JwE2n7hyA==",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": [
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/inspection-assembly/yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn",
+          "filename": "yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn",
+          "sha256": "35965a5b416cc3f994620c50918685cf795a93a44441b3a23b847ea9ad9f8428",
+          "size": 6681680,
+          "target_path": "/userdata/local/models/inspection-assembly"
+        }
+      ]
+    },
+    {
       "id": "ppocr-reader",
       "name": "PP-OCR Reader",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "On-device OCR text reader: a DBNet detector (PP-OCRv3, 480x480) finds every text region, each region is perspective-cropped to an upright 48x320 strip, then a CTC recognizer (SVTR-LCNet, 6625-class Chinese+English dictionary) reads the characters. Emits one event per text box with the recognized string, its quad and confidence. Everything runs on-device; no image or text leaves the camera. Port of the first-gen SSCMA ppocr-reader C++ solution to the reCamera Pro Python kit.",
       "image": "/appcenter/apps/ppocr-reader.png",
       "scene": "OCR & Text",
@@ -117,13 +198,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/ppocr-reader-0.1.0-arm64.tar.gz",
-        "filename": "ppocr-reader-0.1.0-arm64.tar.gz",
-        "sha256": "8ea129949f8efa5e435e054e70fd632b407ba9a190637e21ada4881ace755ca6",
-        "size": 5194719,
-        "signature": "MEYCIQDyYg29uQingdu9n8dn8+TswIBzEgnYBq+WUOJSImqAFgIhANz8tNeHn713Mob7kzHG3NqsWzXz8MLHV+hqBydNi8rZ",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/ppocr-reader-0.1.1-arm64.tar.gz",
+        "filename": "ppocr-reader-0.1.1-arm64.tar.gz",
+        "sha256": "b26d5858ba37ffb080861558ac45c906df0716e696ce33ddae71d0354c7a9486",
+        "size": 5199297,
+        "signature": "MEYCIQCWoiunYJt14P2YMOCqTP6QXKTalNGSXmIKDoLeuwwhBgIhALiqnEsc6yklVGFa8biyiwF2jaT7F68kvnYh+CZpgSDH",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -268,6 +350,37 @@
           "sha256": "6952c427ca8bd27b20c79c22d6bd611cf62401fa72fda14a447960f1b74c8a8d",
           "size": 22,
           "target_path": "/userdata/local/models/asr/kws"
+        }
+      ]
+    },
+    {
+      "id": "waste-sorting",
+      "name": "Waste Sorting",
+      "version": "0.1.0",
+      "description": "Waste classification on the camera itself. Each frame is resized short-side 256, centre-cropped to 224 and classified by EfficientNet-Lite0 on the RV1126B NPU into eight material classes (paper, cardboard, glass, metal, plastic, textile, organic, residual); the Chinese four-bin category (recyclable / kitchen / hazardous / residual) is a lookup on top of the material class, not a second model head. A class is published only after it holds for a configurable number of consecutive frames above a confidence floor, then re-published on a heartbeat and retried after a delivery failure, so a bag moving through the frame produces one record rather than a burst. Every record is the same MQTT event shape this project publishes on TensorRT, Hailo and the SG2002 build -- top-3 with per-class confidence, the material and four-bin category, inference time, the ONNX hash and the RKNN artifact hash -- validated against the contract on the publish path itself. Images never leave the device: the payload carries a reference, never pixels. On a 1060-image validation subset the INT8 model agreed with the CPU reference on 99.06% of images at a 5.8 ms median inference time.",
+      "image": "/appcenter/apps/waste-sorting.png",
+      "scene": "Waste & Recycling",
+      "author": "Seeed edge-waste-sorting",
+      "name_zh": "垃圾分类",
+      "description_zh": "分类在摄像头上完成。每一帧短边缩到 256、中心裁 224，由 EfficientNet-Lite0 在 RV1126B NPU 上判成八个物料类（纸、纸板、玻璃、金属、塑料、织物、厨余、其他）；中国生活垃圾四分类（可回收物 / 厨余垃圾 / 有害垃圾 / 其他垃圾）是在物料类之上查表得到的，不是模型的第二个头。一个类别要连续若干帧高于置信度下限才会发出，之后按心跳重发、投递失败按间隔补发，因此一个袋子经过画面产出的是一条记录而不是一串。每条记录与本项目在 TensorRT、Hailo 与 SG2002 上发的是同一个 MQTT 事件形状——top-3 及各自置信度、物料类与四分类、推理耗时、ONNX 哈希与 RKNN 制品哈希——并在发布路径上按契约校验。图片不出设备：payload 里只有引用，没有像素。在 1060 张验证子集上，INT8 模型与 CPU 参考的一致率 99.06%，推理时延中位数 5.8 ms。",
+      "scene_zh": "垃圾分类",
+      "kit": ">=1.6.0",
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/waste-sorting-0.1.0-arm64.tar.gz",
+        "filename": "waste-sorting-0.1.0-arm64.tar.gz",
+        "sha256": "7c44fa41a7fb10d021d656dd46f504f30d72baee5e991201107cf14041186952",
+        "size": 68908,
+        "signature": "MEQCIQDsneU9uhLvqPpraSGAu99iza2E/p1SYvhMLc/6Vrr4BwIfAaks40MwEoi21TIdcxCT0hoIdBzuoRWSGvx0cft8cw==",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": [
+        {
+          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/waste-sorting/efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn",
+          "filename": "efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn",
+          "sha256": "59cf7d18d15b592bf00d7fca1aa9661ad7a5a71ca0b7665c88ef725116413723",
+          "size": 4105866,
+          "target_path": "/userdata/local/models/waste-sorting"
         }
       ]
     },

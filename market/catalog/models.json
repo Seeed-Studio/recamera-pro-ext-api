@@ -25,5 +25,17 @@
         ]
       }
     ]
+  },
+  "waste-sorting": {
+    "target_path": "/userdata/local/models/waste-sorting",
+    "files": [
+      "efficientnet_lite0_waste8.rv1126b.int8.calib256.mmse.rknn"
+    ]
+  },
+  "inspection-assembly": {
+    "target_path": "/userdata/local/models/inspection-assembly",
+    "files": [
+      "yolox_tiny_deeppcb6.rv1126b.int8.calib64.normal.rknn"
+    ]
   }
 }
