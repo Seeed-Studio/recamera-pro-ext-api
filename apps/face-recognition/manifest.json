@@ -723,6 +723,16 @@
             "default": 1.0
           },
           {
+            "key": "liveness_debug_frames",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Log liveness fields per frame",
+            "title_zh": "逐帧打印活体字段",
+            "description": "Print one line per face per frame with score, texture, motion, blink, verdict and reason. Off by default; turn it on to attribute a presentation-attack result to a specific term.",
+            "description_zh": "为每帧每张人脸打印一行，含 score、texture、motion、blink、结论与依据。默认关闭；排查呈现攻击时打开，用于定位是哪一项导致了该结论。",
+            "default": false
+          },
+          {
             "key": "liveness_t_live",
             "type": "number",
             "apply": "live",

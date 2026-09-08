@@ -554,8 +554,30 @@ class FaceRecognitionApp(App):
         # the texture EMA — NOT the fused score, which mixes in motion and would
         # silently change meaning for an existing consumer.
         state.liveness_score = lv.texture_ema
+        if self._lv_cfg.debug_frames:
+            self._log_liveness_frame(track_id, face_px, out)
         self._capture_row(state, track_id, now, face_px, p_v2, p_v1se, ear, blink)
         return out
+
+    @staticmethod
+    def _fmt(v) -> str:
+        return "-" if v is None else f"{float(v):.3f}"
+
+    def _log_liveness_frame(self, track_id, face_px: float, out: dict) -> None:
+        """One line per face per frame, gated by `liveness_debug_frames`.
+
+        The fields are exactly the ones a fusion verdict is built from, so a
+        run that admits a spoof can be attributed to a term afterwards rather
+        than re-argued from the source.
+        """
+        print(
+            f"[face-recognition] lv f={self._frame_idx} t={track_id} "
+            f"px={face_px:.0f} score={self._fmt(out.get('score'))} "
+            f"tex={self._fmt(out.get('texture'))} "
+            f"motion={self._fmt(out.get('motion'))} "
+            f"blink={int(bool(out.get('blink')))} "
+            f"verdict={out.get('decision')} reason={out.get('reason')}",
+            flush=True)
 
     def _detect(self, model_input, info) -> List[dict]:
         outs = self.models[SCRFD_ID].infer(model_input)

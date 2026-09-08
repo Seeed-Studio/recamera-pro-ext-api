@@ -98,6 +98,12 @@ class LivenessConfig:
     t_live: float = 0.55
     t_spoof: float = 0.35
     depth_enabled: bool = False
+    #: Print one line per face per frame with the liveness fields
+    #: (score / texture / motion / blink / decision / reason). Off by default:
+    #: at 7 fps with one face it is ~7 lines/s on the console. Turn it on to
+    #: audit a presentation attack -- without it a spoof that slips through
+    #: leaves no record of WHICH term let it through.
+    debug_frames: bool = False
 
     @classmethod
     def from_config(cls, c: Dict, prefix: str = "liveness_") -> "LivenessConfig":
