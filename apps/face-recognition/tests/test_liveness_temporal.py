@@ -187,17 +187,79 @@ class TestFusion:
         out = lt.fuse_liveness(st, 1.0, 0.0, 0.9, None, cfg)
         assert out["decision"] == "live"
 
-    def test_a_blink_decides_live_immediately(self):
-        """Even with texture sitting well under T_spoof: a blink is proof, and
-        MiniFAS on a badly-lit real face is not."""
+    # -- the blink bypass, and what replaced it ------------------------- #
+    def test_a_blink_cannot_overturn_a_texture_spoof(self):
+        """★The 0.1.0 hole★ a screen replay replays the subject's blinks. Up to
+        0.1.0 that latched blink returned LIVE before texture was ever
+        consulted, so the one term a display attack reproduces perfectly was
+        also the only term that mattered."""
         cfg = _cfg()
-        st = self._state(0.10, 3, cfg)
+        st = self._state(0.10, 3, cfg)      # texture says display/print
         st.blink_seen = True
         out = lt.fuse_liveness(st, 1.0, 0.0, None, None, cfg)
-        assert out["decision"] == "live"
-        assert out["reason"] == "blink"
+        assert out["decision"] == "spoof"
+        assert out["reason"] == "texture_spoof"
         assert out["blink"] is True
-        assert out["score"] == pytest.approx(1.0)
+        assert out["score"] == pytest.approx(0.10)
+
+    def test_the_veto_beats_motion_and_depth_too(self):
+        """Not a blink special case: nothing lifts a vetoed texture."""
+        cfg = _cfg(depth_enabled=True)
+        st = self._state(0.20, 3, cfg)
+        st.blink_seen = True
+        out = lt.fuse_liveness(st, 9.0, 0.0, 1.0, 1.0, cfg)
+        assert out["decision"] == "spoof"
+        assert out["reason"] == "texture_spoof"
+
+    def test_the_veto_holds_across_frames_despite_hysteresis(self):
+        """Hysteresis lets a LIVE verdict survive a dip; the veto must not be
+        survivable that way, or a track that went live on its first good frames
+        keeps the verdict while the texture reads as a display."""
+        cfg = _cfg()
+        st = self._state(0.90, 3, cfg)
+        assert lt.fuse_liveness(st, 9.0, 0.0, None, None, cfg)["decision"] == "live"
+        st.update_texture(0.10, 1.0)
+        out = lt.fuse_liveness(st, 9.5, 0.0, None, None, cfg)
+        assert out["decision"] == "spoof"
+        assert out["reason"] == "texture_spoof"
+
+    def test_texture_above_the_veto_plus_a_blink_is_live(self):
+        """A real face the texture head is only lukewarm about: the blink bonus
+        is what carries it over T_live, which is the evidence blink is for."""
+        cfg = _cfg(blink_bonus=0.10)
+        st = self._state(0.50, 3, cfg)
+        no_blink = lt.fuse_liveness(st, 9.0, 0.0, None, None, cfg)
+        assert no_blink["decision"] == "pending"      # 0.50 sits inside the band
+        st2 = self._state(0.50, 3, cfg)
+        st2.blink_seen = True
+        out = lt.fuse_liveness(st2, 9.0, 0.0, None, None, cfg)
+        assert out["decision"] == "live"
+        assert out["score"] == pytest.approx(0.60)
+        assert "blink" in out["reason"]
+
+    def test_a_blink_decides_before_the_motion_window_fills(self):
+        """The blink still buys latency: it releases the awaiting_motion wait
+        rather than waiting out timeout_sec, it just no longer decides alone."""
+        cfg = _cfg(timeout_sec=2.0)
+        st = self._state(0.95, 3, cfg)
+        assert lt.fuse_liveness(st, 0.5, 0.0, None, None, cfg)["reason"] \
+            == "awaiting_motion"
+        st2 = self._state(0.95, 3, cfg)
+        st2.blink_seen = True
+        out = lt.fuse_liveness(st2, 0.5, 0.0, None, None, cfg)
+        assert out["decision"] == "live"
+
+    def test_insufficient_texture_still_outranks_the_veto(self):
+        """Two texture samples of a display: still 'pending', not 'spoof' --
+        the app must not publish a verdict off fewer than min_samples passes."""
+        cfg = _cfg()
+        st = lt.LivenessState()
+        st.update_texture(0.02, 1.0)
+        st.update_texture(0.02, 1.0)
+        st.blink_seen = True
+        out = lt.fuse_liveness(st, 9.0, 0.0, 0.9, None, cfg)
+        assert out["decision"] == "pending"
+        assert out["reason"] == "insufficient_samples"
 
     def test_no_blink_alone_never_produces_a_spoof(self):
         """★The asymmetry★ absence of a blink is not evidence: people stare."""
@@ -336,3 +398,77 @@ def test_cost_gates_and_live_recheck():
     assert not lt.skip_heavy_for_live(st, 110, cfg, capturing=True)
     st.decision = lt.PENDING
     assert not lt.skip_heavy_for_live(st, 110, cfg, capturing=False)
+
+
+class TestReplaySequences:
+    """★Whole synthetic sequences★ the per-call tests above pin the algebra of
+    one fusion; these drive `update_texture` / `update_blink` / `update_motion`
+    frame by frame the way `app._sample_liveness` does, because the 0.1.0 hole
+    was not in any single call but in the ORDER the evidence was consulted.
+    """
+
+    @staticmethod
+    def _run(tex_per_frame, ear_per_frame, cfg, dt=0.14, jitter=0.0, seed=3):
+        """Return the per-frame verdicts of one track.
+
+        `tex_per_frame[i]` is the MiniFAS ensemble P(real) on frame i (None =
+        not a texture frame), `ear_per_frame[i]` the FaceMesh EAR (None = not
+        sampled). Landmarks get `jitter` px of white noise, which is what a
+        rigid surface produces and keeps `motion_score` at None.
+        """
+        rng = np.random.default_rng(seed)
+        st = lt.LivenessState()
+        verdicts = []
+        for i, (p, ear) in enumerate(zip(tex_per_frame, ear_per_frame)):
+            now = i * dt
+            if p is not None:
+                st.update_texture(p, cfg.texture_ema_alpha)
+            lt.update_blink(st, ear, cfg.ear_threshold,
+                            cfg.blink_min_samples, cfg.blink_max_samples)
+            pts = BASE + (rng.normal(0.0, jitter, BASE.shape) if jitter else 0.0)
+            _r, _c, motion = lt.update_motion(st, now, pts, FACE_PX, cfg)
+            verdicts.append(lt.fuse_liveness(st, now, 0.0, motion, None, cfg))
+        return verdicts
+
+    def test_a_blinking_screen_replay_never_reaches_live(self):
+        """The regression that matters: a display shows a real person, so the
+        EAR trace carries real blinks, while MiniFAS reads the display."""
+        n = 40
+        tex = [0.03] * n                       # every frame is a texture frame
+        ear = [0.30] * n
+        for k in (6, 7, 18, 19, 30):           # four blinks over the track
+            ear[k] = 0.10
+        out = self._run(tex, ear, _cfg(), jitter=0.4)
+        assert any(v["blink"] for v in out), "the sequence must contain a blink"
+        assert not any(v["decision"] == "live" for v in out)
+        assert out[-1]["decision"] == "spoof"
+        assert out[-1]["reason"] == "texture_spoof"
+
+    def test_a_blinking_real_face_reaches_live(self):
+        n = 40
+        tex = [0.95] * n
+        ear = [0.30] * n
+        for k in (6, 7):
+            ear[k] = 0.10
+        out = self._run(tex, ear, _cfg(), jitter=0.4)
+        assert any(v["blink"] for v in out)
+        assert out[-1]["decision"] == "live"
+
+    def test_a_still_real_face_with_no_blink_still_reaches_live(self):
+        """No false-reject regression: the timeout path is untouched."""
+        n = 40
+        out = self._run([0.95] * n, [None] * n, _cfg(timeout_sec=2.0), jitter=0.4)
+        assert not any(v["blink"] for v in out)
+        assert out[-1]["decision"] == "live"
+
+    def test_too_few_texture_samples_wait_rather_than_decide(self):
+        """Frames 0 and 1 are 'pending/insufficient_samples' whatever else the
+        track shows -- including a blink and a display-grade texture."""
+        n = 3
+        ear = [0.10, 0.30, 0.30]
+        out = self._run([0.02] * n, ear, _cfg(), jitter=0.4)
+        assert [v["decision"] for v in out[:2]] == ["pending", "pending"]
+        assert [v["reason"] for v in out[:2]] == \
+            ["insufficient_samples", "insufficient_samples"]
+        assert out[2]["blink"] is True
+        assert out[2]["decision"] == "spoof"

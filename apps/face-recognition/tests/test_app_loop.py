@@ -539,7 +539,10 @@ class TestLiveness(_Base):
         assert lv["decision"] == "live"
         assert lv["reason"] == "timeout_texture"
 
-    def test_a_blink_overrides_a_bad_texture_score(self):
+    def test_a_blink_does_not_override_a_bad_texture_score(self):
+        """★The 0.1.0 hole, end to end★ a screen replay carries the blinks of
+        the person it replays. Publishing a name on the strength of that blink
+        is exactly the door opening for a phone held up to the lens."""
         self.enroll(alice=0)
         self.p_fn = lambda k: 0.10
         self.ear_fn = lambda k: (0.10 if k == 1 else 0.30)
@@ -548,8 +551,23 @@ class TestLiveness(_Base):
         assert self.mesh[-1].calls == N_EMITTED
         assert set(self.mesh[-1].input_shapes) == {(192, 192, 3)}
         assert face["liveness"]["blink"] is True
-        assert face["liveness"]["reason"] == "blink"
-        assert face["live"] is True
+        assert face["liveness"]["decision"] == "spoof"
+        assert face["liveness"]["reason"] == "texture_spoof"
+        assert face["live"] is False
+        assert face["name"] is None
+
+    def test_a_blink_carries_a_lukewarm_texture_over_the_line(self):
+        """And the other side of it: blink is still evidence, it just adds to
+        the fused score instead of replacing it."""
+        self.enroll(alice=0)
+        self.p_fn = lambda k: 0.50
+        self.ear_fn = lambda k: (0.10 if k == 1 else 0.30)
+        sink, _app = self.run_app(liveness_facemesh_interval=1,
+                                  liveness_blink_bonus=0.10, **self.LIVE)
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["liveness"]["blink"] is True
+        assert face["liveness"]["decision"] == "live"
+        assert "blink" in face["liveness"]["reason"]
         assert face["name"] == "alice"
 
     def test_facemesh_is_sampled_not_run_every_frame(self):
