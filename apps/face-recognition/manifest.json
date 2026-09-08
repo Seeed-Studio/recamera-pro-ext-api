@@ -1,0 +1,957 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 1,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.2,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [
+    {
+      "id": "scrfd",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/scrfd500m_640_fp16.rknn",
+      "sha256": "74ab137a2d026a56630c8eed14fb591fda778a7567b05c3e9c0751a3a6756774",
+      "size": 1645309,
+      "mount": "models/scrfd500m_640_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "arcface",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/arcface_mbf_fp16.rknn",
+      "sha256": "cb1022b986dd46b33b389e484feceb482690cda0caf7bc8f7143c5e6862b2ea9",
+      "size": 7311152,
+      "mount": "models/arcface_mbf_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "liveness",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/liveness_minifasnet_fp16.rknn",
+      "sha256": "c6d33e994e1bebb26c19bd9728e14505fcbb2e605b6a84373e3d15824b19eac1",
+      "size": 961261,
+      "mount": "models/liveness_minifasnet_fp16.rknn",
+      "required": false,
+      "share_scope": "content"
+    },
+    {
+      "id": "liveness_v1se",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/liveness_minifasnet_v1se_fp16.rknn",
+      "sha256": "8bf3593cc4c97fe92bce579129a6b9ac3da67662d08248e828685743e85e5357",
+      "size": 1087085,
+      "mount": "models/liveness_minifasnet_v1se_fp16.rknn",
+      "required": false,
+      "share_scope": "content"
+    },
+    {
+      "id": "facemesh",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/face_landmark_fp16.rknn",
+      "sha256": "9b6b39ed295971dd0d044c10e80625de0376dd850514b2ef25da5f25d29e986d",
+      "size": 1457446,
+      "mount": "models/face_landmark_fp16.rknn",
+      "required": false,
+      "share_scope": "content"
+    },
+    {
+      "id": "depth",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/depth_midas_v21_small_256_fp16.rknn",
+      "sha256": "979e55e368038d3afb7ae03947978e3f33aadb0a74d64c29b0977f0a71529282",
+      "size": 33736622,
+      "mount": "models/depth_midas_v21_small_256_fp16.rknn",
+      "required": false,
+      "share_scope": "content"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 768,
+      "cpu_percent": 300,
+      "storage_mb": 128,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts",
+        "appdata"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [
+        "loopback"
+      ],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "face-recognition",
+  "name": "Face Recognition",
+  "name_zh": "人脸识别",
+  "version": "0.1.1",
+  "image": "/appcenter/apps/face-recognition.png",
+  "type": "self-hosted",
+  "scene": "Access & Attendance",
+  "scene_zh": "门禁考勤",
+  "description": "On-device 1:N face identification. SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, and the embedding is matched against an enrolled gallery by cosine similarity. Faces are tracked, so a reported identity is the argmax of the evidence accumulated over that person's frames rather than one frame's nearest neighbour, and faces too small to embed reliably are gated out instead of matched to whoever happens to be closest. An optional MiniFASNet anti-spoofing head suppresses printed photos and phone screens: a face that fails liveness contributes no evidence at all. Enrollment runs over a loopback HTTP command channel, from the live camera or from a posted still. No image and no embedding leaves the device.",
+  "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "capabilities": [
+    "output"
+  ],
+  "postproc": "detect",
+  "output": {
+    "sink": "ws",
+    "schema": "results[]{box,label,score,cls} + extra{model_tag,enrolled,faces[]{track_id,bbox,det_score,name,score,live,liveness_score,stable,gated,reason,liveness{score,texture,motion,blink,decision,reason,depth?}}}",
+    "topic": "recamera/face-recognition/results",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Face box, original-frame xyxy pixels"
+      },
+      {
+        "name": "label",
+        "from": "results[].label",
+        "type": "string",
+        "description": "Recognised person, or 'unknown' when no gallery entry cleared match_threshold, the face was gated, or it failed liveness"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Cosine similarity to the winning gallery template on this track's most recent embedding; 0 when nobody matched"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "Class index, always 0 ('face')"
+      },
+      {
+        "name": "model_tag",
+        "from": "extra.model_tag",
+        "type": "string",
+        "description": "Detector+embedder identity the gallery is bound to. Embeddings are NOT comparable across tags, so a gallery written under a different tag is refused rather than silently matching nobody"
+      },
+      {
+        "name": "enrolled",
+        "from": "extra.enrolled",
+        "type": "integer",
+        "description": "People currently in the gallery"
+      },
+      {
+        "name": "gallery_error",
+        "from": "extra.gallery_error",
+        "type": "string",
+        "optional": true,
+        "description": "Present only when the gallery file could not be loaded (usually a model_tag mismatch); recognition runs with an empty gallery"
+      },
+      {
+        "name": "track_id",
+        "from": "extra.faces[].track_id",
+        "type": "integer",
+        "optional": true,
+        "description": "Stable per-person identity across frames; null when the face was not associated to a track this frame"
+      },
+      {
+        "name": "face_bbox",
+        "from": "extra.faces[].bbox",
+        "type": "bbox<float>[4]",
+        "coord": "normalized_xyxy",
+        "description": "Same box as results[].box, normalised to [0,1]"
+      },
+      {
+        "name": "det_score",
+        "from": "extra.faces[].det_score",
+        "type": "float",
+        "description": "SCRFD detection confidence, separate from the recognition score"
+      },
+      {
+        "name": "name",
+        "from": "extra.faces[].name",
+        "type": "string",
+        "optional": true,
+        "description": "Recognised name, or null (results[].label carries 'unknown' for the same case)"
+      },
+      {
+        "name": "live",
+        "from": "extra.faces[].live",
+        "type": "bool",
+        "optional": true,
+        "description": "Anti-spoofing verdict; null when liveness is disabled, or while the track's verdict is still 'pending' (see faces[].liveness.decision)"
+      },
+      {
+        "name": "liveness_score",
+        "from": "extra.faces[].liveness_score",
+        "type": "float",
+        "optional": true,
+        "description": "Texture evidence only: the exponential moving average of the two-model MiniFAS P(real) for this track. Kept as a plain probability for consumers written against v1; the fused verdict is faces[].liveness.score"
+      },
+      {
+        "name": "liveness",
+        "from": "extra.faces[].liveness",
+        "type": "object",
+        "optional": true,
+        "description": "Fused liveness object {score,texture,motion,blink,decision,reason} (+ depth{planarity,score} when depth evidence is enabled and available); null when liveness has not run for this track"
+      },
+      {
+        "name": "liveness_decision",
+        "from": "extra.faces[].liveness.decision",
+        "type": "string",
+        "optional": true,
+        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending"
+      },
+      {
+        "name": "liveness_reason",
+        "from": "extra.faces[].liveness.reason",
+        "type": "string",
+        "optional": true,
+        "description": "Which evidence produced the verdict: 'insufficient_samples', 'awaiting_motion', 'uncertain', 'blink', or a '+'-joined list of the terms used ('texture', 'texture+motion', 'timeout_texture', ...)"
+      },
+      {
+        "name": "liveness_motion",
+        "from": "extra.faces[].liveness.motion",
+        "type": "float",
+        "optional": true,
+        "description": "Calibrated five-point motion score in [0,1] after the similarity transform between frames is removed; null when the window is too short or the residual is at or below liveness_motion_noise_floor (detector jitter), in which case motion is dropped from the fusion rather than scored as zero"
+      },
+      {
+        "name": "liveness_blink",
+        "from": "extra.faces[].liveness.blink",
+        "type": "bool",
+        "optional": true,
+        "description": "A blink has been observed on this track. True is proof of liveness; false is NOT evidence of a spoof"
+      },
+      {
+        "name": "stable",
+        "from": "extra.faces[].stable",
+        "type": "bool",
+        "description": "The track has accumulated at least min_track_frames of embedding evidence, so the identity has settled"
+      },
+      {
+        "name": "gated",
+        "from": "extra.faces[].gated",
+        "type": "bool",
+        "description": "Face was below min_face_px (or unassociated), so no embedding ran and no identity is claimed"
+      },
+      {
+        "name": "reason",
+        "from": "extra.faces[].reason",
+        "type": "string",
+        "optional": true,
+        "description": "Why this face has no name despite being embedded; currently 'spoof'"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "detection.count",
+        "target": "face_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "results | last",
+        "target": "recognition",
+        "topic": "recamera/{{ app }}/recognition",
+        "task": "detection"
+      }
+    ],
+    "contract_version": 2
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Face detection",
+        "title_zh": "人脸检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Face confidence",
+            "title_zh": "人脸置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "max_faces",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max faces / frame",
+            "title_zh": "每帧最大人脸数",
+            "min": 1,
+            "max": 16,
+            "step": 1,
+            "default": 5,
+            "help": "Upper bound on embeddings per frame. The NPU has one core and runs serially, so this is the app's per-frame worst case; faces past the cut still appear in results[] only if they win the score sort.",
+            "help_zh": "每帧特征提取次数的上限。NPU 单核串行，这个值就是每帧的最坏开销；按检测分数排序取前 N。"
+          },
+          {
+            "key": "min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face size (px)",
+            "title_zh": "最小人脸尺寸（像素）",
+            "min": 0,
+            "max": 320,
+            "step": 8,
+            "default": 64,
+            "help": "Quality gate: faces whose shorter box side is below this in the ORIGINAL frame are never embedded. Below roughly this size the aligned 112x112 chip is mostly upsampling artefact, and a garbage embedding does not fail — it matches somebody. Gated faces still appear in results with gated=true and label 'unknown', and cost no inference.",
+            "help_zh": "质量门控：原图中短边小于此值的人脸不做特征提取。低于这个尺寸，对齐后的 112x112 基本是插值伪影，而错误的特征不会报错，只会匹配到某个人。被门控的人脸仍出现在 results 中，标 gated=true、label 为 unknown，且不消耗推理。"
+          }
+        ]
+      },
+      {
+        "key": "recognition",
+        "title": "Recognition",
+        "title_zh": "识别",
+        "items": [
+          {
+            "key": "match_threshold",
+            "type": "number",
+            "apply": "restart",
+            "title": "Match threshold (cosine)",
+            "title_zh": "匹配阈值（余弦）",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.01,
+            "default": 0.4,
+            "help": "Minimum cosine similarity between a face embedding and a gallery template to claim that identity. Raising it trades recall for precision; below it the face is reported as 'unknown' rather than as the closest person.",
+            "help_zh": "判定为某个已注册身份所需的最小余弦相似度。调高换取更高准确率、更低召回；低于阈值时报 unknown，而不是报最接近的那个人。"
+          },
+          {
+            "key": "embed_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "Re-embed every N frames",
+            "title_zh": "每 N 帧重提特征",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 5,
+            "help": "How often an already-tracked face is embedded again. Between two embeddings the track keeps reporting its accumulated verdict, so raising this spreads NPU load without blanking the output.",
+            "help_zh": "已跟踪人脸多久重新提取一次特征。两次提取之间沿用已累积的结论，因此调大只会摊平 NPU 负载，不会让输出变空。"
+          },
+          {
+            "key": "min_track_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Embeddings before a verdict settles",
+            "title_zh": "结论生效所需特征帧数",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 3,
+            "help": "Embedding samples a tracked face must accumulate before its identity is reported as stable=true. The name is emitted before this too (stable=false) so the UI is not blank while a person is being measured.",
+            "help_zh": "一张被跟踪的人脸需要累积多少次特征提取，其身份才标记为 stable=true。在此之前照常输出名字（stable=false），避免测量期间界面空白。"
+          },
+          {
+            "key": "evidence_decay",
+            "type": "number",
+            "apply": "live",
+            "title": "Evidence decay per embedding",
+            "title_zh": "证据衰减系数",
+            "min": 0.5,
+            "max": 1.0,
+            "step": 0.01,
+            "default": 1.0,
+            "help": "Accumulated per-name vote weight is multiplied by this before each new sample is folded in. 1.0 never forgets (best for a fixed entry point); below 1.0 lets a track that was re-associated to a different person converge onto the new one instead of carrying the old identity.",
+            "help_zh": "每次加入新样本前，已累积的每个名字的票权先乘以该系数。1.0 表示永不遗忘（固定入口场景最稳）；小于 1.0 时，若跟踪框被错误关联到另一个人，可以逐步收敛到新身份而不是一直沿用旧结论。"
+          },
+          {
+            "key": "track_max_lost",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Track lost budget (frames)",
+            "title_zh": "跟踪丢失容忍帧数",
+            "min": 1,
+            "max": 120,
+            "step": 1,
+            "default": 15,
+            "help": "Frames a face may go undetected before its track — and its accumulated identity evidence — is dropped. Too high and a new person inherits the previous one's evidence when they stand in the same place.",
+            "help_zh": "人脸连续多少帧检不到后丢弃该跟踪及其累积证据。设得过大时，下一个站在同一位置的人可能继承上一个人的证据。"
+          },
+          {
+            "key": "enroll_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Frames per camera enrollment",
+            "title_zh": "摄像头注册采集帧数",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 5,
+            "help": "Embeddings averaged into one template when enrolling from the live camera. More frames average out blur and pose, but the HTTP request waits for all of them within its 15 s budget.",
+            "help_zh": "摄像头注册时，平均多少次特征形成一个模板。帧数越多越能抵消模糊与姿态偏差，但 HTTP 请求要在 15 秒预算内等齐。"
+          }
+        ]
+      },
+      {
+        "key": "liveness",
+        "title": "Anti-spoofing",
+        "title_zh": "活体检测",
+        "items": [
+          {
+            "key": "liveness_enabled",
+            "type": "boolean",
+            "apply": "restart",
+            "title": "Enable liveness check",
+            "title_zh": "启用活体检测",
+            "default": false,
+            "help": "Run the two-model MiniFAS texture ensemble on embedding frames, five-point motion on every frame, and sampled FaceMesh blink detection. A track's identity is withheld until its verdict settles, and a face judged a spoof contributes no identity evidence at all, so a printed photo cannot accumulate its way to a match. Requires models/liveness_minifasnet_fp16.rknn; models/liveness_minifasnet_v1se_fp16.rknn and models/face_landmark_fp16.rknn are used when present.",
+            "help_zh": "启用活体检测：特征帧上运行双模型 MiniFAS 纹理集成，每帧计算五点运动，并按间隔采样 FaceMesh 眨眼。结论未定前不输出身份；判为翻拍的人脸完全不贡献身份证据，因此照片无法逐帧累积成一次匹配。需要 models/liveness_minifasnet_fp16.rknn；models/liveness_minifasnet_v1se_fp16.rknn 与 models/face_landmark_fp16.rknn 存在时一并使用。"
+          },
+          {
+            "key": "liveness_threshold",
+            "type": "number",
+            "apply": "live",
+            "title": "Liveness threshold P(real) (legacy)",
+            "title_zh": "活体阈值 P(real)（旧版）",
+            "min": 0.1,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5,
+            "help": "Single-frame P(real) cut-off used before the fused verdict existed. Retained for configuration compatibility; the verdict is now produced by liveness_t_live / liveness_t_spoof over the fused score.",
+            "help_zh": "融合结论出现之前使用的单帧 P(real) 阈值。为配置兼容保留；当前结论由 liveness_t_live / liveness_t_spoof 在融合分数上给出。"
+          },
+          {
+            "key": "liveness_texture_ema_alpha",
+            "type": "number",
+            "apply": "live",
+            "title": "Texture EMA weight",
+            "title_zh": "纹理 EMA 权重",
+            "min": 0.05,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.4,
+            "help": "Weight of the newest texture sample in the per-track exponential moving average. Higher reacts faster to a swap from a face to a photo; lower is steadier under blur and exposure changes.",
+            "help_zh": "每个跟踪的纹理指数滑动平均中，最新样本所占权重。调高对「人脸换成照片」反应更快，调低则在模糊与曝光变化下更稳。"
+          },
+          {
+            "key": "liveness_min_samples",
+            "type": "integer",
+            "apply": "live",
+            "title": "Texture samples before a verdict",
+            "title_zh": "结论所需纹理样本数",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "default": 3,
+            "help": "Texture inferences a track must accumulate before any verdict is published. Below this the decision stays 'pending' and the identity is withheld, because one MiniFAS frame on a moving face is not a decision.",
+            "help_zh": "一个跟踪需要累积多少次纹理推理才输出结论。未达到时结论保持 pending 且不输出身份——运动人脸上的单帧 MiniFAS 不足以下结论。"
+          },
+          {
+            "key": "liveness_motion_window_sec",
+            "type": "number",
+            "apply": "live",
+            "title": "Motion window (s)",
+            "title_zh": "运动窗口（秒）",
+            "min": 0.5,
+            "max": 5.0,
+            "step": 0.25,
+            "default": 1.75,
+            "help": "Length of the five-point history kept per track. The window is measured in TIME, not frames, so it holds its meaning when the frame rate drops.",
+            "help_zh": "每个跟踪保留的五点历史长度。窗口按时间而非帧数计算，帧率下降时含义不变。"
+          },
+          {
+            "key": "liveness_timeout_sec",
+            "type": "number",
+            "apply": "live",
+            "title": "Pending timeout (s)",
+            "title_zh": "未定结论超时（秒）",
+            "min": 0.5,
+            "max": 10.0,
+            "step": 0.5,
+            "default": 2.0,
+            "help": "How long a track may stay pending while waiting for usable motion. After this, texture (plus depth when enabled) decides on its own with no motion penalty — a person standing perfectly still must not be locked out.",
+            "help_zh": "一个跟踪等待可用运动证据的最长时间。超时后仅凭纹理（启用时加深度）判定，不因缺少运动而扣分——完全站定不动的人不应被拒。"
+          },
+          {
+            "key": "liveness_motion_noise_floor",
+            "type": "number",
+            "apply": "live",
+            "title": "Motion noise floor",
+            "title_zh": "运动噪声地板",
+            "min": 0.0,
+            "max": 0.05,
+            "step": 0.001,
+            "default": 0.006,
+            "help": "Residual (in face-short-side units) at or below which the five-point motion is indistinguishable from detector jitter. Motion is then DROPPED from the fusion rather than scored as zero. Calibrate with tools/fit_liveness.py on a capture from the installed camera: SCRFD jitter varies with face size, exposure and pose.",
+            "help_zh": "残差（以人脸短边为单位）低于或等于此值时，五点运动与检测器抖动无法区分，此时运动项从融合中剔除而不是记为 0 分。请用 tools/fit_liveness.py 在实际安装的相机采集数据上标定：SCRFD 抖动随人脸尺寸、曝光与姿态变化。"
+          },
+          {
+            "key": "liveness_motion_high",
+            "type": "number",
+            "apply": "live",
+            "title": "Motion saturation",
+            "title_zh": "运动饱和点",
+            "min": 0.005,
+            "max": 0.2,
+            "step": 0.005,
+            "default": 0.02,
+            "help": "Residual at which the motion component reaches 1.0. Between the noise floor and here the mapping is linear.",
+            "help_zh": "运动分量达到 1.0 所需的残差。噪声地板与此值之间为线性映射。"
+          },
+          {
+            "key": "liveness_correlation_low",
+            "type": "number",
+            "apply": "live",
+            "title": "Residual correlation floor",
+            "title_zh": "残差相关性下限",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.15,
+            "help": "Mean off-diagonal correlation of the residual vectors below which the residual reads as white detector noise rather than a persistent deformation.",
+            "help_zh": "残差向量之间的平均非对角相关系数低于此值时，残差视为白噪声抖动而非持续形变。"
+          },
+          {
+            "key": "liveness_correlation_high",
+            "type": "number",
+            "apply": "live",
+            "title": "Residual correlation saturation",
+            "title_zh": "残差相关性饱和点",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.65,
+            "help": "Correlation at which the coherence component of the motion score reaches 1.0.",
+            "help_zh": "运动分数中相干性分量达到 1.0 所需的相关系数。"
+          },
+          {
+            "key": "liveness_facemesh_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "FaceMesh every N frames",
+            "title_zh": "每 N 帧运行 FaceMesh",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "default": 2,
+            "help": "How often the 192x192 landmark model runs for blink detection. It is the expensive term and a blink spans several frames, so sampling costs little sensitivity; raising it lowers the per-frame worst case.",
+            "help_zh": "用于眨眼检测的 192x192 关键点模型运行间隔。该项开销最大，而一次眨眼跨越多帧，因此抽样几乎不损失灵敏度；调大可降低每帧最坏开销。"
+          },
+          {
+            "key": "liveness_min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face (px) for FaceMesh",
+            "title_zh": "FaceMesh 最小人脸（像素）",
+            "min": 0,
+            "max": 400,
+            "step": 10,
+            "default": 100,
+            "help": "Below this short side FaceMesh is skipped: the eye aspect ratio carries no signal on a tiny face and the 192x192 model is the largest per-face cost. Capture mode ignores the gate.",
+            "help_zh": "人脸短边小于此值不跑 FaceMesh：小脸上 EAR 没有信号，而 192x192 模型是每张脸最大的开销。采样模式不受此限制。"
+          },
+          {
+            "key": "liveness_depth_min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face (px) for depth",
+            "title_zh": "深度证据最小人脸（像素）",
+            "min": 0,
+            "max": 600,
+            "step": 10,
+            "default": 150,
+            "help": "Depth planarity needs tens of depth pixels inside the face box (256x256 map over a 1280-wide frame), so smaller faces skip it.",
+            "help_zh": "平面度需要人脸框内有几十个深度像素（1280 宽画面对应 256x256 深度图），更小的脸跳过。"
+          },
+          {
+            "key": "liveness_live_recheck_interval",
+            "type": "integer",
+            "apply": "live",
+            "title": "Re-check a live track every N frames",
+            "title_zh": "已判活 track 每 N 帧复查",
+            "min": 1,
+            "max": 60,
+            "step": 1,
+            "default": 15,
+            "help": "Once a track is live its verdict is kept and texture/FaceMesh/depth run again only every N frames, which is where most of the per-frame cost goes on a busy scene.",
+            "help_zh": "track 判为活体后保持结论，纹理/FaceMesh/深度每 N 帧才再跑一次；多人场景的每帧开销主要来自这里。"
+          },
+          {
+            "key": "liveness_ear_threshold",
+            "type": "number",
+            "apply": "live",
+            "title": "Eye aspect ratio threshold",
+            "title_zh": "眼睛纵横比阈值",
+            "min": 0.1,
+            "max": 0.4,
+            "step": 0.01,
+            "default": 0.21,
+            "help": "EAR below which a sampled eye counts as closed. Shifts with glasses and with the camera's mounting angle, so verify it on the installed unit.",
+            "help_zh": "低于该 EAR 视为闭眼。该值随眼镜与相机安装角度变化，需在实际安装的设备上确认。"
+          },
+          {
+            "key": "liveness_blink_min_samples",
+            "type": "integer",
+            "apply": "live",
+            "title": "Blink min closed samples",
+            "title_zh": "眨眼最少闭眼样本数",
+            "min": 1,
+            "max": 5,
+            "step": 1,
+            "default": 1,
+            "help": "Shortest closed run (counted in FaceMesh SAMPLES, not camera frames) that an open sample may close into a blink.",
+            "help_zh": "可被判为一次眨眼的最短闭眼连续段，按 FaceMesh 采样数计，而非相机帧数。"
+          },
+          {
+            "key": "liveness_blink_max_samples",
+            "type": "integer",
+            "apply": "live",
+            "title": "Blink max closed samples",
+            "title_zh": "眨眼最多闭眼样本数",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "default": 3,
+            "help": "Longest closed run still counted as a blink. A longer closure (a held-shut eye, or a face that left the frame) resets without latching a blink.",
+            "help_zh": "仍算作眨眼的最长闭眼连续段。更长的闭合（持续闭眼，或人脸离开画面）只重置计数，不判定为眨眼。"
+          },
+          {
+            "key": "liveness_w_texture",
+            "type": "number",
+            "apply": "live",
+            "title": "Fusion weight: texture",
+            "title_zh": "融合权重：纹理",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.7,
+            "help": "Weight of the MiniFAS ensemble in the fused score. Weights are renormalised over whichever evidence is actually present, so absent motion or depth does not dilute the result.",
+            "help_zh": "MiniFAS 集成在融合分数中的权重。权重会按实际存在的证据重新归一化，因此缺少运动或深度不会稀释结果。"
+          },
+          {
+            "key": "liveness_w_motion",
+            "type": "number",
+            "apply": "live",
+            "title": "Fusion weight: motion",
+            "title_zh": "融合权重：运动",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.3,
+            "help": "Weight of the five-point motion term when it is above the noise floor.",
+            "help_zh": "五点运动项高于噪声地板时在融合中的权重。"
+          },
+          {
+            "key": "liveness_w_depth",
+            "type": "number",
+            "apply": "live",
+            "title": "Fusion weight: depth",
+            "title_zh": "融合权重：深度",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 0.2,
+            "help": "Weight of the optional depth-flatness term when depth evidence is enabled and available.",
+            "help_zh": "启用且可用时，可选深度平面度项在融合中的权重。"
+          },
+          {
+            "key": "liveness_blink_bonus",
+            "type": "number",
+            "apply": "live",
+            "title": "Blink bonus",
+            "title_zh": "眨眼加分",
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "default": 1.0,
+            "help": "Added to the reported score once a blink has been observed. A blink also sets the verdict to live outright: it is the strongest passive evidence available, and no amount of texture uncertainty should override it.",
+            "help_zh": "观察到眨眼后加到报告分数上的增量。眨眼同时直接把结论置为 live：这是被动检测中最强的证据，纹理上的不确定性不应推翻它。"
+          },
+          {
+            "key": "liveness_t_live",
+            "type": "number",
+            "apply": "live",
+            "title": "Live threshold",
+            "title_zh": "判活阈值",
+            "min": 0.3,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.55,
+            "help": "Fused score at or above which a verdict becomes live. Together with liveness_t_spoof it forms a hysteresis band, so a score hovering on the boundary does not flap between admitting and rejecting the same person.",
+            "help_zh": "融合分数达到该值判为 live。与 liveness_t_spoof 构成迟滞区间，使分数在边界附近波动时不会对同一个人反复放行/拒绝。"
+          },
+          {
+            "key": "liveness_t_spoof",
+            "type": "number",
+            "apply": "live",
+            "title": "Spoof threshold",
+            "title_zh": "判假阈值",
+            "min": 0.05,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.35,
+            "help": "Fused score below which a verdict becomes spoof. Must stay under liveness_t_live; the gap between them is the hysteresis band.",
+            "help_zh": "融合分数低于该值判为 spoof。必须小于 liveness_t_live，两者之差即迟滞带宽。"
+          },
+          {
+            "key": "liveness_depth_enabled",
+            "type": "boolean",
+            "apply": "restart",
+            "title": "Use depth evidence",
+            "title_zh": "使用深度证据",
+            "default": false,
+            "help": "Include the monocular depth flatness term in the fusion. Off by default: no depth model ships with this app, and the interface returns 'no evidence' until one is installed.",
+            "help_zh": "在融合中加入单目深度平面度项。默认关闭：本应用未附带深度模型，安装模型前该接口返回「无证据」。"
+          },
+          {
+            "key": "liveness_capture_max_sec",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max capture duration (s)",
+            "title_zh": "采集时长上限（秒）",
+            "min": 1,
+            "max": 600,
+            "step": 1,
+            "default": 60,
+            "help": "Upper bound accepted by the liveness_capture command, which appends one feature row per face per frame to liveness_capture.jsonl for offline threshold fitting. The rows contain model outputs and box geometry only — no pixels, no embeddings, no names.",
+            "help_zh": "liveness_capture 指令允许的最大时长。该指令按帧、按人脸向 liveness_capture.jsonl 追加特征行，供离线阈值拟合使用。行内仅含模型输出与框几何信息，不含像素、特征向量与姓名。"
+          }
+        ]
+      },
+      {
+        "key": "control",
+        "title": "Enrollment endpoint",
+        "title_zh": "注册接口",
+        "items": [
+          {
+            "key": "cmd_port",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Command port",
+            "title_zh": "指令端口",
+            "min": 0,
+            "max": 65535,
+            "step": 1,
+            "default": 8126,
+            "help": "TCP port for the enrollment/admin HTTP endpoint, bound to 127.0.0.1. 8125 is reserved by the result hub; use 8126, or 0 to disable it.",
+            "help_zh": "注册/管理 HTTP 接口的 TCP 端口，绑定在 127.0.0.1。8125 已由结果中心占用，请使用 8126；设为 0 则完全关闭。"
+          }
+        ]
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "scrfd",
+      "file": "models/scrfd500m_640_fp16.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "face"
+      ],
+      "norm": "scrfd-baked",
+      "role": "stage1_detector",
+      "description": "SCRFD-500M raw head: nine 2-D tensors (score/bbox/kps per stride 8/16/32). Output ORDER is not part of any contract; scrfd.py maps them by shape."
+    },
+    {
+      "id": "arcface",
+      "file": "models/arcface_mbf_fp16.rknn",
+      "task": "embed",
+      "input": [
+        1,
+        112,
+        112,
+        3
+      ],
+      "quant": "fp16",
+      "norm": "arcface-baked",
+      "dim": 512,
+      "role": "stage2_embedder",
+      "description": "MobileFaceNet ArcFace, (1,512) raw embedding; L2 normalization happens in the app."
+    },
+    {
+      "id": "liveness",
+      "file": "models/liveness_minifasnet_fp16.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        80,
+        80,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "channel_order": "BGR",
+      "norm": "none",
+      "classes": [
+        "fake_2d",
+        "real",
+        "fake_3d"
+      ],
+      "role": "stage3_liveness",
+      "description": "MiniFASNet V2 2.7_80x80 anti-spoofing. Takes BGR with NO normalization; the app flips channels before infer. softmax()[1] is P(real)."
+    },
+    {
+      "id": "liveness_v1se",
+      "file": "models/liveness_minifasnet_v1se_fp16.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        80,
+        80,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "channel_order": "BGR",
+      "norm": "none",
+      "classes": [
+        "fake_2d",
+        "real",
+        "fake_3d"
+      ],
+      "role": "stage3_liveness_v1se",
+      "description": "MiniFASNetV1SE 4.0_80x80 anti-spoofing, the second half of the texture ensemble. Same BGR/no-normalization contract as the V2 head, but cut from a 4.0x expansion of the SAME detection box so it also sees the phone bezel or paper edge framing the face; the app averages the two softmax()[1] values."
+    },
+    {
+      "id": "facemesh",
+      "file": "models/face_landmark_fp16.rknn",
+      "task": "landmark",
+      "input": [
+        1,
+        192,
+        192,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "role": "stage4_blink",
+      "description": "MediaPipe FaceMesh 468-point landmarks on a 192x192 padded square ROI, sampled every liveness_facemesh_interval frames. Only the 6-point eye aspect ratio is consumed, to detect a blink; a blink is positive proof of liveness, and its absence is never treated as a spoof."
+    },
+    {
+      "id": "depth",
+      "file": "models/depth_midas_v21_small_256_fp16.rknn",
+      "task": "depth",
+      "input": [
+        1,
+        256,
+        256,
+        3
+      ],
+      "quant": "fp16",
+      "optional": true,
+      "norm": "in-graph (ImageNet), feed raw uint8 RGB",
+      "role": "liveness_depth",
+      "note": "MiDaS v2.1 small; ~51 ms on RV1126B. Used only when liveness_depth_enabled."
+    }
+  ],
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "x-default_model": "scrfd",
+  "x-model_tag": "rv1126b:scrfd500m+mbf512@fp16"
+}

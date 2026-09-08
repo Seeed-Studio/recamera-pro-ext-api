@@ -248,13 +248,13 @@ class TestResolveAndFind(unittest.TestCase):
 
 
 class TestShippedApps(unittest.TestCase):
-    """The nine real apps: bootstrap gone, and still launchable by kit.run."""
+    """The shipped apps: bootstrap gone, and still launchable by kit.run."""
 
     APPS = sorted(d for d in os.listdir(APPS_DIR)
                   if os.path.isfile(os.path.join(APPS_DIR, d, "app.py")))
 
-    def test_there_are_still_nine_apps(self):
-        self.assertEqual(len(self.APPS), 9, self.APPS)
+    def test_all_shipped_apps_are_present(self):
+        self.assertEqual(len(self.APPS), 12, self.APPS)
 
     def test_no_app_probes_for_kit_on_sys_path_any_more(self):
         """★The deletion, pinned★ -- one regression here and 40 lines come back."""
