@@ -136,17 +136,23 @@ class OutputSchemaInjectionTests(unittest.TestCase):
         man = _manifest(["output"], output={"default_mapping": [{
             "source": "detection.count", "target": "count", "topic": "t"}]})
         app_id = "legacy-template-mode"
-        os.makedirs(appconfig.paths.app_dir(app_id), exist_ok=True)
-        appconfig.write_user_config(app_id, {
-            "output_mapping": [],
-            "dTemplate": {"sDetection": "{{ detection.count }}"},
-        })
-        effective = appconfig.effective_values(man, app_id)
-        self.assertEqual(effective["template_mode"], "template")
+        with tempfile.TemporaryDirectory(prefix="legacy-template.") as root:
+            os.makedirs(appconfig.paths.app_dir(app_id), exist_ok=True)
+            old_appdata_dir = appconfig.paths.appdata_dir
+            appconfig.paths.appdata_dir = lambda _id: os.path.join(root, _id)
+            try:
+                appconfig.write_user_config(app_id, {
+                    "output_mapping": [],
+                    "dTemplate": {"sDetection": "{{ detection.count }}"},
+                })
+                effective = appconfig.effective_values(man, app_id)
+                self.assertEqual(effective["template_mode"], "template")
 
-        appconfig.write_user_config(app_id, {"template_mode": "mapping"})
-        explicit = appconfig.effective_values(man, app_id)
-        self.assertEqual(explicit["template_mode"], "mapping")
+                appconfig.write_user_config(app_id, {"template_mode": "mapping"})
+                explicit = appconfig.effective_values(man, app_id)
+                self.assertEqual(explicit["template_mode"], "mapping")
+            finally:
+                appconfig.paths.appdata_dir = old_appdata_dir
 
     def test_validate_rejects_bad_enum_and_unknown(self):
         man = _manifest(["output"])
