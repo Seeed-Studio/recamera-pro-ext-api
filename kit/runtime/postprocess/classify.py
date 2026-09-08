@@ -42,12 +42,19 @@ FAIRFACE_SEGMENTS = [("race", 0, 7), ("gender", 7, 2), ("age", 9, 9)]
 
 
 # ---- numeric primitives --------------------------------------------------- #
-def softmax(logits: Sequence[float]) -> np.ndarray:
-    """Numerically-stable 1-D softmax."""
+def softmax(logits: Sequence[float], temperature: float = 1.0) -> np.ndarray:
+    """Numerically-stable 1-D softmax, optionally temperature-scaled.
+
+    `temperature` divides the logits before exponentiating: >1 softens the
+    distribution, <1 sharpens it, and 1.0 (the default) is the plain softmax.
+    The calibration POLICY -- which temperature each head gets -- lives in
+    `kit.logic.attributes.AttributeConfig`; this layer only does the arithmetic.
+    """
     a = np.asarray(logits, dtype=np.float32).reshape(-1)
     if a.size == 0:
         return a
-    a = a - float(np.max(a))
+    t = max(1e-3, float(temperature))
+    a = (a - float(np.max(a))) / t
     e = np.exp(a)
     s = float(np.sum(e))
     return e / s if s > 0.0 else np.full_like(e, 1.0 / e.size)
@@ -75,9 +82,17 @@ def topk(logits: Sequence[float], k: int = 3,
 
 
 def classify_head(logits: Sequence[float],
-                  labels: Optional[Sequence[str]] = None) -> dict:
-    """Softmax + argmax one head. Returns index / label / confidence / probs."""
-    probs = softmax(logits)
+                  labels: Optional[Sequence[str]] = None,
+                  temperature: float = 1.0) -> dict:
+    """Softmax + argmax one head. Returns index / label / confidence / probs.
+
+    `temperature` divides the logits before the softmax (1.0 = plain softmax,
+    the historical behaviour). It exists because a ResNet classification head is
+    systematically overconfident, so a deployment that thresholds `confidence`
+    needs the correction fitted on a held-out set; see `kit.logic.attributes`,
+    which owns the per-head calibration policy.
+    """
+    probs = softmax(logits, temperature)
     if probs.size == 0:
         return {"index": -1, "label": None, "confidence": 0.0, "probs": []}
     idx = int(np.argmax(probs))
@@ -92,11 +107,14 @@ def classify_head(logits: Sequence[float],
 
 def split_heads(vec: Sequence[float],
                 segments: Sequence[Tuple[str, int, int]],
-                labels_by_head: Optional[dict] = None) -> dict:
+                labels_by_head: Optional[dict] = None,
+                temperature: Optional[dict] = None) -> dict:
     """Slice a flat logit vector into contiguous heads and classify each.
 
     segments : [(name, start, length), ...]
     labels_by_head : optional {name: [labels]} to attach string labels.
+    temperature : optional {name: float} per-head softmax temperature; a head
+                  absent from the dict keeps 1.0 (plain softmax).
     Returns {name: classify_head(...)}.
     """
     v = np.asarray(vec, dtype=np.float32).reshape(-1)
@@ -104,7 +122,8 @@ def split_heads(vec: Sequence[float],
     for name, start, length in segments:
         seg = v[start:start + length]
         labels = (labels_by_head or {}).get(name)
-        out[name] = classify_head(seg, labels)
+        t = float((temperature or {}).get(name, 1.0))
+        out[name] = classify_head(seg, labels, temperature=t)
     return out
 
 
@@ -125,16 +144,20 @@ def logits_from(outputs, size: Optional[int] = None) -> np.ndarray:
 
 
 # ---- task decoders (thin, label-aware wrappers) --------------------------- #
-def fairface_decode(outputs) -> dict:
-    """(1,18) FairFace head -> {race,gender,age} each a classify_head dict."""
+def fairface_decode(outputs, temperature: Optional[dict] = None) -> dict:
+    """(1,18) FairFace head -> {race,gender,age} each a classify_head dict.
+
+    `temperature` is an optional {"race"/"gender"/"age": float} calibration map;
+    omitted or 1.0 reproduces the plain softmax exactly.
+    """
     vec = logits_from(outputs, size=18)
     heads = split_heads(vec, FAIRFACE_SEGMENTS, labels_by_head={
         "race": RACE_LABELS, "gender": GENDER_LABELS, "age": AGE_LABELS,
-    })
+    }, temperature=temperature)
     return heads
 
 
-def emotion_decode(outputs) -> dict:
+def emotion_decode(outputs, temperature: float = 1.0) -> dict:
     """(1,8) emotion head -> single classify_head dict."""
     vec = logits_from(outputs, size=len(EMOTION_LABELS))
-    return classify_head(vec, EMOTION_LABELS)
+    return classify_head(vec, EMOTION_LABELS, temperature=temperature)

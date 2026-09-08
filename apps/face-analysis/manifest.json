@@ -1,11 +1,14 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
+  "release": {
+    "sequence": 5,
+    "channel": "stable"
+  },
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64",
     "python": "==3.11.*",
-    "kit_api": ">=0.1,<1",
+    "kit_api": ">=0.2,<1",
     "sdk_abi": ">=1.3,<2",
     "rknn_runtime": "==2.3.2"
   },
@@ -52,17 +55,57 @@
   ],
   "resources": {
     "claims": [
-      {"name": "camera.frames", "mode": "shared", "required": true},
-      {"name": "npu.rknn", "mode": "scheduled", "required": true},
-      {"name": "rga", "mode": "shared", "required": true},
-      {"name": "result.publish", "mode": "brokered", "required": true}
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
     ],
-    "limits": {"memory_mb": 512, "cpu_percent": 300, "storage_mb": 96, "shutdown_grace_sec": 10}
+    "limits": {
+      "memory_mb": 512,
+      "cpu_percent": 300,
+      "storage_mb": 96,
+      "shutdown_grace_sec": 10
+    }
   },
   "permissions": {
-    "sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"],
-    "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]},
-    "network": {"listen": [], "outbound": ["configured.outputs"]}
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
   },
   "health": {
     "protocol": "kit-health-v1",
@@ -70,15 +113,32 @@
     "stabilization_sec": 3,
     "liveness_interval_sec": 10,
     "liveness_failures": 3,
-    "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
   },
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "face-analysis",
   "name": "Face Analysis",
   "name_zh": "客群分析",
-  "version": "0.1.3",
+  "version": "0.2.1",
   "image": "/appcenter/apps/face-analysis.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "scene": "Retail & Audience",
   "scene_zh": "零售客群",
@@ -92,7 +152,14 @@
   "record_trigger": {
     "version": 1,
     "signals": [
-      {"id": "face", "type": "detection", "classes": ["face"], "supports_roi": true}
+      {
+        "id": "face",
+        "type": "detection",
+        "classes": [
+          "face"
+        ],
+        "supports_roi": true
+      }
     ]
   },
   "models": [
@@ -160,15 +227,30 @@
   "postproc": "face_detect",
   "render": {
     "schema_version": 1,
-    "boxes": {"color_by": "emotion", "label": "gender", "line_width": 2},
+    "boxes": {
+      "color_by": "emotion",
+      "label": "gender",
+      "line_width": 2
+    },
     "events": {
       "demographics": {
         "as": "panel",
         "position": "top-left",
-        "fields": ["faces", "gender", "age", "race", "emotion"]
+        "fields": [
+          "faces",
+          "gender",
+          "age",
+          "race",
+          "emotion"
+        ]
       }
     },
-    "stream_osd": {"supported": ["boxes"], "default": false}
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
   },
   "output": {
     "contract_version": 2,
@@ -180,28 +262,170 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Face box, original-frame xyxy pixels"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Face detection confidence"},
-      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'face'"},
-      {"name": "blur", "from": "results[].blur", "type": "bool", "description": "Whether the face is flagged for privacy blur"},
-      {"name": "gender", "from": "results[].gender", "type": "string", "description": "Predicted gender label"},
-      {"name": "gender_conf", "from": "results[].gender_conf", "type": "float", "description": "Gender confidence"},
-      {"name": "age", "from": "results[].age", "type": "string", "description": "Predicted age band"},
-      {"name": "age_conf", "from": "results[].age_conf", "type": "float", "description": "Age confidence"},
-      {"name": "race", "from": "results[].race", "type": "string", "description": "Predicted race label"},
-      {"name": "race_conf", "from": "results[].race_conf", "type": "float", "description": "Race confidence"},
-      {"name": "emotion", "from": "results[].emotion", "type": "string", "optional": true, "description": "Predicted emotion label (only on emotion frames)"},
-      {"name": "emotion_conf", "from": "results[].emotion_conf", "type": "float", "optional": true, "description": "Emotion confidence"},
-      {"name": "demographics_window_sec", "from": "events[kind=demographics].window_sec", "type": "float", "event_kind": "demographics", "description": "Aggregation window length in seconds"},
-      {"name": "demographics_faces", "from": "events[kind=demographics].faces", "type": "integer", "event_kind": "demographics", "description": "Faces counted in the window"},
-      {"name": "demographics_gender", "from": "events[kind=demographics].gender", "type": "object<number>", "event_kind": "demographics", "description": "Gender histogram over the window"},
-      {"name": "demographics_age", "from": "events[kind=demographics].age", "type": "object<number>", "event_kind": "demographics", "description": "Age-band histogram over the window"},
-      {"name": "demographics_race", "from": "events[kind=demographics].race", "type": "object<number>", "event_kind": "demographics", "description": "Race histogram over the window"},
-      {"name": "demographics_emotion", "from": "events[kind=demographics].emotion", "type": "object<number>", "event_kind": "demographics", "optional": true, "description": "Emotion histogram over the window"}
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Face box, original-frame xyxy pixels"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Face detection confidence"
+      },
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Result kind, always 'face'"
+      },
+      {
+        "name": "blur",
+        "from": "results[].blur",
+        "type": "bool",
+        "description": "Whether the face is flagged for privacy blur. Set on EVERY detection, not only the top-K that get attributes"
+      },
+      {
+        "name": "track_id",
+        "from": "results[].track_id",
+        "type": "integer",
+        "optional": true,
+        "description": "Stable per-person identity across frames; null when the face was not associated to a track this frame"
+      },
+      {
+        "name": "gated",
+        "from": "results[].gated",
+        "type": "bool",
+        "description": "Face was below min_face_px (or unassociated), so no classifier ran and every attribute field is null"
+      },
+      {
+        "name": "stable",
+        "from": "results[].stable",
+        "type": "bool",
+        "description": "The track has accumulated at least min_track_frames of evidence, so the attribute verdict has settled"
+      },
+      {
+        "name": "evidence_frames",
+        "from": "results[].evidence_frames",
+        "type": "integer",
+        "description": "Gate-passing frames voted into this track's attribute verdict"
+      },
+      {
+        "name": "gender",
+        "from": "results[].gender",
+        "type": "string",
+        "description": "Predicted gender label"
+      },
+      {
+        "name": "gender_conf",
+        "from": "results[].gender_conf",
+        "type": "float",
+        "description": "Vote share of the winning gender label across this track's accumulated frames, not a single frame's softmax"
+      },
+      {
+        "name": "age",
+        "from": "results[].age",
+        "type": "string",
+        "description": "Predicted age band"
+      },
+      {
+        "name": "age_conf",
+        "from": "results[].age_conf",
+        "type": "float",
+        "description": "Vote share of the winning age band label across this track's accumulated frames, not a single frame's softmax"
+      },
+      {
+        "name": "race",
+        "from": "results[].race",
+        "type": "string",
+        "description": "Predicted race label"
+      },
+      {
+        "name": "race_conf",
+        "from": "results[].race_conf",
+        "type": "float",
+        "description": "Vote share of the winning race label across this track's accumulated frames, not a single frame's softmax"
+      },
+      {
+        "name": "emotion",
+        "from": "results[].emotion",
+        "type": "string",
+        "optional": true,
+        "description": "Predicted emotion label (only on emotion frames)"
+      },
+      {
+        "name": "emotion_conf",
+        "from": "results[].emotion_conf",
+        "type": "float",
+        "optional": true,
+        "description": "Vote share of the winning emotion label across this track's accumulated frames"
+      },
+      {
+        "name": "demographics_window_sec",
+        "from": "events[kind=demographics].window_sec",
+        "type": "float",
+        "event_kind": "demographics",
+        "description": "Aggregation window length in seconds"
+      },
+      {
+        "name": "demographics_faces",
+        "from": "events[kind=demographics].faces",
+        "type": "integer",
+        "event_kind": "demographics",
+        "description": "UNIQUE people counted in the window: each tracked face is folded in exactly once, when its evidence first becomes stable"
+      },
+      {
+        "name": "demographics_face_frames",
+        "from": "events[kind=demographics].face_frames",
+        "type": "integer",
+        "event_kind": "demographics",
+        "description": "Raw face-frame count over the window (dwell-weighted). This is what `faces` used to report before 0.2.0"
+      },
+      {
+        "name": "demographics_gender",
+        "from": "events[kind=demographics].gender",
+        "type": "object<number>",
+        "event_kind": "demographics",
+        "description": "Gender histogram over the window, one count per unique person"
+      },
+      {
+        "name": "demographics_age",
+        "from": "events[kind=demographics].age",
+        "type": "object<number>",
+        "event_kind": "demographics",
+        "description": "Age-band histogram over the window, one count per unique person"
+      },
+      {
+        "name": "demographics_race",
+        "from": "events[kind=demographics].race",
+        "type": "object<number>",
+        "event_kind": "demographics",
+        "description": "Race histogram over the window, one count per unique person"
+      },
+      {
+        "name": "demographics_emotion",
+        "from": "events[kind=demographics].emotion",
+        "type": "object<number>",
+        "event_kind": "demographics",
+        "optional": true,
+        "description": "Emotion histogram over the window, one count per unique person"
+      }
     ],
     "default_mapping": [
-      {"source": "detection.count", "target": "face_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "events.demographics | last", "target": "demographics", "topic": "recamera/{{ app }}/demographics", "task": "classification"}
+      {
+        "source": "detection.count",
+        "target": "face_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "events.demographics | last",
+        "target": "demographics",
+        "topic": "recamera/{{ app }}/demographics",
+        "task": "classification"
+      }
     ]
   },
   "config_schema": {
@@ -250,10 +474,25 @@
             "apply": "live",
             "title": "Face ROI padding",
             "title_zh": "人脸 ROI 外扩",
-            "min": 0.0,
+            "min": -0.2,
             "max": 1.0,
-            "step": 0.05,
-            "default": 0.15
+            "step": 0.01,
+            "default": -0.05,
+            "help": "How far the square classifier ROI extends past the detector box; NEGATIVE pulls it in. Default -0.05 is measured, not assumed: an offline sweep over 1942 FairFace val images through this exact crop geometry peaks at -0.05 and falls off hard going positive (race 0.712 at -0.05 vs 0.551 at +0.25). yolov8n-face emits a looser box than the dlib rect the classifier was trained on, and squaring it widens the framing further, so the ROI has to be pulled back in.",
+            "help_zh": "分类器方形 ROI 相对检测框的外扩比例，负值表示内收。默认 -0.05 是实测值而非推断：在 1942 张 FairFace val 上、走与设备完全相同的裁剪几何做的扫描，峰值在 -0.05，往正方向掉得很快（race 在 -0.05 是 0.712，在 +0.25 只有 0.551）。yolov8n-face 输出的框比分类器训练所用的 dlib 框更松，方形化之后取景又会再涨一圈，所以需要往回收。"
+          },
+          {
+            "key": "min_face_px",
+            "type": "integer",
+            "apply": "live",
+            "title": "Min face size (px)",
+            "title_zh": "最小人脸尺寸（像素）",
+            "min": 0,
+            "max": 320,
+            "step": 8,
+            "default": 64,
+            "help": "Quality gate: faces whose shorter box side is below this in the ORIGINAL frame are not classified at all. Below roughly this size the crop is mostly upsampling artefact by the time it reaches the 224 classifier input, so the head returns a confident-looking guess. Gated faces still appear in results with gated=true and null attributes, and cost no inference.",
+            "help_zh": "质量门控：原图中人脸框短边小于此值的脸不做属性分类。低于这个尺寸，裁剪出来的图放大到 224 输入后基本是插值伪影，分类头会给出一个看起来很自信的猜测。被门控的脸仍出现在 results 中，带 gated=true 且属性为 null，且不消耗推理。"
           }
         ]
       },
@@ -272,6 +511,45 @@
             "max": 10,
             "step": 1,
             "default": 1
+          },
+          {
+            "key": "min_track_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Frames before a verdict settles",
+            "title_zh": "结论生效所需帧数",
+            "min": 1,
+            "max": 30,
+            "step": 1,
+            "default": 3,
+            "help": "Gate-passing frames a tracked face must accumulate before its attribute verdict is reported as stable=true and folded into the demographic histogram. Attributes are still emitted before this (marked stable=false) so the UI is not blank while a person is being measured.",
+            "help_zh": "一张被跟踪的人脸需要累积多少通过门控的帧，其属性结论才标记为 stable=true 并计入客群直方图。在此之前属性照常输出（标记 stable=false），避免测量期间界面空白。"
+          },
+          {
+            "key": "evidence_decay",
+            "type": "number",
+            "apply": "live",
+            "title": "Evidence decay per frame",
+            "title_zh": "证据逐帧衰减",
+            "min": 0.5,
+            "max": 1.0,
+            "step": 0.01,
+            "default": 1.0,
+            "help": "Multiplier applied to a track's accumulated evidence before each new frame is added. 1.0 weights every frame equally for the whole track. Below 1.0 the vote forgets exponentially, which lets a track recover if it was re-associated onto a different person through an occlusion instead of being outvoted by that person's history.",
+            "help_zh": "每帧把该 track 已累积的证据先乘以此系数，再加入新一帧。1.0 表示整条 track 内每帧等权。小于 1.0 时投票按指数遗忘旧证据——如果 track 在遮挡后被错误关联到了另一个人，它能自行纠正，而不会被前一个人的历史长期压制。"
+          },
+          {
+            "key": "track_max_lost",
+            "type": "integer",
+            "apply": "live",
+            "title": "Track occlusion budget (frames)",
+            "title_zh": "跟踪遮挡容忍（帧）",
+            "min": 1,
+            "max": 120,
+            "step": 1,
+            "default": 15,
+            "help": "How many frames a face may go undetected before its identity (and its accumulated evidence) is dropped. This cascade runs well below the capture rate, so a frame budget here is many wall-clock seconds; too generous a budget lets a track be re-associated onto a different person who moved into the same spot.",
+            "help_zh": "一张脸最多可以连续多少帧检不到，才丢弃其身份与已累积的证据。级联的实际帧率远低于采集帧率，所以这里的帧数换算成墙钟时间会长得多；设得太宽松，track 可能被重新关联到走进同一位置的另一个人身上。"
           },
           {
             "key": "aggregate_window_sec",
