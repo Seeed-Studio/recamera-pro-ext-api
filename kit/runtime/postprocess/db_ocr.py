@@ -99,11 +99,26 @@ def _unclip(points: np.ndarray, unclip_ratio: float) -> np.ndarray:
     return out.astype(np.float32)
 
 
+# Minimum short side (in DETECTOR/map space) a contour must have to survive.
+#
+# This is measured on the RAW DB blob, before unclip -- and DB is trained with
+# shrunk labels, so that blob is only ~40% of the text's real height. On a
+# 1280x720 frame letterboxed to 480 (scale 0.375) a 48px-tall line lands as a
+# blob roughly 48 * 0.375 * 0.4 = 7px tall. The old default of 8.0 therefore
+# discarded EVERY line: measured on device 2026-09-04 against a 6-size test
+# chart, all 8 contours had a short side of 5-6px and 0 of 8 survived, 48px
+# text included. Recognition was never the problem -- nothing reached it.
+#
+# 3.0 is PaddleOCR's own DBPostProcess default (`min_size=3`). With it the same
+# chart detects 8 of 8 down to 12px text at 94.8% mean character similarity.
+DEFAULT_MIN_SIZE = 3.0
+
+
 def decode(outputs, info, *,
            det_thresh: float = 0.3,
            box_thresh: float = 0.5,
            unclip_ratio: float = 2.0,
-           min_size: float = 8.0,
+           min_size: float = DEFAULT_MIN_SIZE,
            max_boxes: int = 32) -> List[dict]:
     """Decode the DB probability map into text-box quads in ORIGINAL pixels.
 
@@ -134,7 +149,9 @@ def decode(outputs, info, *,
             continue
         rect = cv2.minAreaRect(c)
         (rw, rh) = rect[1]
-        if min(rw, rh) < min_size or max(rw, rh) < min_size:
+        # `max < min_size` would imply `min < min_size`, so only the short
+        # side is worth testing -- this is the PaddleOCR `min_size` check.
+        if min(rw, rh) < min_size:
             continue
         mask = np.zeros((out_h, out_w), dtype=np.uint8)
         cv2.fillPoly(mask, [c], 255)

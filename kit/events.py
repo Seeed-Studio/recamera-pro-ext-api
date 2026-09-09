@@ -119,17 +119,29 @@ def track(tr, frame, *, state, in_zone: bool) -> Dict[str, Any]:
 def face_attributes(r: Dict[str, Any], *, blur: bool) -> Dict[str, Any]:
     """One annotated face result dict -> one flat ``face`` attribute event.
 
-    Field-for-field identical to the hand-written mapping face-analysis carried
-    in ``on_results()`` before the migration. Purely mechanical (spec §5.3):
-    copies ``box`` / ``score`` and the six FairFace + two emotion attribute
-    fields off the result dict with ``.get`` (a missing attribute stays
-    ``None``), coerces ``blur`` to bool, and fills in ``kind``.
+    Purely mechanical (spec §5.3): copies ``box`` / ``score``, the identity and
+    evidence-quality fields, and the six FairFace + two emotion attribute fields
+    off the result dict with ``.get`` (a missing attribute stays ``None``),
+    coerces ``blur`` to bool, and fills in ``kind``.
+
+    ``track_id`` / ``stable`` / ``gated`` / ``evidence_frames`` describe how much
+    the attribute fields are worth on this face:
+
+      * ``track_id`` -- stable identity from ``kit.logic.tracker``; ``None`` when
+        the face was not associated to a track this frame. It is what lets a
+        consumer tell "the same person, still being measured" from "a second
+        person", which a per-frame face event otherwise cannot express.
+      * ``gated`` -- the face was too small (or scored too low) to classify, so
+        every attribute field is ``None`` by construction rather than a guess.
+      * ``stable`` / ``evidence_frames`` -- whether enough frames have voted
+        (``kit.logic.attributes``). An unstable verdict is an early read, not a
+        wrong one; consumers that cannot tolerate a label changing under them
+        should wait for ``stable``.
 
     What it does NOT do -- the app owns all of it:
 
       * WHICH faces get an event (the top-K ``max_faces`` slice),
-      * whether the emotion fields are fresh or a cached earlier verdict
-        (the ``emotion_interval`` cadence),
+      * the gate, the tracking and the accumulation the fields above report on,
       * the value of ``blur`` -- the caller passes the privacy setting in.
 
     It holds no state, applies no threshold, and never decides whether an event
@@ -139,6 +151,10 @@ def face_attributes(r: Dict[str, Any], *, blur: bool) -> Dict[str, Any]:
         "kind": "face",
         "box": r["box"],
         "score": r.get("score"),
+        "track_id": r.get("track_id"),
+        "gated": bool(r.get("gated", False)),
+        "stable": bool(r.get("stable", False)),
+        "evidence_frames": r.get("evidence_frames", 0),
         "gender": r.get("gender"),
         "gender_conf": r.get("gender_conf"),
         "age": r.get("age"),

@@ -75,7 +75,7 @@ from urllib.parse import urlparse, parse_qs, quote
 
 from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
-               inference_auth, installer, manifest as appmanifest, modelstore,
+               inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
                recording as apprecording,
                result_hub as canonical_results,
@@ -1008,6 +1008,10 @@ def do_list() -> dict:
     except Exception:
         pass
     active = state.get_active()
+    try:
+        kit_meta = kitversion.metadata()
+    except kitversion.KitIncompatible:
+        kit_meta = {}
     apps = []
     if os.path.isdir(paths.APPS_DIR):
         for name in sorted(os.listdir(paths.APPS_DIR)):
@@ -1125,6 +1129,8 @@ def do_list() -> dict:
         "running_apps": [a["id"] for a in apps if a.get("running")],
         "state_revision": snapshot.get("revision", 0),
         "apps": apps,
+        "kit_version": kit_meta.get("__legacy_version__", kit_meta.get("__version__")),
+        "kit_api_version": kit_meta.get("__api_version__"),
     }
     try:
         result["resources"] = _coordinator().resources.snapshot()
@@ -1872,6 +1878,9 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _read_manifest(app_id) or {}
+        # Validate the target while the mutation gate is held, before the
+        # coordinator can reserve resources or invoke any launch/teardown hook.
+        kitversion.check(manifest)
         try:
             result = _coordinator().start(
                 app_id, manifest=manifest, operation="start",
@@ -1916,6 +1925,7 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
         manifest = _read_manifest(app_id) or {}
+        kitversion.check(manifest)
         try:
             result = _coordinator().restart(
                 app_id, manifest=manifest,
@@ -1938,6 +1948,8 @@ def do_switch(app_id: str) -> dict:
     if not os.path.isdir(paths.app_dir(app_id)):
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate():
+        manifest = _read_manifest(app_id) or {}
+        kitversion.check(manifest)
         prev = state.get_active()
         # The legacy /switch endpoint used to bypass the built-in detector
         # entirely.  It is still a public CLI/HTTP path, so enforce the same
@@ -2016,6 +2028,8 @@ def do_activate(app_id: str) -> dict:
             raise ValueError(f"invalid app id {app_id!r}")
         if not os.path.isdir(paths.app_dir(app_id)):
             raise ValueError(f"app not installed: {app_id}")
+        manifest = _read_manifest(app_id) or {}
+        kitversion.check(manifest)
         prev = state.get_active()
         # Remember whether the built-in detector was the thing running BEFORE we
         # tear it down, so a failed activation can restore it (not just a

@@ -1,0 +1,773 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 1,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.2,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [
+    {
+      "id": "crayfish_det",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/det_v1_n_rawhead_int8.rknn",
+      "sha256": "f215ff732fbbcca4d73ba2f72f6ee555d51a0585b666bfdc5ca21a6d10b1f914",
+      "size": 4260817,
+      "mount": "models/det_v1_n_rawhead_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sex_cls",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/sex_cls_int8.rknn",
+      "sha256": "388c6a1d031658e3e319692565f1065e09350e1bc19d69c0cf53498ca0e6b310",
+      "size": 2403646,
+      "mount": "models/sex_cls_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "behavior_cls",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/behavior_cls_int8.rknn",
+      "sha256": "fcbc317b5b463360f8862b9e767b502d5fdbf48427f533d0654c185d56b04e39",
+      "size": 2493886,
+      "mount": "models/behavior_cls_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "behavior_temporal",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/behavior_temporal_int8.rknn",
+      "sha256": "178f84eb03f07c9e491cbdcf37f0cf8f24f2ea118972ea9bf12b6a66aa4e3110",
+      "size": 2542142,
+      "mount": "models/behavior_temporal_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 512,
+      "cpu_percent": 300,
+      "storage_mb": 96,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts",
+        "appdata"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "crayfish-fight",
+  "name": "Crayfish Fight Monitor",
+  "version": "0.1.3",
+  "image": "/appcenter/apps/crayfish-fight.png",
+  "type": "self-hosted",
+  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close -- screened per frame, then confirmed by an 8-frame temporal classifier that sees the motion. Reports events (never video) plus a quota-limited image dump for retraining.",
+  "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为——单帧粗筛，再由 8 帧时序分类器看运动做确认；只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "capabilities": [
+    "output"
+  ],
+  "postproc": "detect",
+  "render": {
+    "boxes": {
+      "color_by": "sex",
+      "line_width": 2
+    }
+  },
+  "output": {
+    "sink": "ws",
+    "schema": "results[]{box,cls,cls_name,score,track_id,sex,sex_conf} + events[]{kind=detection|behavior}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Crayfish box, original-frame xyxy pixels"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "Detector class id (single class, always 0)"
+      },
+      {
+        "name": "cls_name",
+        "from": "results[].cls_name",
+        "type": "string",
+        "description": "Detector class label, always 'crayfish'"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Detection confidence"
+      },
+      {
+        "name": "track_id",
+        "from": "results[].track_id",
+        "type": "integer",
+        "description": "Stable per-animal identity, null when the detection is untracked this frame"
+      },
+      {
+        "name": "sex",
+        "from": "results[].sex",
+        "type": "string",
+        "description": "Voted sex: female / male / unknown"
+      },
+      {
+        "name": "sex_conf",
+        "from": "results[].sex_conf",
+        "type": "float",
+        "description": "Fraction of the track's votes that went to the reported sex"
+      },
+      {
+        "name": "detection_kind",
+        "from": "events[kind=detection].kind",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Event kind, always 'detection'"
+      },
+      {
+        "name": "detection_label",
+        "from": "events[kind=detection].label",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Class label of the detection event"
+      },
+      {
+        "name": "detection_score",
+        "from": "events[kind=detection].score",
+        "type": "float",
+        "event_kind": "detection",
+        "description": "Confidence of the detection event"
+      },
+      {
+        "name": "detection_box",
+        "from": "events[kind=detection].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "detection",
+        "description": "Box of the detection event"
+      },
+      {
+        "name": "detection_track_id",
+        "from": "events[kind=detection].track_id",
+        "type": "integer",
+        "event_kind": "detection",
+        "description": "Track id of the detected animal"
+      },
+      {
+        "name": "detection_sex",
+        "from": "events[kind=detection].sex",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Voted sex of the detected animal"
+      },
+      {
+        "name": "behavior_kind",
+        "from": "events[kind=behavior].kind",
+        "type": "string",
+        "event_kind": "behavior",
+        "description": "Event kind, always 'behavior'"
+      },
+      {
+        "name": "behavior_phase",
+        "from": "events[kind=behavior].phase",
+        "type": "string",
+        "event_kind": "behavior",
+        "description": "State-machine transition: start / change / end"
+      },
+      {
+        "name": "behavior_label",
+        "from": "events[kind=behavior].label",
+        "type": "string",
+        "event_kind": "behavior",
+        "description": "Behaviour label: fight or harass ('none' never raises an event)"
+      },
+      {
+        "name": "behavior_confidence",
+        "from": "events[kind=behavior].confidence",
+        "type": "float",
+        "event_kind": "behavior",
+        "description": "Classifier confidence on the confirming frame"
+      },
+      {
+        "name": "behavior_track_ids",
+        "from": "events[kind=behavior].track_ids",
+        "type": "array<integer>",
+        "event_kind": "behavior",
+        "description": "The two track ids taking part"
+      },
+      {
+        "name": "behavior_box",
+        "from": "events[kind=behavior].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "behavior",
+        "description": "Union ROI of the two animals, original-frame xyxy pixels"
+      },
+      {
+        "name": "behavior_duration_sec",
+        "from": "events[kind=behavior].duration_sec",
+        "type": "float",
+        "event_kind": "behavior",
+        "description": "Seconds since the event was raised"
+      },
+      {
+        "name": "behavior_frames",
+        "from": "events[kind=behavior].frames",
+        "type": "integer",
+        "event_kind": "behavior",
+        "description": "Confirming frames accumulated in this event"
+      },
+      {
+        "name": "behavior_temporal_verdict",
+        "from": "events[kind=behavior].temporal_verdict",
+        "type": "string",
+        "event_kind": "behavior",
+        "description": "Latest 8-frame temporal classifier verdict for this pair (fight/harass/none), null until the pair has been looked at"
+      },
+      {
+        "name": "behavior_temporal_conf",
+        "from": "events[kind=behavior].temporal_conf",
+        "type": "float",
+        "event_kind": "behavior",
+        "description": "Confidence of that temporal verdict, null until the pair has been looked at"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "detection.count",
+        "target": "count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "detection.entries",
+        "target": "crayfish",
+        "topic": "recamera/{{ app }}/detections",
+        "task": "detection"
+      },
+      {
+        "source": "behavior.entries",
+        "target": "behavior",
+        "topic": "recamera/{{ app }}/behavior",
+        "task": "behavior"
+      }
+    ],
+    "contract_version": 2
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {
+            "key": "conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Confidence threshold",
+            "title_zh": "置信度阈值",
+            "default": 0.35,
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU threshold",
+            "title_zh": "NMS IoU 阈值",
+            "default": 0.45,
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05
+          },
+          {
+            "key": "max_animals",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max animals per frame",
+            "title_zh": "每帧最多虾数",
+            "default": 8,
+            "min": 1,
+            "max": 32,
+            "step": 1
+          },
+          {
+            "key": "track_max_lost",
+            "type": "integer",
+            "apply": "live",
+            "title": "Track lost-frame budget",
+            "title_zh": "跟踪丢失帧预算",
+            "default": 30,
+            "min": 1,
+            "max": 120,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "key": "sex",
+        "title": "Sex classification",
+        "title_zh": "性别分类",
+        "items": [
+          {
+            "key": "sex_vote_frames",
+            "type": "integer",
+            "apply": "live",
+            "title": "Vote frames per new track",
+            "title_zh": "每条新轨迹的投票帧数",
+            "default": 10,
+            "min": 1,
+            "max": 60,
+            "step": 1
+          },
+          {
+            "key": "sex_min_conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Min softmax to count a vote",
+            "title_zh": "计票所需最低置信度",
+            "default": 0.65,
+            "min": 0.3,
+            "max": 0.99,
+            "step": 0.05
+          },
+          {
+            "key": "sex_crop_pad",
+            "type": "number",
+            "apply": "live",
+            "title": "Sex crop padding",
+            "title_zh": "性别裁剪外扩比例",
+            "default": 0.1,
+            "min": -0.2,
+            "max": 0.5,
+            "step": 0.05
+          }
+        ]
+      },
+      {
+        "key": "proximity",
+        "title": "Proximity trigger",
+        "title_zh": "靠近触发",
+        "items": [
+          {
+            "key": "proximity_k",
+            "type": "number",
+            "apply": "live",
+            "title": "Distance factor (x mean box diagonal)",
+            "title_zh": "距离系数（平均框对角线倍数）",
+            "default": 1.2,
+            "min": 0.3,
+            "max": 3.0,
+            "step": 0.1
+          },
+          {
+            "key": "proximity_window",
+            "type": "integer",
+            "apply": "live",
+            "title": "Sliding window (frames)",
+            "title_zh": "滑窗长度（帧）",
+            "default": 8,
+            "min": 2,
+            "max": 60,
+            "step": 1
+          },
+          {
+            "key": "proximity_hits",
+            "type": "integer",
+            "apply": "live",
+            "title": "Close frames needed in window",
+            "title_zh": "窗口内需靠近的帧数",
+            "default": 5,
+            "min": 1,
+            "max": 60,
+            "step": 1
+          },
+          {
+            "key": "roi_pad",
+            "type": "number",
+            "apply": "live",
+            "title": "Interaction ROI padding",
+            "title_zh": "交互 ROI 外扩比例",
+            "default": 0.15,
+            "min": 0.0,
+            "max": 0.6,
+            "step": 0.05
+          }
+        ]
+      },
+      {
+        "key": "behavior",
+        "title": "Behaviour events",
+        "title_zh": "行为事件",
+        "items": [
+          {
+            "key": "behavior_streak",
+            "type": "integer",
+            "apply": "live",
+            "title": "Consecutive frames to raise",
+            "title_zh": "上报所需连续帧数",
+            "default": 3,
+            "min": 1,
+            "max": 30,
+            "step": 1
+          },
+          {
+            "key": "behavior_release",
+            "type": "integer",
+            "apply": "live",
+            "title": "Consecutive misses to clear",
+            "title_zh": "释放所需连续未确认帧数",
+            "default": 3,
+            "min": 1,
+            "max": 30,
+            "step": 1
+          },
+          {
+            "key": "behavior_min_conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Min behaviour confidence",
+            "title_zh": "行为置信度下限",
+            "default": 0.5,
+            "min": 0.2,
+            "max": 0.95,
+            "step": 0.05
+          }
+        ]
+      },
+      {
+        "key": "temporal",
+        "title": "Temporal confirmation",
+        "title_zh": "时序确认",
+        "items": [
+          {
+            "key": "temporal_enabled",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Enable 8-frame temporal classifier",
+            "title_zh": "启用 8 帧时序分类",
+            "default": true
+          },
+          {
+            "key": "max_pairs",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max buffered pairs",
+            "title_zh": "最多缓存虾对数",
+            "default": 6,
+            "min": 1,
+            "max": 32,
+            "step": 1
+          },
+          {
+            "key": "temporal_stride",
+            "type": "integer",
+            "apply": "live",
+            "title": "Frames between runs on one pair",
+            "title_zh": "同一对两次推理的间隔帧数",
+            "default": 4,
+            "min": 1,
+            "max": 30,
+            "step": 1
+          },
+          {
+            "key": "temporal_budget",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max temporal inferences per frame",
+            "title_zh": "每帧最多时序推理次数",
+            "default": 1,
+            "min": 0,
+            "max": 4,
+            "step": 1
+          },
+          {
+            "key": "temporal_min_conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Min temporal confidence to vote",
+            "title_zh": "时序投票所需最低置信度",
+            "default": 0.5,
+            "min": 0.2,
+            "max": 0.95,
+            "step": 0.05
+          }
+        ]
+      },
+      {
+        "key": "capture",
+        "title": "Sample capture",
+        "title_zh": "样本采集",
+        "items": [
+          {
+            "key": "capture_enabled",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Save triggered samples",
+            "title_zh": "保存触发样本",
+            "default": true
+          },
+          {
+            "key": "capture_mode",
+            "type": "enum",
+            "apply": "live",
+            "title": "Capture mode",
+            "title_zh": "采集模式",
+            "default": "trigger",
+            "options": [
+              "trigger",
+              "alarm_gated"
+            ],
+            "option_labels": [
+              "Every trigger (tagged alarm/suspect/plain)",
+              "Alarm-gated (alarm/suspect only)"
+            ],
+            "option_labels_zh": [
+              "所有触发（标注 alarm/suspect/plain）",
+              "报警门控（仅 alarm/suspect）"
+            ]
+          },
+          {
+            "key": "suspect_conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Suspect capture confidence",
+            "title_zh": "疑似采集置信度阈值",
+            "default": 0.3,
+            "min": 0.05,
+            "max": 0.9,
+            "step": 0.05
+          },
+          {
+            "key": "capture_per_minute",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max saves per minute",
+            "title_zh": "每分钟最多保存",
+            "default": 6,
+            "min": 0,
+            "max": 60,
+            "step": 1
+          },
+          {
+            "key": "capture_per_day",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max saves per day",
+            "title_zh": "每天最多保存",
+            "default": 2000,
+            "min": 0,
+            "max": 20000,
+            "step": 100
+          },
+          {
+            "key": "capture_dir",
+            "type": "string",
+            "apply": "restart",
+            "title": "Capture directory",
+            "title_zh": "落盘目录",
+            "default": ""
+          },
+          {
+            "key": "capture_full_frame_px",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Saved full-frame size (px)",
+            "title_zh": "整帧保存边长（像素）",
+            "default": 1280,
+            "min": 320,
+            "max": 2048,
+            "step": 64
+          }
+        ]
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "crayfish_det",
+      "file": "models/det_v1_n_rawhead_int8.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "classes": [
+        "crayfish"
+      ]
+    },
+    {
+      "id": "sex_cls",
+      "file": "models/sex_cls_int8.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        128,
+        128,
+        3
+      ],
+      "quant": "int8",
+      "classes": [
+        "female",
+        "male"
+      ]
+    },
+    {
+      "id": "behavior_cls",
+      "file": "models/behavior_cls_int8.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        224,
+        224,
+        3
+      ],
+      "quant": "int8",
+      "classes": [
+        "fight",
+        "harass",
+        "none"
+      ]
+    },
+    {
+      "id": "behavior_temporal",
+      "file": "models/behavior_temporal_int8.rknn",
+      "task": "classify",
+      "input": [
+        1,
+        448,
+        448,
+        3
+      ],
+      "quant": "int8",
+      "classes": [
+        "fight",
+        "harass",
+        "none"
+      ]
+    }
+  ],
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "x-default_model": "crayfish_det",
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "crayfish_count",
+      "name": "Crayfish Count",
+      "value_template": "{{ value_json.results_count }}",
+      "state_class": "measurement",
+      "icon": "mdi:jellyfish"
+    },
+    {
+      "component": "binary_sensor",
+      "object_id": "fight_active",
+      "name": "Fight Detected",
+      "value_template": "{{ 'ON' if value_json.behavior is defined and value_json.behavior | selectattr('label','equalto','fight') | list | length > 0 else 'OFF' }}",
+      "device_class": "problem"
+    }
+  ]
+}

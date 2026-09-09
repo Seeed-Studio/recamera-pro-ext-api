@@ -32,7 +32,7 @@ Both models are declared in the manifest `models[]` and preloaded by the kit
 for role==stage2_rec" loop is gone. The character dictionary is not a model --
 the app still loads it, from the path the manifest hangs off the rec model.
 
-All five knobs (det_thresh / box_thresh / unclip_ratio / max_boxes /
+All six knobs (det_thresh / box_thresh / unclip_ratio / min_size / max_boxes /
 min_rec_conf) are auto-bound from the manifest config_schema and re-bound on
 SIGHUP (every one is apply:"live"), so there is no setup() param-copying and no
 on_config_reload: they are plain values read per frame.
@@ -52,6 +52,10 @@ from kit import pipeline
 from kit import events as E
 from kit.runtime.postprocess import db_ocr
 from kit.runtime.postprocess import ctc
+
+# App-local, NOT kit: an app package ships without the kit runtime, so anything
+# the App Center install needs must travel with the app. See striptext.py.
+import striptext
 
 REC_H, REC_W = 48, 320          # rec model input (manifest models[1].input)
 
@@ -76,6 +80,9 @@ class PpocrReaderApp(App):
     det_thresh = 0.3
     box_thresh = 0.5
     unclip_ratio = 2.0
+    # Short side of the raw (pre-unclip, shrink-trained) DB blob, in detector
+    # space. See db_ocr.DEFAULT_MIN_SIZE -- at 8.0 this dropped every line.
+    min_size = 3.0
     max_boxes = 8
     min_rec_conf = 0.25
 
@@ -100,9 +107,34 @@ class PpocrReaderApp(App):
 
         print(f"[ppocr-reader] setup det_thresh={self.det_thresh} "
               f"box_thresh={self.box_thresh} unclip={self.unclip_ratio} "
+              f"min_size={self.min_size} "
               f"max_boxes={self.max_boxes} min_rec_conf={self.min_rec_conf} "
               f"dict_classes={len(self.dictionary)} "
               f"dict={os.path.basename(dict_path)}", flush=True)
+
+    def _read_strip(self, crop):
+        """Recognize one upright text strip, windowing it if it is too wide.
+
+        The rec rknn is fixed at 48x320, so a strip wider than 320/48 = 6.67:1
+        gets squashed and CTC's 40 steps cap it at ~20 characters. Anything that
+        long is read as overlapping windows and merged by character position --
+        see kit.pipeline.merge_windows. A strip that already fits takes the
+        single-inference path, so short lines cost exactly what they did before.
+        """
+        ch, cw = crop.shape[:2]
+        wins = striptext.split_windows(cw, ch)
+        if len(wins) == 1:
+            fit = pipeline.fit_rec_input(crop, out_h=REC_H, out_w=REC_W)
+            return ctc.decode(self.models.rec.infer(fit), self.dictionary)
+
+        per_win = []
+        for x0, x1 in wins:
+            fit = pipeline.fit_rec_input(crop[:, x0:x1], out_h=REC_H, out_w=REC_W)
+            chars, steps = striptext.decode_chars(self.models.rec.infer(fit),
+                                                  self.dictionary)
+            per_win.append(striptext.place_chars(chars, steps, x0, x1, ch,
+                                                 out_h=REC_H, out_w=REC_W))
+        return striptext.merge_windows(wins, per_win, cw)
 
     def run(self):
         for frame in self.frames():
@@ -113,9 +145,7 @@ class PpocrReaderApp(App):
                                   det_thresh=self.det_thresh,
                                   box_thresh=self.box_thresh,
                                   unclip_ratio=self.unclip_ratio,
-                                  # config_schema types max_boxes as "number",
-                                  # so the auto-bind hands us a float; decode
-                                  # slices with it.
+                                  min_size=self.min_size,
                                   max_boxes=self.max_boxes)
 
             # ★business★ reading order: top-to-bottom, then left-to-right,
@@ -143,9 +173,7 @@ class PpocrReaderApp(App):
             events = []
             for r in results:
                 crop = pipeline.perspective_crop(frame.data, r["quad"])
-                fit = pipeline.fit_rec_input(crop, out_h=REC_H, out_w=REC_W)
-                text, conf = ctc.decode(self.models.rec.infer(fit),
-                                        self.dictionary)
+                text, conf = self._read_strip(crop)
                 # ★business★ a reading below the confidence floor is reported
                 # as an empty string -- the box still ships, carrying its raw
                 # (unclamped) recognition confidence.

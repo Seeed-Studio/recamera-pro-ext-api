@@ -123,6 +123,7 @@ _INTEGER_KEYS = {
 _DELIBERATE_NUMBER_KEYS = {
     "fall-detection": {"torso_angle_threshold_deg", "recovery_torso_angle_deg"},
     "fitness-trainer": {"idle_reset_seconds"},
+    "depth-estimation": {"near_percentile"},
     "retail-vision": {"dwell_assist", "dwell_speed", "window_duration"},
 }
 

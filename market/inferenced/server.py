@@ -20,7 +20,12 @@ from typing import Any, Mapping, Optional, Protocol, Sequence
 import numpy as np
 
 from kit.runtime._inference_protocol import ProtocolError, recv_message, send_message
-from kit.runtime.engine import ModelSpec, TensorSpec
+from kit.runtime.engine import (
+    ModelSpec,
+    TensorSpec,
+    _default_runtime_factory,
+    _runtime_for_spec,
+)
 
 from .driver_lock import NpuDriverCoordinator
 from .authorization import (
@@ -66,12 +71,14 @@ class RknnBackend:
         self._runtime_factory = runtime_factory
         self.coordinator = coordinator or NpuDriverCoordinator()
 
-    def _new_runtime(self):
+    def _new_runtime(self, model_spec: Optional[ModelSpec] = None):
         if self._runtime_factory is not None:
             return self._runtime_factory()
-        from rknnlite.api import RKNNLite
-
-        return RKNNLite(verbose=False)
+        if model_spec is None:
+            # Keep the small internal hook source-compatible for diagnostics
+            # and vendor tests that instantiate a backend directly.
+            return _default_runtime_factory()
+        return _runtime_for_spec(model_spec)
 
     @staticmethod
     def _tensor(raw: Mapping[str, Any]) -> TensorSpec:
@@ -90,7 +97,9 @@ class RknnBackend:
             inputs=tuple(self._tensor(item) for item in spec.get("inputs") or ()),
             outputs=tuple(self._tensor(item) for item in spec.get("outputs") or ()),
         )
-        runtime = self._new_runtime()
+        # Backend selection happens before entering the driver lock and before
+        # either implementation performs native model loading.
+        runtime = self._new_runtime(model_spec)
         with self.coordinator.hold() as token:
             try:
                 result = runtime.load_rknn(path)

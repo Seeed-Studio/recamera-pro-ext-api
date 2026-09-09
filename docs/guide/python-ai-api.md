@@ -720,3 +720,33 @@ render 或 space 都会被忽略。
 - [ ] app crash 后 PGID 后代被清理，broker 观察到 HUP、lease generation 被回收；
 - [ ] OTA/重新打包后重新验证 native binary 哈希、socket 和真机端到端链路；
 - [ ] 不把控制 lease generation 误写成数据端点已经具备完整 ESTALE fencing。
+
+## 12. API 版本与 NPU backend 说明
+
+当前 kit 同时支持 API `0.2.0` 与 legacy API `1.6.5`：v1 manifest 按 legacy
+元数据校验；v2 manifest 显式按 `__api_version__`，安装和启动时都会拒绝不满足版本
+范围的 kit。新源码 manifest 中的版本不等于 catalog 中已经发布的包版本；新包
+必须先由 v2 builder 生成 lock、BOM 和签名，再更新 catalog。
+
+ctypes backend 接受调用方的静态单输入 `uint8/NHWC` 合约。native graph 内部
+仍可能是 NCHW 或 int8，这不改变调用方合约。auto 模式遇到不支持的 spec 使用
+`rknnlite`；可用 `ESK_RKNN_BACKEND=rknnlite` 强制选择，但 native 初始化失败后
+不会隐式切换 backend。managed 模式的上游 lease 与 driver lock 仍然生效；早期
+RSS 数字来自 8 月 19 日的旧路径，新 daemon 仍需在设备上验证。
+
+### 12. API versions and NPU backend
+
+The kit supports API `0.2.0` and legacy API `1.6.5` in parallel. A v1 manifest is checked against
+legacy metadata. A v2 manifest is checked against `__api_version__` explicitly and rejects an
+incompatible kit during both installation and startup. A source manifest version
+does not identify an already published catalog package. A new package must go
+through the v2 builder to produce its lock file, BOM, and signature before the
+catalog is updated.
+
+The ctypes backend accepts a caller contract with one static `uint8/NHWC` input.
+The native graph may still use NCHW or int8 internally; that does not change the
+caller contract. In auto mode, an unsupported spec uses `rknnlite`. Set
+`ESK_RKNN_BACKEND=rknnlite` to force that backend; a native initialization failure
+never causes an implicit backend switch. The managed upstream lease and driver
+lock remain active. The earlier RSS figures came from the August 19 legacy path;
+the new daemon still requires device validation.
