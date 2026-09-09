@@ -1,25 +1,121 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
-  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
-  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "release": {
+    "sequence": 4,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
   "artifacts": [
-    {"id": "detector", "kind": "rknn", "source": "bundled", "file": "models/yolo8n_rawhead_int8.rknn", "sha256": "5379721bb9b16fa3b9caceb8958175b2e8b0665d4ebcfe4e2524ad1db80d30da", "size": 4339284, "mount": "models/yolo8n_rawhead_int8.rknn", "required": true, "share_scope": "content"}
+    {
+      "id": "detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/yolo8n_rawhead_int8.rknn",
+      "sha256": "5379721bb9b16fa3b9caceb8958175b2e8b0665d4ebcfe4e2524ad1db80d30da",
+      "size": 4339284,
+      "mount": "models/yolo8n_rawhead_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    }
   ],
-  "resources": {"claims": [
-    {"name": "camera.frames", "mode": "shared", "required": true},
-    {"name": "npu.rknn", "mode": "scheduled", "required": true},
-    {"name": "rga", "mode": "shared", "required": true},
-    {"name": "result.publish", "mode": "brokered", "required": true}
-  ], "limits": {"memory_mb": 256, "cpu_percent": 300, "storage_mb": 24, "shutdown_grace_sec": 10}},
-  "permissions": {"sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
-  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 120, "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 256,
+      "cpu_percent": 300,
+      "storage_mb": 24,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "yolo-detector",
   "name": "YOLO Detector",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/yolo-detector.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "description": "General-purpose object detection over the live camera. Runs YOLOv8n (COCO-80) on the RV1126B NPU and streams structured detections for the /appcenter overlay.",
   "author": "Seeed reCamera Pro",
@@ -34,14 +130,86 @@
         "id": "objects",
         "type": "detection",
         "classes": [
-          "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
-          "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-          "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-          "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-          "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-          "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
-          "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-          "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+          "person",
+          "bicycle",
+          "car",
+          "motorcycle",
+          "airplane",
+          "bus",
+          "train",
+          "truck",
+          "boat",
+          "traffic light",
+          "fire hydrant",
+          "stop sign",
+          "parking meter",
+          "bench",
+          "bird",
+          "cat",
+          "dog",
+          "horse",
+          "sheep",
+          "cow",
+          "elephant",
+          "bear",
+          "zebra",
+          "giraffe",
+          "backpack",
+          "umbrella",
+          "handbag",
+          "tie",
+          "suitcase",
+          "frisbee",
+          "skis",
+          "snowboard",
+          "sports ball",
+          "kite",
+          "baseball bat",
+          "baseball glove",
+          "skateboard",
+          "surfboard",
+          "tennis racket",
+          "bottle",
+          "wine glass",
+          "cup",
+          "fork",
+          "knife",
+          "spoon",
+          "bowl",
+          "banana",
+          "apple",
+          "sandwich",
+          "orange",
+          "broccoli",
+          "carrot",
+          "hot dog",
+          "pizza",
+          "donut",
+          "cake",
+          "chair",
+          "couch",
+          "potted plant",
+          "bed",
+          "dining table",
+          "toilet",
+          "tv",
+          "laptop",
+          "mouse",
+          "remote",
+          "keyboard",
+          "cell phone",
+          "microwave",
+          "oven",
+          "toaster",
+          "sink",
+          "refrigerator",
+          "book",
+          "clock",
+          "vase",
+          "scissors",
+          "teddy bear",
+          "hair drier",
+          "toothbrush"
         ],
         "supports_roi": true
       }
@@ -70,7 +238,12 @@
       "label": "cls_name",
       "line_width": 2
     },
-    "stream_osd": {"supported": ["boxes"], "default": false}
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
   },
   "output": {
     "contract_version": 2,
@@ -81,20 +254,87 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Detection box, original-frame xyxy pixels"},
-      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "COCO-80 class id"},
-      {"name": "cls_name", "from": "results[].cls_name", "type": "string", "description": "COCO-80 class label"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Detection confidence"},
-      {"name": "detection_kind", "from": "events[kind=detection].kind", "type": "string", "event_kind": "detection", "description": "Event kind, always 'detection'"},
-      {"name": "detection_label", "from": "events[kind=detection].label", "type": "string", "event_kind": "detection", "description": "Class label of the detection event"},
-      {"name": "detection_cls", "from": "events[kind=detection].cls", "type": "integer", "event_kind": "detection", "description": "Class id of the detection event"},
-      {"name": "detection_score", "from": "events[kind=detection].score", "type": "float", "event_kind": "detection", "description": "Confidence of the detection event"},
-      {"name": "detection_box", "from": "events[kind=detection].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "detection", "description": "Box of the detection event"}
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Detection box, original-frame xyxy pixels"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "COCO-80 class id"
+      },
+      {
+        "name": "cls_name",
+        "from": "results[].cls_name",
+        "type": "string",
+        "description": "COCO-80 class label"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Detection confidence"
+      },
+      {
+        "name": "detection_kind",
+        "from": "events[kind=detection].kind",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Event kind, always 'detection'"
+      },
+      {
+        "name": "detection_label",
+        "from": "events[kind=detection].label",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Class label of the detection event"
+      },
+      {
+        "name": "detection_cls",
+        "from": "events[kind=detection].cls",
+        "type": "integer",
+        "event_kind": "detection",
+        "description": "Class id of the detection event"
+      },
+      {
+        "name": "detection_score",
+        "from": "events[kind=detection].score",
+        "type": "float",
+        "event_kind": "detection",
+        "description": "Confidence of the detection event"
+      },
+      {
+        "name": "detection_box",
+        "from": "events[kind=detection].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "detection",
+        "description": "Box of the detection event"
+      }
     ],
     "default_mapping": [
-      {"source": "detection.count", "target": "count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "detection.entries | selectattr('label','equalto','person') | list | length", "target": "person_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "detection.entries", "target": "detections", "topic": "recamera/{{ app }}/detections", "task": "detection"}
+      {
+        "source": "detection.count",
+        "target": "count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "detection.entries | selectattr('label','equalto','person') | list | length",
+        "target": "person_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "detection.entries",
+        "target": "detections",
+        "topic": "recamera/{{ app }}/detections",
+        "task": "detection"
+      }
     ]
   },
   "config_schema": {

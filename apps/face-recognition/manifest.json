@@ -169,7 +169,7 @@
   "id": "face-recognition",
   "name": "Face Recognition",
   "name_zh": "人脸识别",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/face-recognition.png",
   "type": "self-hosted",
   "scene": "Access & Attendance",
@@ -986,5 +986,15 @@
     "media_type": "image/png"
   },
   "x-default_model": "scrfd",
-  "x-model_tag": "rv1126b:scrfd500m+mbf512@fp16"
+  "x-model_tag": "rv1126b:scrfd500m+mbf512@fp16",
+  "package": {
+    "exclude": [
+      "evaluation",
+      "models/convert",
+      "models/depth_out",
+      "models/depth_dav2_small_252_fp16.rknn",
+      "tools",
+      "docs"
+    ]
+  }
 }

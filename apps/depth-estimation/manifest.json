@@ -112,7 +112,7 @@
   "id": "depth-estimation",
   "name": "Depth Estimation",
   "name_zh": "单目深度估计",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/depth-estimation.png",
   "type": "self-hosted",
   "scene": "Automation",
