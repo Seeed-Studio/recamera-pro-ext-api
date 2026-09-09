@@ -697,6 +697,74 @@ def _directory(upload_id: str) -> str:
     return os.path.join(paths.uploads_dir(), upload_id)
 
 
+def receive_download(filename: str, expected_size: int, expected_sha256: str,
+                     download, *, on_reserved=None) -> dict:
+    """Stage a server-owned cloud download under the normal upload quota.
+
+    ``download`` creates the two provided paths with bounded streaming IO.
+    No caller-supplied filesystem path or unsigned-local provenance is accepted.
+    The returned record enters the same preflight/finalize pipeline as uploads.
+    """
+    if not isinstance(filename, str) or not _PACKAGE_NAME.fullmatch(filename):
+        raise MultipartError("invalid store package filename")
+    if (not isinstance(expected_size, int) or isinstance(expected_size, bool)
+            or not 0 < expected_size <= paths.MAX_PKG_BYTES):
+        raise MultipartError("invalid store package size")
+    if (not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+        raise MultipartError("invalid store package digest")
+    gc_expired()
+    source, channel = "app-store", "app-center-v1-store"
+    root, upload_id, staging, created_at = _reserve_upload(
+        # The signature is kept both as its file and in the upload metadata.
+        expected_size + 2 * MAX_SIGNATURE_BYTES + 4096,
+        source=source, channel=channel)
+    incoming_name = os.path.basename(staging)
+    try:
+        if on_reserved is not None:
+            on_reserved(upload_id)
+        package_path = os.path.join(staging, "package.tar.gz")
+        signature_path = os.path.join(staging, "signature.txt")
+        download(package_path, signature_path)
+        if (os.path.islink(package_path) or not os.path.isfile(package_path)
+                or os.path.getsize(package_path) != expected_size
+                or _sha256(package_path) != expected_sha256):
+            raise MultipartError("downloaded package digest/size mismatch")
+        if os.path.islink(signature_path):
+            raise MultipartError("invalid downloaded signature")
+        with open(signature_path, "rb") as signature_file:
+            raw_signature = signature_file.read(MAX_SIGNATURE_BYTES + 1)
+        if not 0 < len(raw_signature) <= MAX_SIGNATURE_BYTES:
+            raise MultipartError("invalid downloaded signature size")
+        try:
+            signature = raw_signature.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise MultipartError("downloaded signature must be base64 ASCII") from exc
+        if not signature:
+            raise MultipartError("downloaded signature is empty")
+        metadata = {
+            "schema_version": 1, "upload_id": upload_id,
+            "created_at": created_at, "updated_at": time.time(),
+            "source": source, "channel": channel, "filename": filename,
+            "size": expected_size, "sha256": expected_sha256,
+            "signature": signature, "status": "uploaded",
+        }
+        _save_metadata(staging, metadata)
+        with _UPLOAD_LOCK:
+            destination = os.path.join(root, upload_id)
+            if os.path.lexists(destination):
+                raise MultipartError("upload id collision")
+            os.rename(staging, destination)
+            staging = None
+            _fsync_dir(root)
+        return load(upload_id)
+    finally:
+        with _UPLOAD_LOCK:
+            _LIVE_INCOMING.discard(incoming_name)
+            if staging and not _remove_entry(staging):
+                _ORPHANED_ACTIVE.add(incoming_name)
+
+
 def _load_unlocked(upload_id: str) -> dict:
     directory = _directory(upload_id)
     metadata_path = _metadata_path(directory)

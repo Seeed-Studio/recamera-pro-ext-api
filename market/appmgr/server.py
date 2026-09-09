@@ -81,6 +81,7 @@ from . import (assets, builtin, config as appconfig,
                result_hub as canonical_results,
                resources as appresources, state, supervisor,
                signing as appsigning, trust as apptrust,
+               store_download, store_tasks,
                uploads as appuploads, visualization as appvisualization,
                voiceruntime)
 
@@ -94,9 +95,13 @@ _recording_bridge_instance = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _operation_manager_lock = threading.Lock()
+_store_manager_instance = None
+_store_manager_layout = None
+_store_manager_lock = threading.Lock()
 _upload_finalize_lock = threading.Lock()
 _reconcile_stop = None
 _reconcile_thread = None
+_service_stopping = False
 
 
 def add_result_observer(callback):
@@ -482,6 +487,24 @@ def _operation_manager() -> appoperations.OperationManager:
             _operation_manager_instance = appoperations.OperationManager(layout)
             _operation_manager_layout = layout
         return _operation_manager_instance
+
+
+def _store_manager() -> store_tasks.StoreTaskManager:
+    global _store_manager_instance, _store_manager_layout
+    layout = os.path.join(paths.APPMGR_DIR, "store-tasks.json")
+    with _store_manager_lock:
+        if _service_stopping:
+            raise store_tasks.StoreTaskConflict("appmgr is stopping")
+        if _store_manager_instance is None or _store_manager_layout != layout:
+            if _store_manager_instance is not None:
+                _store_manager_instance.close()
+            _store_manager_instance = store_tasks.StoreTaskManager(
+                preflight=_preflight_v1_upload_record, finalize=do_v1_install,
+                discard=_cancel_store_upload,
+                snapshot=_store_upload_snapshot,
+                operation_manager=_operation_manager(), journal=layout)
+            _store_manager_layout = layout
+        return _store_manager_instance
 
 
 def _managed_launch(app_id: str, operation: str, manifest: dict):
@@ -2777,9 +2800,15 @@ def do_v1_upload(stream, content_length: int, content_type: str, *,
                  source: str = V1_DIRECT_UPLOAD_SOURCE,
                  channel: str = V1_DIRECT_UPLOAD_CHANNEL) -> dict:
     """Receive a package without buffering it, then perform non-mutating preflight."""
-    local_web = _is_local_web_upload(source, channel)
     upload = appuploads.receive(
         stream, content_length, content_type, source=source, channel=channel)
+    return _preflight_v1_upload_record(upload)
+
+
+def _preflight_v1_upload_record(upload: dict) -> dict:
+    """Shared authenticated preflight for local uploads and device downloads."""
+    source, channel = upload.get("source"), upload.get("channel")
+    local_web = _is_local_web_upload(source, channel)
     upload_id = upload["upload_id"]
     try:
         # Only the authenticated, same-origin Web route may inspect an unsigned
@@ -3141,6 +3170,27 @@ def do_v1_install(body: dict) -> dict:
         return {"operation": operation}
 
 
+def _store_upload_snapshot(upload_id: str) -> dict:
+    """Observe finalize correlation and its upload as one control-plane state."""
+    with _upload_finalize_lock:
+        operation = _operation_manager().for_upload(upload_id)
+        upload = None
+        if operation is None:
+            try:
+                upload = appuploads.load(upload_id)
+            except ValueError:
+                pass
+        return {"operation": operation, "upload": upload}
+
+
+def _cancel_store_upload(upload_id: str) -> dict:
+    """An accepted installation remains authoritative after its upload is gone."""
+    with _upload_finalize_lock:
+        if _operation_manager().for_upload(upload_id) is not None:
+            raise store_tasks.StoreTaskConflict("installation has already been submitted")
+        return appuploads.cancel(upload_id)
+
+
 def do_v1_cancel_upload(upload_id: str) -> dict:
     """Delete an inactive upload without racing installation finalization."""
     with _upload_finalize_lock:
@@ -3335,6 +3385,10 @@ class _Handler(BaseHTTPRequestHandler):
             code = 503
         elif isinstance(exc, appoperations.OperationBusyError):
             code = 409
+        elif isinstance(exc, store_tasks.StoreTaskConflict):
+            code = 409
+        elif isinstance(exc, store_download.StoreDownloadError):
+            code = 502
         elif isinstance(exc, BusyError):
             code = 409
         elif isinstance(exc, (appuploads.MultipartError, installer.InstallError,
@@ -3344,6 +3398,7 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             code = 500
         self._send(code, {
+            **({"code": exc.code} if getattr(exc, "code", None) else {}),
             "error": str(exc) if code < 500 else "%s: %s" %
             (type(exc).__name__, exc),
         })
@@ -3386,6 +3441,22 @@ class _Handler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
         if path == "/api/app-center/v1/policy":
             return self._send(200, do_v1_policy())
+        if path == "/api/app-center/v1/store/catalog":
+            try:
+                return self._send(200, store_download.fetch_catalog())
+            except Exception as exc:
+                return self._v1_error(exc)
+        if path == "/api/app-center/v1/store/tasks":
+            try:
+                return self._send(200, {"tasks": _store_manager().list()})
+            except Exception as exc:
+                return self._v1_error(exc)
+        store_match = re.fullmatch(r"/api/app-center/v1/store/tasks/([0-9a-f]{32})", path)
+        if store_match:
+            try:
+                return self._send(200, {"task": _store_manager().get(store_match.group(1))})
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/api/app-center/v1/trust":
             try:
                 return self._send(200, do_v1_trust())
@@ -3550,6 +3621,18 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        if path == "/api/app-center/v1/store/tasks":
+            try:
+                return self._send(202, _store_manager().create(self._body_json_v1()))
+            except Exception as exc:
+                return self._v1_error(exc)
+        store_match = re.fullmatch(r"/api/app-center/v1/store/tasks/([0-9a-f]{32})/install", path)
+        if store_match:
+            try:
+                return self._send(202, _store_manager().install(
+                    store_match.group(1), self._body_json_v1()))
+            except Exception as exc:
+                return self._v1_error(exc)
         output_match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/output/(preview|test)", path)
         if output_match:
@@ -3778,6 +3861,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        store_match = re.fullmatch(r"/api/app-center/v1/store/tasks/([0-9a-f]{32})", path)
+        if store_match:
+            try:
+                return self._send(200, {"task": _store_manager().cancel(store_match.group(1))})
+            except Exception as exc:
+                return self._v1_error(exc)
         upload_match = re.fullmatch(
             r"/api/app-center/v1/uploads/([0-9a-f]{32})", path)
         if upload_match:
@@ -4210,6 +4299,8 @@ def serve(host: str = None, port: int = None) -> None:
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
     global _operation_manager_instance
+    global _store_manager_instance, _service_stopping
+    _service_stopping = False
     host = host or paths.HTTP_HOST
     port = port or paths.HTTP_PORT
     if not _acquire_single_instance():
@@ -4335,9 +4426,13 @@ def serve(host: str = None, port: int = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        _service_stopping = True
         _stop_reconciler()
         if httpd is not None:
             httpd.server_close()
+        if _store_manager_instance is not None:
+            _store_manager_instance.close()
+            _store_manager_instance = None
         if _result_gateway_instance is not None:
             _result_gateway_instance.stop()
             _result_gateway_instance = None
