@@ -1,26 +1,141 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
-  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2"},
-  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "release": {
+    "sequence": 4,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
   "artifacts": [
-    {"id": "wechat-qr-detect-weights", "kind": "data", "source": "bundled", "file": "models/wechat/detect.caffemodel", "sha256": "cc49b8c9babaf45f3037610fe499df38c8819ebda29e90ca9f2e33270f6ef809", "size": 965430, "mount": "models/wechat/detect.caffemodel", "required": true, "share_scope": "content"},
-    {"id": "wechat-qr-detect-graph", "kind": "data", "source": "bundled", "file": "models/wechat/detect.prototxt", "sha256": "e8acfc395caf443a47f15686a9b9207b36cb8f7e6ceb8fbaf6466665e68a9466", "size": 42656, "mount": "models/wechat/detect.prototxt", "required": true, "share_scope": "content"},
-    {"id": "wechat-qr-sr-weights", "kind": "data", "source": "bundled", "file": "models/wechat/sr.caffemodel", "sha256": "e5d36889d8e6ef2f1c1f515f807cec03979320ac81792cd8fb927c31fd658ae3", "size": 23929, "mount": "models/wechat/sr.caffemodel", "required": true, "share_scope": "content"},
-    {"id": "wechat-qr-sr-graph", "kind": "data", "source": "bundled", "file": "models/wechat/sr.prototxt", "sha256": "8ae41acba97e8b4a8e741ee350481e49b8e01d787193f470a4c95ee1c02d5b61", "size": 5984, "mount": "models/wechat/sr.prototxt", "required": true, "share_scope": "content"}
+    {
+      "id": "wechat-qr-detect-weights",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/wechat/detect.caffemodel",
+      "sha256": "cc49b8c9babaf45f3037610fe499df38c8819ebda29e90ca9f2e33270f6ef809",
+      "size": 965430,
+      "mount": "models/wechat/detect.caffemodel",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "wechat-qr-detect-graph",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/wechat/detect.prototxt",
+      "sha256": "e8acfc395caf443a47f15686a9b9207b36cb8f7e6ceb8fbaf6466665e68a9466",
+      "size": 42656,
+      "mount": "models/wechat/detect.prototxt",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "wechat-qr-sr-weights",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/wechat/sr.caffemodel",
+      "sha256": "e5d36889d8e6ef2f1c1f515f807cec03979320ac81792cd8fb927c31fd658ae3",
+      "size": 23929,
+      "mount": "models/wechat/sr.caffemodel",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "wechat-qr-sr-graph",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/wechat/sr.prototxt",
+      "sha256": "8ae41acba97e8b4a8e741ee350481e49b8e01d787193f470a4c95ee1c02d5b61",
+      "size": 5984,
+      "mount": "models/wechat/sr.prototxt",
+      "required": true,
+      "share_scope": "content"
+    }
   ],
-  "resources": {"claims": [
-    {"name": "camera.frames", "mode": "shared", "required": true},
-    {"name": "result.publish", "mode": "brokered", "required": true}
-  ], "limits": {"memory_mb": 192, "cpu_percent": 300, "storage_mb": 16, "shutdown_grace_sec": 10}},
-  "permissions": {"sdk": ["frame.read", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
-  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 60, "stabilization_sec": 2, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 192,
+      "cpu_percent": 300,
+      "storage_mb": 16,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 60,
+    "stabilization_sec": 2,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "qrcode-reader",
   "name": "QR Code Reader",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/qrcode-reader.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
   "author": "Seeed reCamera Pro",
@@ -31,7 +146,12 @@
   "record_trigger": {
     "version": 1,
     "signals": [
-      {"id": "qrcode", "type": "event", "event_kind": "qrcode", "supports_roi": false}
+      {
+        "id": "qrcode",
+        "type": "event",
+        "event_kind": "qrcode",
+        "supports_roi": false
+      }
     ]
   },
   "models": [],
@@ -42,9 +162,16 @@
   ],
   "render": {
     "schema_version": 1,
-    "quads": {"points": "quad", "label": "text", "line_width": 2},
+    "quads": {
+      "points": "quad",
+      "label": "text",
+      "line_width": 2
+    },
     "events": {
-      "qrcode": {"as": "badge", "text": "{{ text }}"}
+      "qrcode": {
+        "as": "badge",
+        "text": "{{ text }}"
+      }
     }
   },
   "output": {
@@ -56,17 +183,68 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "text", "from": "results[].text", "type": "string", "optional": true, "description": "Decoded QR text (may be empty)"},
-      {"name": "quad", "from": "results[].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "description": "QR corner points, original-frame pixels"},
-      {"name": "qrcode_kind", "from": "events[kind=qrcode].kind", "type": "string", "event_kind": "qrcode", "description": "Event kind, always 'qrcode'"},
-      {"name": "qrcode_text", "from": "events[kind=qrcode].text", "type": "string", "event_kind": "qrcode", "optional": true, "description": "Decoded QR text of the event"},
-      {"name": "qrcode_quad", "from": "events[kind=qrcode].quad", "type": "quad<float>[4][2]", "coord": "pixel_quad", "event_kind": "qrcode", "description": "QR corner points of the event"},
-      {"name": "box", "from": "derived:bbox(quad)", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "derived": true, "description": "Axis-aligned box derived from quad by the formatter; not emitted by the app"}
+      {
+        "name": "text",
+        "from": "results[].text",
+        "type": "string",
+        "optional": true,
+        "description": "Decoded QR text (may be empty)"
+      },
+      {
+        "name": "quad",
+        "from": "results[].quad",
+        "type": "quad<float>[4][2]",
+        "coord": "pixel_quad",
+        "description": "QR corner points, original-frame pixels"
+      },
+      {
+        "name": "qrcode_kind",
+        "from": "events[kind=qrcode].kind",
+        "type": "string",
+        "event_kind": "qrcode",
+        "description": "Event kind, always 'qrcode'"
+      },
+      {
+        "name": "qrcode_text",
+        "from": "events[kind=qrcode].text",
+        "type": "string",
+        "event_kind": "qrcode",
+        "optional": true,
+        "description": "Decoded QR text of the event"
+      },
+      {
+        "name": "qrcode_quad",
+        "from": "events[kind=qrcode].quad",
+        "type": "quad<float>[4][2]",
+        "coord": "pixel_quad",
+        "event_kind": "qrcode",
+        "description": "QR corner points of the event"
+      },
+      {
+        "name": "box",
+        "from": "derived:bbox(quad)",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "derived": true,
+        "description": "Axis-aligned box derived from quad by the formatter; not emitted by the app"
+      }
     ],
     "default_mapping": [
-      {"source": "events.qrcode | length", "target": "count", "topic": "recamera/{{ app }}/count"},
-      {"source": "events.qrcode | map(attribute='text') | reject('equalto','') | list | last", "target": "last_text", "topic": "recamera/{{ app }}/text"},
-      {"source": "events.qrcode | map(attribute='text') | reject('equalto','') | list", "target": "texts", "topic": "recamera/{{ app }}/text"}
+      {
+        "source": "events.qrcode | length",
+        "target": "count",
+        "topic": "recamera/{{ app }}/count"
+      },
+      {
+        "source": "events.qrcode | map(attribute='text') | reject('equalto','') | list | last",
+        "target": "last_text",
+        "topic": "recamera/{{ app }}/text"
+      },
+      {
+        "source": "events.qrcode | map(attribute='text') | reject('equalto','') | list",
+        "target": "texts",
+        "topic": "recamera/{{ app }}/text"
+      }
     ]
   },
   "config_schema": {

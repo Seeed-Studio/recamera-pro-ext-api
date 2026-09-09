@@ -1,26 +1,122 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
-  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
-  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "release": {
+    "sequence": 4,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
   "artifacts": [
-    {"id": "pose-model", "kind": "rknn", "source": "bundled", "file": "models/yolo11n_pose_rawhead_int8.rknn", "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add", "size": 4691086, "mount": "models/yolo11n_pose_rawhead_int8.rknn", "required": true, "share_scope": "content"}
+    {
+      "id": "pose-model",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add",
+      "size": 4691086,
+      "mount": "models/yolo11n_pose_rawhead_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    }
   ],
-  "resources": {"claims": [
-    {"name": "camera.frames", "mode": "shared", "required": true},
-    {"name": "npu.rknn", "mode": "scheduled", "required": true},
-    {"name": "rga", "mode": "shared", "required": true},
-    {"name": "result.publish", "mode": "brokered", "required": true}
-  ], "limits": {"memory_mb": 320, "cpu_percent": 300, "storage_mb": 24, "shutdown_grace_sec": 10}},
-  "permissions": {"sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
-  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 120, "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 320,
+      "cpu_percent": 300,
+      "storage_mb": 24,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "fitness-trainer",
   "name": "Fitness Trainer",
   "name_zh": "健身教练",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/fitness-trainer.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "scene": "Health & Wellness",
   "scene_zh": "健康健身",
@@ -34,7 +130,14 @@
   "record_trigger": {
     "version": 1,
     "signals": [
-      {"id": "person", "type": "detection", "classes": ["person"], "supports_roi": true}
+      {
+        "id": "person",
+        "type": "detection",
+        "classes": [
+          "person"
+        ],
+        "supports_roi": true
+      }
     ]
   },
   "models": [
@@ -56,7 +159,11 @@
   "postproc": "pose",
   "render": {
     "schema_version": 1,
-    "boxes": {"color_by": "kind", "label": "kind", "line_width": 2},
+    "boxes": {
+      "color_by": "kind",
+      "label": "kind",
+      "line_width": 2
+    },
     "keypoints": {
       "layout": "coco17",
       "point_radius": 3,
@@ -67,10 +174,20 @@
       "workout": {
         "as": "panel",
         "position": "top-left",
-        "fields": ["mode", "reps", "set", "stage"]
+        "fields": [
+          "mode",
+          "reps",
+          "set",
+          "stage"
+        ]
       }
     },
-    "stream_osd": {"supported": ["boxes"], "default": false}
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
   },
   "output": {
     "contract_version": 2,
@@ -81,36 +198,197 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Person box, original-frame xyxy pixels"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Person detection confidence"},
-      {"name": "keypoints", "from": "results[].keypoints", "type": "keypoints<float>[17]", "coord": "pixel_points", "description": "COCO-17 pose keypoints"},
-      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Result kind, always 'person'"},
-      {"name": "workout_kind", "from": "events[kind=workout].kind", "type": "string", "event_kind": "workout", "description": "Event kind, always 'workout'"},
-      {"name": "workout_mode", "from": "events[kind=workout].mode", "type": "string", "event_kind": "workout", "description": "Exercise mode"},
-      {"name": "workout_reps", "from": "events[kind=workout].reps", "type": "integer", "event_kind": "workout", "description": "Reps in the current set"},
-      {"name": "workout_set", "from": "events[kind=workout].set", "type": "integer", "event_kind": "workout", "description": "Current set index"},
-      {"name": "workout_target_reps", "from": "events[kind=workout].target_reps", "type": "integer", "event_kind": "workout", "description": "Target reps per set"},
-      {"name": "workout_target_sets", "from": "events[kind=workout].target_sets", "type": "integer", "event_kind": "workout", "description": "Target sets"},
-      {"name": "workout_stage", "from": "events[kind=workout].stage", "type": "string", "event_kind": "workout", "description": "Rep phase (up/down)"},
-      {"name": "workout_angle", "from": "events[kind=workout].angle", "type": "float", "event_kind": "workout", "description": "Tracked joint angle"},
-      {"name": "workout_has_angle", "from": "events[kind=workout].has_angle", "type": "bool", "event_kind": "workout", "description": "Whether a joint angle is available"},
-      {"name": "workout_tracking", "from": "events[kind=workout].tracking", "type": "bool", "event_kind": "workout", "description": "Whether a person is being tracked"},
-      {"name": "workout_rep_completed", "from": "events[kind=workout].rep_completed", "type": "bool", "event_kind": "workout", "description": "A rep completed this frame"},
-      {"name": "workout_set_completed", "from": "events[kind=workout].set_completed", "type": "bool", "event_kind": "workout", "description": "A set completed this frame"},
-      {"name": "workout_workout_complete", "from": "events[kind=workout].workout_complete", "type": "bool", "event_kind": "workout", "description": "Whole workout complete"},
-      {"name": "workout_form_warning", "from": "events[kind=workout].form_warning", "type": "string", "event_kind": "workout", "optional": true, "description": "Form-correction warning"},
-      {"name": "workout_reps_left", "from": "events[kind=workout].reps_left", "type": "integer", "event_kind": "workout", "optional": true, "description": "Left-side reps (bilateral exercises)"},
-      {"name": "workout_reps_right", "from": "events[kind=workout].reps_right", "type": "integer", "event_kind": "workout", "optional": true, "description": "Right-side reps (bilateral exercises)"}
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Person box, original-frame xyxy pixels"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Person detection confidence"
+      },
+      {
+        "name": "keypoints",
+        "from": "results[].keypoints",
+        "type": "keypoints<float>[17]",
+        "coord": "pixel_points",
+        "description": "COCO-17 pose keypoints"
+      },
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Result kind, always 'person'"
+      },
+      {
+        "name": "workout_kind",
+        "from": "events[kind=workout].kind",
+        "type": "string",
+        "event_kind": "workout",
+        "description": "Event kind, always 'workout'"
+      },
+      {
+        "name": "workout_mode",
+        "from": "events[kind=workout].mode",
+        "type": "string",
+        "event_kind": "workout",
+        "description": "Exercise mode"
+      },
+      {
+        "name": "workout_reps",
+        "from": "events[kind=workout].reps",
+        "type": "integer",
+        "event_kind": "workout",
+        "description": "Reps in the current set"
+      },
+      {
+        "name": "workout_set",
+        "from": "events[kind=workout].set",
+        "type": "integer",
+        "event_kind": "workout",
+        "description": "Current set index"
+      },
+      {
+        "name": "workout_target_reps",
+        "from": "events[kind=workout].target_reps",
+        "type": "integer",
+        "event_kind": "workout",
+        "description": "Target reps per set"
+      },
+      {
+        "name": "workout_target_sets",
+        "from": "events[kind=workout].target_sets",
+        "type": "integer",
+        "event_kind": "workout",
+        "description": "Target sets"
+      },
+      {
+        "name": "workout_stage",
+        "from": "events[kind=workout].stage",
+        "type": "string",
+        "event_kind": "workout",
+        "description": "Rep phase (up/down)"
+      },
+      {
+        "name": "workout_angle",
+        "from": "events[kind=workout].angle",
+        "type": "float",
+        "event_kind": "workout",
+        "description": "Tracked joint angle"
+      },
+      {
+        "name": "workout_has_angle",
+        "from": "events[kind=workout].has_angle",
+        "type": "bool",
+        "event_kind": "workout",
+        "description": "Whether a joint angle is available"
+      },
+      {
+        "name": "workout_tracking",
+        "from": "events[kind=workout].tracking",
+        "type": "bool",
+        "event_kind": "workout",
+        "description": "Whether a person is being tracked"
+      },
+      {
+        "name": "workout_rep_completed",
+        "from": "events[kind=workout].rep_completed",
+        "type": "bool",
+        "event_kind": "workout",
+        "description": "A rep completed this frame"
+      },
+      {
+        "name": "workout_set_completed",
+        "from": "events[kind=workout].set_completed",
+        "type": "bool",
+        "event_kind": "workout",
+        "description": "A set completed this frame"
+      },
+      {
+        "name": "workout_workout_complete",
+        "from": "events[kind=workout].workout_complete",
+        "type": "bool",
+        "event_kind": "workout",
+        "description": "Whole workout complete"
+      },
+      {
+        "name": "workout_form_warning",
+        "from": "events[kind=workout].form_warning",
+        "type": "string",
+        "event_kind": "workout",
+        "optional": true,
+        "description": "Form-correction warning"
+      },
+      {
+        "name": "workout_reps_left",
+        "from": "events[kind=workout].reps_left",
+        "type": "integer",
+        "event_kind": "workout",
+        "optional": true,
+        "description": "Left-side reps (bilateral exercises)"
+      },
+      {
+        "name": "workout_reps_right",
+        "from": "events[kind=workout].reps_right",
+        "type": "integer",
+        "event_kind": "workout",
+        "optional": true,
+        "description": "Right-side reps (bilateral exercises)"
+      }
     ],
     "default_mapping": [
-      {"source": "(events.workout | last).mode", "target": "mode", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).reps", "target": "reps", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).set", "target": "set", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).stage", "target": "stage", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).angle", "target": "angle", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).tracking", "target": "tracking", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).workout_complete", "target": "workout_complete", "topic": "recamera/{{ app }}/workout", "task": "keypoint"},
-      {"source": "(events.workout | last).form_warning", "target": "form_warning", "topic": "recamera/{{ app }}/workout", "task": "keypoint"}
+      {
+        "source": "(events.workout | last).mode",
+        "target": "mode",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).reps",
+        "target": "reps",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).set",
+        "target": "set",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).stage",
+        "target": "stage",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).angle",
+        "target": "angle",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).tracking",
+        "target": "tracking",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).workout_complete",
+        "target": "workout_complete",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      },
+      {
+        "source": "(events.workout | last).form_warning",
+        "target": "form_warning",
+        "topic": "recamera/{{ app }}/workout",
+        "task": "keypoint"
+      }
     ]
   },
   "config_schema": {

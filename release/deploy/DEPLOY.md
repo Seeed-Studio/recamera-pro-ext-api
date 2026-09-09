@@ -21,6 +21,10 @@ cd release/deploy && ./deploy-app.sh --host <设备IP>
 
 它只动**应用层**,不碰固件。固件是另一条高危路径,单独跑、且需要你能物理复位设备。
 
+**默认不预装应用。** `apps-v<ver>.tar.gz` 里只有代码和 manifest,**不含模型**(9 个 app 合计 987 KB);推上去的结果是 9 个 app 全部显示"已安装"、一启动就 `Invalid RKNN model path`。而应用中心的安装路径走 catalog,拉的是**含模型的完整包**(CDN 上单个 3–53 MB),装完即可用。所以出厂设备保持干净,由用户在应用中心按需安装。
+
+要恢复旧行为(演示机 / 装机站预装,模型另行下发)加 `--with-apps`。不加时第 5 步的激活自动跳过——没有东西可激活。
+
 ---
 
 ## 1. 设备上有哪几层
@@ -34,7 +38,7 @@ cd release/deploy && ./deploy-app.sh --host <设备IP>
 | **appmgr**(应用中心后端) | `/userdata/local/appmgr` | `deploy-app.sh` 第 2 步 | 跟随 appmgr 改动 |
 | **nginx 边缘配置 + 开机启动**(`ext_appmgr.conf` → `/oem/usr/etc/nginx/`,`S94appmgr` → `/etc/init.d/`,master 在 `/userdata`) | 见左 | `deploy-app.sh` 第 2b 步 | 随脚本;出厂/恢复出厂后没有它们 → 浏览器装 app 报 `405`、重启后 appmgr 不起 |
 | **前端**(React 静态产物) | `/oem/usr/www` | `deploy-app.sh` 第 3 步 | 跟随前端改动 |
-| **应用**(9 个 app 的代码+manifest) | `/userdata/local/apps/<id>` | `deploy-app.sh` 第 4 步 / App Center 安装 | 经常 |
+| **应用** | `/userdata/local/apps/<id>` | **App Center 安装**(默认);`deploy-app.sh --with-apps` 才预推 | 经常 |
 | **用户配置** | `/userdata/local/appdata/<id>/config.json` | 用户在 UI 改 | **不随升级丢失** |
 | **共享模型** | `/userdata/local/models/` | catalog `putModel` / provision 脚本 | 很少(体积大) |
 
@@ -82,7 +86,13 @@ cd release/deploy
 
 **只有需要扩展 API 能力(帧代理 / 结果回注 / 硬件遮罩 / probe)时才装固件。** `deploy-app.sh` 不依赖它也能把 apps/前端/appmgr 跑起来。
 
-**回滚目标有白名单保护**:`install.sh` 只接受经校验的**干净原厂** rkipc 作为回滚点(`VERIFIED_FACTORY_MD5S`);若 `/oem` 当前是**已知扩展构建**或未知构建,它会拒绝把那个当"原厂"备份并退出 —— 否则日后"恢复出厂"会变成空操作、扩展固件永远留在设备上。
+**回滚点按内容判定,不按 md5 白名单**:`install.sh` 只把**不带扩展标记**的 rkipc 存为回滚点。判据是文件内容——我们的构建带 `/run/recamera`/`rc_ext_` 符号,原厂不带(entry.cgi 对应 `ExtApiHandler`)。**不能用 `osd_rgn_cover_`**:那是 vendor 的 OSD cover 区域符号,遮罩功能建在它上面,原厂 rkipc 同样含有(真机实测:出厂 `d5e7ca93` 有 2 处,扩展 `9826e9ec` 有 8 处),拿它判会把真出厂备份误判成扩展构建。这条对**任何**固件基线成立,不需要维护 md5 列表。
+
+早先用的 `VERIFIED_FACTORY_MD5S` 白名单已废弃:它测的是"这个文件我见过没有",而不是"这是不是原厂",结果是没收录过的官方基线在现场一律 abort(实测 `192.168.42.1` 的 2026-08 基线就被拦下),而且同一个 md5 曾同时出现在 factory 和 ext 两个列表里。
+
+`/oem` 已是扩展构建且无备份时仍会拒绝——把扩展构建存成"原厂"会让日后回滚变空操作。这种情况可以 `--force` 强行装,代价是没有本地回滚点;此时的恢复路径是完整 OTA / update.img 刷机,它会把 `/oem` 重写回原厂。
+
+**固件基线兼容性是独立的一项检查**,默认只**告警**不拦截:我们的 rkipc 从特定基线构建,装到别的基线上等于把相机主程序换成另一版。加 `--strict` 才会因基线未验证而中止。
 
 ---
 

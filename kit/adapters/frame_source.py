@@ -203,8 +203,27 @@ class SnapshotSource(FrameSource):
                                           timeout=15)
             if not out:
                 return None
+            # RTSP 断流时 ffmpeg 可能 exit 0 却只吐出半张 JPEG。完整 JPEG 必以
+            # EOI (FF D9) 结尾；半张交给 PIL 要么抛 truncated，要么（若进程里
+            # 有人开了 ImageFile.LOAD_TRUNCATED_IMAGES）被静默补成大片黑——
+            # 黑帧喂进模型即"检测不出来"。这里直接丢弃并计数，绝不下传。
+            if not out.rstrip(b"\0").endswith(b"\xff\xd9"):
+                self._drop_count = getattr(self, "_drop_count", 0) + 1
+                if self._drop_count % 30 == 1:
+                    print(f"[SnapshotSource] truncated JPEG dropped "
+                          f"(x{self._drop_count}); check RTSP stability",
+                          flush=True)
+                return None
             img = Image.open(io.BytesIO(out)).convert("RGB")
-            return np.asarray(img, dtype=np.uint8)
+            arr = np.asarray(img, dtype=np.uint8)
+            # 黑帧守卫：均值亮度过低的整帧不是相机画面（解码补黑/信号丢失）。
+            if arr.mean() < 2.0:
+                self._black_count = getattr(self, "_black_count", 0) + 1
+                if self._black_count % 30 == 1:
+                    print(f"[SnapshotSource] near-black frame dropped "
+                          f"(x{self._black_count})", flush=True)
+                return None
+            return arr
         except Exception:
             return None
 

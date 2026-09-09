@@ -133,7 +133,7 @@
   "id": "ppocr-reader",
   "name": "PP-OCR Reader",
   "name_zh": "文字识别",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "image": "/appcenter/apps/ppocr-reader.png",
   "icon": {
     "path": "icon.png",

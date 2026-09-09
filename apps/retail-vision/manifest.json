@@ -1,26 +1,122 @@
 {
   "manifest_version": 2,
-  "release": {"sequence": 4, "channel": "stable"},
-  "compatibility": {"platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1", "arch": "aarch64", "python": "==3.11.*", "kit_api": ">=0.1,<1", "sdk_abi": ">=1.3,<2", "rknn_runtime": "==2.3.2"},
-  "python": {"runtime_profile": "recamera-ai-cp311-v1", "isolation": "per-release", "wheels": [], "imports": []},
+  "release": {
+    "sequence": 4,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
   "artifacts": [
-    {"id": "detector", "kind": "rknn", "source": "bundled", "file": "models/yolo8n_rawhead_int8.rknn", "sha256": "5379721bb9b16fa3b9caceb8958175b2e8b0665d4ebcfe4e2524ad1db80d30da", "size": 4339284, "mount": "models/yolo8n_rawhead_int8.rknn", "required": true, "share_scope": "content"}
+    {
+      "id": "detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/yolo8n_rawhead_int8.rknn",
+      "sha256": "5379721bb9b16fa3b9caceb8958175b2e8b0665d4ebcfe4e2524ad1db80d30da",
+      "size": 4339284,
+      "mount": "models/yolo8n_rawhead_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    }
   ],
-  "resources": {"claims": [
-    {"name": "camera.frames", "mode": "shared", "required": true},
-    {"name": "npu.rknn", "mode": "scheduled", "required": true},
-    {"name": "rga", "mode": "shared", "required": true},
-    {"name": "result.publish", "mode": "brokered", "required": true}
-  ], "limits": {"memory_mb": 320, "cpu_percent": 300, "storage_mb": 24, "shutdown_grace_sec": 10}},
-  "permissions": {"sdk": ["frame.read", "npu.infer", "rga.use", "result.publish"], "filesystem": {"read": ["app", "artifacts"], "write": ["appdata", "tmp"]}, "network": {"listen": [], "outbound": ["configured.outputs"]}},
-  "health": {"protocol": "kit-health-v1", "startup_timeout_sec": 120, "stabilization_sec": 3, "liveness_interval_sec": 10, "liveness_failures": 3, "restart": {"policy": "on-failure", "max_attempts": 3, "window_sec": 300, "backoff_sec": [1, 5, 15]}},
-  "instances": {"max": 1, "config_scope": "app", "data_scope": "app", "endpoint_mode": "allocated"},
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 320,
+      "cpu_percent": 300,
+      "storage_mb": 24,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
   "id": "retail-vision",
   "name": "Retail People Counting",
   "name_zh": "零售人流分析",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/retail-vision.png",
-  "icon": {"path": "icon.png", "media_type": "image/png"},
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "type": "self-hosted",
   "scene": "Retail",
   "scene_zh": "零售",
@@ -34,8 +130,20 @@
   "record_trigger": {
     "version": 1,
     "signals": [
-      {"id": "person", "type": "detection", "classes": ["person"], "supports_roi": true},
-      {"id": "line-cross", "type": "event", "event_kind": "line_cross", "supports_roi": false}
+      {
+        "id": "person",
+        "type": "detection",
+        "classes": [
+          "person"
+        ],
+        "supports_roi": true
+      },
+      {
+        "id": "line-cross",
+        "type": "event",
+        "event_kind": "line_cross",
+        "supports_roi": false
+      }
     ]
   },
   "models": [
@@ -72,10 +180,20 @@
       "metrics": {
         "as": "panel",
         "position": "top-left",
-        "fields": ["occupancy", "entry_count", "exit_count", "peak"]
+        "fields": [
+          "occupancy",
+          "entry_count",
+          "exit_count",
+          "peak"
+        ]
       }
     },
-    "stream_osd": {"supported": ["boxes"], "default": false}
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
   },
   "output": {
     "contract_version": 2,
@@ -86,33 +204,175 @@
     ],
     "default_mode": "raw",
     "fields": [
-      {"name": "box", "from": "results[].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "description": "Raw detection box, original-frame xyxy pixels"},
-      {"name": "cls", "from": "results[].cls", "type": "integer", "description": "COCO-80 class id; cls==0 is person (results[].kind is tagged accordingly)"},
-      {"name": "cls_name", "from": "results[].cls_name", "type": "string", "description": "COCO-80 class label"},
-      {"name": "score", "from": "results[].score", "type": "float", "description": "Detection confidence"},
-      {"name": "kind", "from": "results[].kind", "type": "string", "description": "Tagged 'person' after class-0-only tracking; prefer cls==0"},
-      {"name": "track_id", "from": "events[kind=track].track_id", "type": "integer", "event_kind": "track", "description": "Stable per-shopper track id"},
-      {"name": "track_state", "from": "events[kind=track].state", "type": "string", "event_kind": "track", "description": "Track dwell state (browsing/engaged/assistance)"},
-      {"name": "track_in_zone", "from": "events[kind=track].in_zone", "type": "bool", "event_kind": "track", "description": "Whether the track is inside the counting zone"},
-      {"name": "track_score", "from": "events[kind=track].score", "type": "float", "event_kind": "track", "description": "Track detection confidence"},
-      {"name": "track_speed_px_s", "from": "events[kind=track].speed_px_s", "type": "float", "event_kind": "track", "description": "Track speed in pixels/second"},
-      {"name": "track_box", "from": "events[kind=track].box", "type": "bbox<float>[4]", "coord": "pixel_xyxy", "event_kind": "track", "description": "Track box, original-frame pixels"},
-      {"name": "line_cross_track_id", "from": "events[kind=line_cross].track_id", "type": "integer", "event_kind": "line_cross", "description": "Track id that crossed the entry/exit line"},
-      {"name": "line_cross_dir", "from": "events[kind=line_cross].dir", "type": "string", "event_kind": "line_cross", "description": "Crossing direction (in/out)"},
-      {"name": "metrics_occupancy", "from": "events[kind=metrics].occupancy", "type": "integer", "event_kind": "metrics", "description": "People currently in store"},
-      {"name": "metrics_browsing", "from": "events[kind=metrics].browsing", "type": "integer", "event_kind": "metrics", "description": "Browsing count"},
-      {"name": "metrics_engaged", "from": "events[kind=metrics].engaged", "type": "integer", "event_kind": "metrics", "description": "Engaged count"},
-      {"name": "metrics_assistance", "from": "events[kind=metrics].assistance", "type": "integer", "event_kind": "metrics", "description": "Needs-assistance count"},
-      {"name": "metrics_peak", "from": "events[kind=metrics].peak", "type": "integer", "event_kind": "metrics", "description": "Peak occupancy in the window"},
-      {"name": "metrics_entry_count", "from": "events[kind=metrics].entry_count", "type": "integer", "event_kind": "metrics", "description": "Cumulative entries"},
-      {"name": "metrics_exit_count", "from": "events[kind=metrics].exit_count", "type": "integer", "event_kind": "metrics", "description": "Cumulative exits"}
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Raw detection box, original-frame xyxy pixels"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "COCO-80 class id; cls==0 is person (results[].kind is tagged accordingly)"
+      },
+      {
+        "name": "cls_name",
+        "from": "results[].cls_name",
+        "type": "string",
+        "description": "COCO-80 class label"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Detection confidence"
+      },
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Tagged 'person' after class-0-only tracking; prefer cls==0"
+      },
+      {
+        "name": "track_id",
+        "from": "events[kind=track].track_id",
+        "type": "integer",
+        "event_kind": "track",
+        "description": "Stable per-shopper track id"
+      },
+      {
+        "name": "track_state",
+        "from": "events[kind=track].state",
+        "type": "string",
+        "event_kind": "track",
+        "description": "Track dwell state (browsing/engaged/assistance)"
+      },
+      {
+        "name": "track_in_zone",
+        "from": "events[kind=track].in_zone",
+        "type": "bool",
+        "event_kind": "track",
+        "description": "Whether the track is inside the counting zone"
+      },
+      {
+        "name": "track_score",
+        "from": "events[kind=track].score",
+        "type": "float",
+        "event_kind": "track",
+        "description": "Track detection confidence"
+      },
+      {
+        "name": "track_speed_px_s",
+        "from": "events[kind=track].speed_px_s",
+        "type": "float",
+        "event_kind": "track",
+        "description": "Track speed in pixels/second"
+      },
+      {
+        "name": "track_box",
+        "from": "events[kind=track].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "track",
+        "description": "Track box, original-frame pixels"
+      },
+      {
+        "name": "line_cross_track_id",
+        "from": "events[kind=line_cross].track_id",
+        "type": "integer",
+        "event_kind": "line_cross",
+        "description": "Track id that crossed the entry/exit line"
+      },
+      {
+        "name": "line_cross_dir",
+        "from": "events[kind=line_cross].dir",
+        "type": "string",
+        "event_kind": "line_cross",
+        "description": "Crossing direction (in/out)"
+      },
+      {
+        "name": "metrics_occupancy",
+        "from": "events[kind=metrics].occupancy",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "People currently in store"
+      },
+      {
+        "name": "metrics_browsing",
+        "from": "events[kind=metrics].browsing",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Browsing count"
+      },
+      {
+        "name": "metrics_engaged",
+        "from": "events[kind=metrics].engaged",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Engaged count"
+      },
+      {
+        "name": "metrics_assistance",
+        "from": "events[kind=metrics].assistance",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Needs-assistance count"
+      },
+      {
+        "name": "metrics_peak",
+        "from": "events[kind=metrics].peak",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Peak occupancy in the window"
+      },
+      {
+        "name": "metrics_entry_count",
+        "from": "events[kind=metrics].entry_count",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Cumulative entries"
+      },
+      {
+        "name": "metrics_exit_count",
+        "from": "events[kind=metrics].exit_count",
+        "type": "integer",
+        "event_kind": "metrics",
+        "description": "Cumulative exits"
+      }
     ],
     "default_mapping": [
-      {"source": "results | selectattr('cls','equalto',0) | list | length", "target": "person_count", "topic": "recamera/{{ app }}/count", "task": "detection"},
-      {"source": "(events.metrics | last).occupancy", "target": "occupancy", "topic": "recamera/{{ app }}/metrics", "task": "tracking"},
-      {"source": "(events.metrics | last).entry_count", "target": "entry_count", "topic": "recamera/{{ app }}/metrics", "task": "tracking"},
-      {"source": "(events.metrics | last).exit_count", "target": "exit_count", "topic": "recamera/{{ app }}/metrics", "task": "tracking"},
-      {"source": "(events.metrics | last).peak", "target": "peak", "topic": "recamera/{{ app }}/metrics", "task": "tracking"}
+      {
+        "source": "results | selectattr('cls','equalto',0) | list | length",
+        "target": "person_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "(events.metrics | last).occupancy",
+        "target": "occupancy",
+        "topic": "recamera/{{ app }}/metrics",
+        "task": "tracking"
+      },
+      {
+        "source": "(events.metrics | last).entry_count",
+        "target": "entry_count",
+        "topic": "recamera/{{ app }}/metrics",
+        "task": "tracking"
+      },
+      {
+        "source": "(events.metrics | last).exit_count",
+        "target": "exit_count",
+        "topic": "recamera/{{ app }}/metrics",
+        "task": "tracking"
+      },
+      {
+        "source": "(events.metrics | last).peak",
+        "target": "peak",
+        "topic": "recamera/{{ app }}/metrics",
+        "task": "tracking"
+      }
     ]
   },
   "config_schema": {

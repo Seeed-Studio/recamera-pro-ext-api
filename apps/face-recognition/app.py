@@ -92,6 +92,7 @@ import gallery as gallery_mod
 import liveness as liveness_mod
 import liveness_temporal as lt
 import scrfd
+import stagetrace
 from cmd_server import CmdServer
 
 MODEL_TAG = "rv1126b:scrfd500m+mbf512@fp16"
@@ -128,6 +129,10 @@ class TrackState:
     first_seen: Optional[float] = None   # frame pts of this track's first sample
     last_texture: int = -(10 ** 9)       # frame index of the last texture run
     liveness: Optional[dict] = None      # last fused verdict object
+    # -- milestones on the one monotonic clock (see stagetrace.py) -------- #
+    t_new: Optional[float] = None        # first ungated frame for this track
+    t_live: Optional[float] = None       # liveness first settled to LIVE
+    t_stable: Optional[float] = None     # samples first reached min_track_frames
 
     def add(self, name: Optional[str], cos: float, decay: float) -> None:
         if decay != 1.0:
@@ -501,7 +506,10 @@ class FaceRecognitionApp(App):
                 and state.liveness is not None:
             return state.liveness
         p_v2 = p_v1se = None
-        due = capturing or (self._frame_idx - state.last_texture) >= self.embed_interval
+        priming = (self._lv_cfg.prime
+                   and lv.texture_samples < max(1, int(self._lv_cfg.min_samples)))
+        due = (capturing or priming
+               or (self._frame_idx - state.last_texture) >= self.embed_interval)
         if due:
             state.last_texture = self._frame_idx
             lv.last_heavy_frame = self._frame_idx
@@ -553,8 +561,30 @@ class FaceRecognitionApp(App):
         # the texture EMA — NOT the fused score, which mixes in motion and would
         # silently change meaning for an existing consumer.
         state.liveness_score = lv.texture_ema
+        if self._lv_cfg.debug_frames:
+            self._log_liveness_frame(track_id, face_px, out)
         self._capture_row(state, track_id, now, face_px, p_v2, p_v1se, ear, blink)
         return out
+
+    @staticmethod
+    def _fmt(v) -> str:
+        return "-" if v is None else f"{float(v):.3f}"
+
+    def _log_liveness_frame(self, track_id, face_px: float, out: dict) -> None:
+        """One line per face per frame, gated by `liveness_debug_frames`.
+
+        The fields are exactly the ones a fusion verdict is built from, so a
+        run that admits a spoof can be attributed to a term afterwards rather
+        than re-argued from the source.
+        """
+        print(
+            f"[face-recognition] lv f={self._frame_idx} t={track_id} "
+            f"px={face_px:.0f} score={self._fmt(out.get('score'))} "
+            f"tex={self._fmt(out.get('texture'))} "
+            f"motion={self._fmt(out.get('motion'))} "
+            f"blink={int(bool(out.get('blink')))} "
+            f"verdict={out.get('decision')} reason={out.get('reason')}",
+            flush=True)
 
     def _detect(self, model_input, info) -> List[dict]:
         outs = self.models[SCRFD_ID].infer(model_input)
@@ -660,12 +690,16 @@ class FaceRecognitionApp(App):
             self._frame_idx += 1
             t = frame.pts
             rgb = frame.data
+            st_trace = stagetrace.frame(self._frame_idx, t)
 
-            x = self.pre(frame)
-            dets = self._detect(x.data, x.info)
+            with st_trace.stage("pre"):
+                x = self.pre(frame)
+            with st_trace.stage("detect"):
+                dets = self._detect(x.data, x.info)
             faces = dets[: max(1, int(self.max_faces))]
 
-            tracks = self._tracker.update(faces, t, frame.w, frame.h)
+            with st_trace.stage("track"):
+                tracks = self._tracker.update(faces, t, frame.w, frame.h)
             for tid in self._tracker.removed_ids:
                 self._states.pop(tid, None)
             by_det = {tr.det_index: tr for tr in tracks if tr.det_index >= 0}
@@ -689,16 +723,30 @@ class FaceRecognitionApp(App):
                     st = self._states.setdefault(tid, TrackState())
 
                 if not gated and st is not None:
+                    if st.t_new is None:
+                        st.t_new = stagetrace.now()
+                        stagetrace.event("new", tid=tid, i=self._frame_idx)
                     if self.liveness_enabled or self._capture is not None:
-                        self._sample_liveness(frame, d, st, tid)
-                    due = (st.samples == 0
-                           or (self._frame_idx - st.last_embed) >= self.embed_interval)
-                    if due:
-                        self._embed_track(st, rgb, d)
+                        with st_trace.stage("liveness"):
+                            self._sample_liveness(frame, d, st, tid)
+                        if st.live is True and st.t_live is None:
+                            st.t_live = stagetrace.now()
+                            stagetrace.event("live", tid=tid, i=self._frame_idx,
+                                             since_new_ms=round(
+                                                 (st.t_live - st.t_new) * 1000.0, 1))
+                    if self._embed_due(st):
+                        with st_trace.stage("embed"):
+                            self._embed_track(st, rgb, d)
 
                 if st is not None and not gated:
                     name, score, stable = st.verdict(self.min_track_frames)
                     st.name, st.score = name, score
+                    if stable and st.t_stable is None:
+                        st.t_stable = stagetrace.now()
+                        stagetrace.event("stable", tid=tid, i=self._frame_idx,
+                                         n=st.samples, since_new_ms=round(
+                                             (st.t_stable - (st.t_new or st.t_stable))
+                                             * 1000.0, 1))
                     # ★Pitfall: identity leakage while pending★ a track whose
                     # liveness has not settled must not publish a name -- the
                     # UI would show it, an MQTT consumer would act on it, and
@@ -736,13 +784,39 @@ class FaceRecognitionApp(App):
                      "enrolled": self.user_count()}
             if self.gallery_error:
                 extra["gallery_error"] = self.gallery_error
-            self.emit([], t, results=results, extra=extra)
+            with st_trace.stage("emit"):
+                self.emit([], t, results=results, extra=extra)
+            st_trace.close(n_det=len(faces),
+                           named=sum(1 for r in face_rows if r["name"]))
             self._lt_report()
 
             # After emit: the rows for THIS frame are already written, so the
             # deadline closes the file with a complete frame in it.
             self._tick_capture()
         self._stop_capture()
+
+    def _embed_due(self, st: TrackState) -> bool:
+        """Should this track spend an embedding on THIS frame?
+
+        `samples == 0` means the track has produced no usable embedding yet —
+        either it just appeared, or every attempt so far returned early because
+        liveness had not settled. Those frames must keep trying, otherwise a
+        track would go quiet for `embed_interval` frames after each refusal.
+        Once one embedding is in, `embed_interval` takes over: the embedder is
+        the second-largest cost in the frame and an identified face does not
+        need seven of them a second.
+
+        ★Measured, and deliberately NOT changed★ priming the first
+        `min_track_frames` embeddings onto consecutive frames was tried on the
+        same replay bench and cost **+40 ms** at p50 (665 ms vs 625 ms) while
+        buying nothing: the gate reads the NAME, and the name is published on
+        the FIRST embedding — `min_track_frames` only gates the `stable` flag,
+        which no gate decision consults. The extra embeddings made those frames
+        slower and moved nothing else. See `unmanned-store-access`
+        `evaluation/runs/2026-09-08-open-door-latency-opt/`.
+        """
+        return (st.samples == 0
+                or (self._frame_idx - st.last_embed) >= self.embed_interval)
 
     def _embed_track(self, st: TrackState, frame_rgb, det: dict) -> None:
         """One embedding for `det`, folded into `st`, gated on the verdict.

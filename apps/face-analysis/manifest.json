@@ -133,7 +133,7 @@
   "id": "face-analysis",
   "name": "Face Analysis",
   "name_zh": "客群分析",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "image": "/appcenter/apps/face-analysis.png",
   "icon": {
     "path": "icon.png",

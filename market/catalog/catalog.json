@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "generated": "2026-09-08T02:07:03Z",
+  "generated": "2026-09-09T06:14:02Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
       "id": "crayfish-fight",
       "name": "Crayfish Fight Monitor",
-      "version": "0.1.2",
+      "version": "0.1.4",
       "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close -- screened per frame, then confirmed by an 8-frame temporal classifier that sees the motion. Reports events (never video) plus a quota-limited image dump for retraining.",
       "image": "/appcenter/apps/crayfish-fight.png",
       "author": "Seeed reCamera Pro",
@@ -14,14 +14,38 @@
       "capabilities": [
         "output"
       ],
-      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/crayfish-fight-0.1.2-arm64.tar.gz",
-        "filename": "crayfish-fight-0.1.2-arm64.tar.gz",
-        "sha256": "1e0be2166660915b51b80597a390fc0926f747f2e2e726348af04c51ac9f1c61",
-        "size": 7281468,
-        "signature": "MEUCIQDleEeie+gKmgkPloqLcOIfEsKMQ0s0yEspQCotnM0DXQIgcIjuiCxKcGfy/8G0P0T/HjIoFwHPtJCtaQJSuKpPXs4=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/crayfish-fight-0.1.4-arm64.tar.gz",
+        "filename": "crayfish-fight-0.1.4-arm64.tar.gz",
+        "sha256": "ecaba26a29837ddfaae17fa63293e1f5a8decad4c0d77f83ce739ebc4af69eb0",
+        "size": 7628611,
+        "signature": "MEQCIDrDAVTU14IcrXg65OsCXHs8Ms+GJnRTCVc5oIaBt8DsAiAbEWV+WaM5NK3nuFAqW54E2BSqd3KOus0rZ7auAPb6kw==",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "depth-estimation",
+      "name": "Depth Estimation",
+      "version": "0.1.2",
+      "description": "Monocular relative depth over the live camera. Runs MiDaS v2.1 small (256x256, FP16) on the RV1126B NPU and publishes frame depth statistics, a near/mid/far zone grid and the nearest zone in frame. Depth is relative and unitless -- nothing here is a distance in metres.",
+      "image": "/appcenter/apps/depth-estimation.png",
+      "scene": "Automation",
+      "author": "Seeed reCamera Pro",
+      "name_zh": "单目深度估计",
+      "description_zh": "实时单目相对深度。在 RV1126B NPU 上运行 MiDaS v2.1 small（256×256 FP16），输出整帧深度统计、近/中/远网格分区与画面中最近的分区。深度为相对值、无单位，不代表实际距离。",
+      "scene_zh": "自动化",
+      "capabilities": [
+        "output"
+      ],
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/depth-estimation-0.1.2-arm64.tar.gz",
+        "filename": "depth-estimation-0.1.2-arm64.tar.gz",
+        "sha256": "b3ba6b658730ef7488dff5562f008b56b3dc49b7ecffe4aab1f95e867998e9cf",
+        "size": 31228149,
+        "signature": "MEYCIQCwFpbi37JEV9+aptIewUu63XFBI4M6M9erJaEQp7bOTgIhAKNlAJ/3QdZ7YI1ZYfLflD4BI69zR00bqYhlu6uKifuh",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -29,25 +53,24 @@
     {
       "id": "f1-access",
       "name": "F1 Door Access",
-      "version": "0.1.0",
-      "description": "Unmanned-store door access on one device. The recognition cascade is the face-recognition app's, unchanged: SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, matched 1:N against the enrolled gallery by cosine similarity over accumulated per-track evidence, with a fused anti-spoofing verdict that suppresses printed photos and phone screens. On top of it this app owns the door: an allowed decision closes a dry contact on one sysfs GPIO for a bounded pulse, and every decision -- allowed or not -- is published as an access/v1/events record carrying the score, the threshold, the liveness verdict, the face-library version and the model hash. The face library is pulled from a signed HTTP manifest and swapped atomically; no image and no embedding leaves the device. The gate is fail-safe by construction: the pin returns to its idle level on exit, on SIGKILL and on power loss, and a missing or inconsistent access config leaves the gate unarmed rather than open.",
-      "image": "/appcenter/apps/f1-access.png",
+      "version": "0.1.2",
+      "description": "On-device 1:N face identification. SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, and the embedding is matched against an enrolled gallery by cosine similarity. Faces are tracked, so a reported identity is the argmax of the evidence accumulated over that person's frames rather than one frame's nearest neighbour, and faces too small to embed reliably are gated out instead of matched to whoever happens to be closest. An optional MiniFASNet anti-spoofing head suppresses printed photos and phone screens: a face that fails liveness contributes no evidence at all. Enrollment runs over a loopback HTTP command channel, from the live camera or from a posted still. No image and no embedding leaves the device.",
+      "image": "/appcenter/apps/face-recognition.png",
       "scene": "Access & Attendance",
-      "author": "Seeed unmanned-store-access",
+      "author": "Seeed reCamera Pro",
       "name_zh": "F1 门禁",
-      "description_zh": "单台设备上的无人店门禁。识别级联沿用 face-recognition 应用，未做改动：SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态对齐后提取 512 维特征，与已注册人脸库做 1:N 余弦比对，身份取该人多帧证据累积后的最高票，并由融合活体判定抑制照片与手机屏幕翻拍。在此之上本应用还管门：判定放行时把一路 sysfs GPIO 上的干接点闭合一段有界脉宽，且每一次判定（放行与拒绝）都产出一条 access/v1/events 记录，带分数、阈值、活体结论、人脸库版本与模型哈希。人脸库经签名 manifest 从局域网拉取并原子切换，图像与特征均不出设备。门控按失效安全设计：进程退出、被 SIGKILL、掉电，引脚都回到未触发电平；门禁配置缺失或与识别不一致时，门禁整块不装，而不是敞开。",
+      "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
       "scene_zh": "门禁考勤",
       "capabilities": [
         "output"
       ],
-      "kit": ">=1.6.4",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.0-arm64.tar.gz",
-        "filename": "f1-access-0.1.0-arm64.tar.gz",
-        "sha256": "09b13c6180aafe4d4e88f1d4239214d9a7c0df1eb7a8ec07f5dfa8de8ee8a081",
-        "size": 41085674,
-        "signature": "MEUCIDCleu2TRol3ktFklPOUZPGlc0NfzOzLcJDW0YeyJnakAiEAyKE5Ppl2zwbp6EK7dU5+RAbDsDqzMUAvtN2olH1BGcA=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.2-arm64.tar.gz",
+        "filename": "f1-access-0.1.2-arm64.tar.gz",
+        "sha256": "7c6a2c3b0bd1f8665e232f501c83c5ad9818075ee8182b3b3443e9871b0962b4",
+        "size": 41447450,
+        "signature": "MEQCIBWuJCjNWuaYw2kCrx3IoGBhZPrl5JQkaFsknacFMYo6AiA2ba11a6S/IzaJRrbvgZlZre3Wmmge9M0O5QTpNG89fA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -55,25 +78,49 @@
     {
       "id": "face-analysis",
       "name": "Face Analysis",
-      "version": "0.2.0",
-      "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Faces are tracked, so each reported attribute is a vote over that person's accumulated frames rather than one frame's argmax, faces too small to classify are gated out instead of guessed at, and the time-windowed demographic histogram counts each person once instead of once per frame. Privacy-first: every detected face carries a blur flag and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
+      "version": "0.2.2",
+      "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Emits per-face attribute events plus a simple time-windowed demographic aggregation (gender / age / race / emotion histograms). Privacy-first: faces can be flagged for blurring and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
       "image": "/appcenter/apps/face-analysis.png",
       "scene": "Retail & Audience",
       "author": "Seeed reCamera Pro",
       "name_zh": "客群分析",
-      "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。人脸带跟踪，每个属性结论是该人多帧证据的投票结果而非单帧 argmax；过小的人脸直接门控跳过而不是猜一个标签；分时段客群直方图按人计数一次，而不是每帧计一次。隐私优先：每个检出人脸都带模糊标记，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
+      "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
       "scene_zh": "零售客群",
       "capabilities": [
         "output"
       ],
-      "kit": ">=1.6.4",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-analysis-0.2.0-arm64.tar.gz",
-        "filename": "face-analysis-0.2.0-arm64.tar.gz",
-        "sha256": "842f1371afd9b99688cfd73bfc01c62f090672eec6b9a735916fa13ec7dc51b5",
-        "size": 52843771,
-        "signature": "MEYCIQDhdHV+U2c8xTWUi9SK9QB/XT02AFcHPdPykJbpdiXhNAIhALdBGxWFYm/yfH0J7hbHp7q5zu6q5PQHs6Ek9ieNJX6f",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-analysis-0.2.2-arm64.tar.gz",
+        "filename": "face-analysis-0.2.2-arm64.tar.gz",
+        "sha256": "9f974d8b96fdb3c4fd0c667346c1eb7630609f916398d734520fe2b6fa345d8e",
+        "size": 53275025,
+        "signature": "MEUCIBs9prdByzQLj3bbor3kPN2BYbUbRFM4sLQxpfTR+14SAiEA3gPL9mMNT+paAoVVbVpP10GB4poocnpQ1bNgP70TARc=",
+        "signature_alg": "ecdsa-sha256"
+      },
+      "models": []
+    },
+    {
+      "id": "face-recognition",
+      "name": "Face Recognition",
+      "version": "0.1.2",
+      "description": "On-device 1:N face identification. SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, and the embedding is matched against an enrolled gallery by cosine similarity. Faces are tracked, so a reported identity is the argmax of the evidence accumulated over that person's frames rather than one frame's nearest neighbour, and faces too small to embed reliably are gated out instead of matched to whoever happens to be closest. An optional MiniFASNet anti-spoofing head suppresses printed photos and phone screens: a face that fails liveness contributes no evidence at all. Enrollment runs over a loopback HTTP command channel, from the live camera or from a posted still. No image and no embedding leaves the device.",
+      "image": "/appcenter/apps/face-recognition.png",
+      "scene": "Access & Attendance",
+      "author": "Seeed reCamera Pro",
+      "name_zh": "人脸识别",
+      "description_zh": "设备端 1:N 人脸识别。SCRFD-500M 检出每张人脸及五个关键点，按标准 112x112 ArcFace 姿态做相似变换对齐后提取 512 维特征，再与已注册人脸库做余弦比对。人脸带跟踪，报告的身份是该人多帧证据累积后的最高票，而不是单帧最近邻；过小的人脸直接门控跳过，而不是硬匹配到最接近的那个人。可选的 MiniFASNet 活体检测用于抑制照片与手机屏幕翻拍：未通过活体的帧不贡献任何证据。注册通过本地回环 HTTP 指令通道完成，支持实时摄像头采集与上传静态图两种来源。图像与特征均不出设备。",
+      "scene_zh": "门禁考勤",
+      "capabilities": [
+        "output"
+      ],
+      "arch": "arm64",
+      "package": {
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/face-recognition-0.1.2-arm64.tar.gz",
+        "filename": "face-recognition-0.1.2-arm64.tar.gz",
+        "sha256": "1c89b3fd05f21e760e09f6035c1cef5584668be70dc4294104937280c2e0393e",
+        "size": 41447482,
+        "signature": "MEQCIHWtP5YLLG/ZtilMKc3Bpf4SJLtnt7WYcQ5zJbTwF6xdAiABEKiL2C7Gfe77oE5XKJTGXUzU0drGsObemBrbZ+HvnQ==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -81,7 +128,7 @@
     {
       "id": "facemesh-reader",
       "name": "Facemesh Reader",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "description": "On-device drowsiness / fatigue detection with a two-stage face cascade: a YOLOv8n-face detector finds the face, a 468-point MediaPipe FaceMesh landmark model runs on the cropped face ROI, then explainable CPU-only temporal logic derives EAR (eye aspect ratio), MAR (mouth aspect ratio), blinks, yawns and a composite drowsiness state. First reference for the reCamera Pro cascade-pipeline pattern reused by face-analysis.",
       "image": "/appcenter/apps/facemesh-reader.png",
       "scene": "Safety & Care",
@@ -94,11 +141,11 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/facemesh-reader-0.1.0-arm64.tar.gz",
-        "filename": "facemesh-reader-0.1.0-arm64.tar.gz",
-        "sha256": "249e6a0fc9ff470ac58e761f34fcddba03b0b3e6deefebcf56e323412f28e2b8",
-        "size": 6843123,
-        "signature": "MEQCIHqqmhR6jCXOAMqsLmutU7ShIds1KL9F7vi6oGUDGL8vAiACIfQA/8onduEFjT3GD5QtQ9KAvRE/LSI5rPF4jdYcoA==",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/facemesh-reader-0.1.4-arm64.tar.gz",
+        "filename": "facemesh-reader-0.1.4-arm64.tar.gz",
+        "sha256": "ead6c1508e7a24f10aae5c892ca5165059678ffc23bb420e8a21b083b7263235",
+        "size": 7224612,
+        "signature": "MEQCIA6RZf00FarI2w3rGKqmWgK2EkGZunkqIqkqkuwqWVcaAiBKCMszvCvYe/AlCQSfjk1zfWQ+XhbVKD7jird89pH3xw==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -106,7 +153,7 @@
     {
       "id": "fall-detection",
       "name": "Fall Detection",
-      "version": "0.2.0",
+      "version": "0.2.4",
       "description": "On-device multi-person fall detection using YOLO11n-Pose, geometric candidate arming, and a frozen 48-frame learned temporal confirmation gate. Each person receives a stable track_id, independent history, and independent fall state.",
       "image": "/appcenter/apps/fall-detection.png",
       "scene": "Safety & Care",
@@ -119,11 +166,11 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fall-detection-0.2.0-arm64.tar.gz",
-        "filename": "fall-detection-0.2.0-arm64.tar.gz",
-        "sha256": "6ed5eafc2835c506f4bda9d125ee1f14cef1a1c698808ca125c733a03638ba72",
-        "size": 3053542,
-        "signature": "MEUCIQCSjzNgCi/sXe0VKCIxMQ7KcUHHxjA0EvO4IIrOH5YJCgIgDflgyyBRtFfPzdhAu/1gzoEDvFGyBLmfhEg9H3os4qw=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fall-detection-0.2.4-arm64.tar.gz",
+        "filename": "fall-detection-0.2.4-arm64.tar.gz",
+        "sha256": "760f8ec58d6041a3d620ace9ce1f3344cab72a88b428c46231d9adb483c7d8f5",
+        "size": 3384503,
+        "signature": "MEUCIEvKRye3kJjvYHwL9TZiZht6IF30k56QrO9oCuHZ5Q7tAiEArBOsmbM5ricvpVnDllRahyd/m5xUuDa3pTZXokclj8M=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -131,7 +178,7 @@
     {
       "id": "fitness-trainer",
       "name": "Fitness Trainer",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "description": "Counts your reps and calls out sloppy form, on-device, using YOLO11n-Pose and joint-angle hysteresis state machines. Pick squats, push-ups or hammer curls, set your reps and sets, and the camera does the rest -- no phone, no wearable, no video leaving the device. Streams keypoints and live rep counts for the /appcenter overlay.",
       "image": "/appcenter/apps/fitness-trainer.png",
       "scene": "Health & Wellness",
@@ -144,11 +191,11 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fitness-trainer-0.1.0-arm64.tar.gz",
-        "filename": "fitness-trainer-0.1.0-arm64.tar.gz",
-        "sha256": "0bbcbe7707f70f49f520beb6dc6755b7fe462511529b2e04617f942a886745a2",
-        "size": 2867151,
-        "signature": "MEYCIQCHDcu4PO04Ngo2q4PGq36NxSpU9eS4wN3Ipj5aGEvvlgIhAJmVHAu2dDOpSYLqqxrM+9Xswv1am6uXkwbN24sm9ZYV",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fitness-trainer-0.1.4-arm64.tar.gz",
+        "filename": "fitness-trainer-0.1.4-arm64.tar.gz",
+        "sha256": "a79fb564f134b858d5c834d62eb6eb851b1f7fdc889f2cf1902bd928fdaa3d9d",
+        "size": 3262309,
+        "signature": "MEYCIQCmw28XIi1S2bfsnIM7e3ofKLHksTbyDObaMzIz4CMGYgIhAOLS9uLM4Q5uXIMPDe8U7tT3fjZKx4rqG8PINfKEDrfY",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -171,7 +218,7 @@
         "filename": "inspection-assembly-0.1.1-arm64.tar.gz",
         "sha256": "5bc6e00105fab854181f7ab403a58e516615b92b1727ff44f397fff9c422b873",
         "size": 61173,
-        "signature": "MEQCIBbdPby2wwFWhTHI3QZBKpT2yG10Iy2dQNl0/ey52yysAiATg12B9byDrZkEZzf5txH+boyfdWfeEAL45JwE2n7hyA==",
+        "signature": "MEUCIQCHykfYyPJ1Vb3y/5VSIWHyfwJtetPoz/Dpybq1n/GqBQIgRjETUeFlw92bW+ZpE0Imvjj7pGGzrT8n4Vfr5XqsrkA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -187,7 +234,7 @@
     {
       "id": "ppocr-reader",
       "name": "PP-OCR Reader",
-      "version": "0.1.1",
+      "version": "0.1.5",
       "description": "On-device OCR text reader: a DBNet detector (PP-OCRv3, 480x480) finds every text region, each region is perspective-cropped to an upright 48x320 strip, then a CTC recognizer (SVTR-LCNet, 6625-class Chinese+English dictionary) reads the characters. Emits one event per text box with the recognized string, its quad and confidence. Everything runs on-device; no image or text leaves the camera. Port of the first-gen SSCMA ppocr-reader C++ solution to the reCamera Pro Python kit.",
       "image": "/appcenter/apps/ppocr-reader.png",
       "scene": "OCR & Text",
@@ -198,14 +245,13 @@
       "capabilities": [
         "output"
       ],
-      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/ppocr-reader-0.1.1-arm64.tar.gz",
-        "filename": "ppocr-reader-0.1.1-arm64.tar.gz",
-        "sha256": "b26d5858ba37ffb080861558ac45c906df0716e696ce33ddae71d0354c7a9486",
-        "size": 5199297,
-        "signature": "MEYCIQCWoiunYJt14P2YMOCqTP6QXKTalNGSXmIKDoLeuwwhBgIhALiqnEsc6yklVGFa8biyiwF2jaT7F68kvnYh+CZpgSDH",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/ppocr-reader-0.1.5-arm64.tar.gz",
+        "filename": "ppocr-reader-0.1.5-arm64.tar.gz",
+        "sha256": "69c1441fd30deda09effaee329765f0ac7a150f6ffa2470545e464c0cfcb0222",
+        "size": 5642812,
+        "signature": "MEQCIDwaiNeSETmAid0vbxVDFc0dAdHBk69CbeB3aKyXIFYoAiB5LPV8x/9awFf82OSfJkrcjOlnTFHDgw/1KqMOdyAAhg==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -213,7 +259,7 @@
     {
       "id": "qrcode-reader",
       "name": "QR Code Reader",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
       "image": "/appcenter/apps/qrcode-reader.png",
       "author": "Seeed reCamera Pro",
@@ -222,11 +268,11 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/qrcode-reader-0.1.0-arm64.tar.gz",
-        "filename": "qrcode-reader-0.1.0-arm64.tar.gz",
-        "sha256": "b791b79dd5ef372e6ae260748945c8ca9c90bfff07674b1720e3765e2e7cf641",
-        "size": 922415,
-        "signature": "MEUCIQCCOX1CaWRKzPssK/FDTLpokDa1TgKPDEtCEOUnnB5CMAIgMIpxuO8d86rclUNvN+9sSnuzHW2sztlvLV1LgpAfiHo=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/qrcode-reader-0.1.4-arm64.tar.gz",
+        "filename": "qrcode-reader-0.1.4-arm64.tar.gz",
+        "sha256": "d102f493806f5b51c840fc62bfed4f68075a761f7dd219712662c6f6c87dcf84",
+        "size": 1281629,
+        "signature": "MEYCIQC4uEF+lb8DkcN85aZQprpzaD1HP62l7sZasZFYOrJo8wIhAKdQAaygc11Oe6c1KmOftLQ4/Y4XfWVPCMe/wxQfySQR",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -234,7 +280,7 @@
     {
       "id": "retail-vision",
       "name": "Retail People Counting",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "description": "On-device retail people-flow analytics. Runs YOLOv8n (person class only) on the RV1126B NPU, tracks each shopper across frames (IoU association + velocity prediction + track id), and turns tracks into the three numbers a store manager asks for: how many came in/out, how many are in the store right now, and who is browsing / engaged / needs assistance. Optional counting zone and directional entry/exit line. Streams tracks + counting events for the /appcenter overlay.",
       "image": "/appcenter/apps/retail-vision.png",
       "scene": "Retail",
@@ -247,111 +293,14 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/retail-vision-0.1.0-arm64.tar.gz",
-        "filename": "retail-vision-0.1.0-arm64.tar.gz",
-        "sha256": "9c5efc040dc46a506effbf1aa5cd6c9e56853c136eff3a5113fa7a9955080f82",
-        "size": 3023387,
-        "signature": "MEUCIQDxnEa5j5QQdbIIdAl26hT2tOfC7StgINcP3GL9tfVLDAIgTaFZzzZfQJaP7cZR/P9dvsTyHs/F43MhSmHtVsvI1GM=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/retail-vision-0.1.4-arm64.tar.gz",
+        "filename": "retail-vision-0.1.4-arm64.tar.gz",
+        "sha256": "09cfa59251d754190318b086237455b5be2659b802e8af0a37cfa3ced8d74b7c",
+        "size": 3462721,
+        "signature": "MEUCIHACAQtKQ6ntUP/JxFeLO0MsyMFpxpCIPg4LjocGsbRIAiEA8wwaDx45qEdWcyHp1wMxUUr6WnINc0i7UVawc9TqWd4=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
-    },
-    {
-      "id": "voice-transcribe",
-      "name": "Voice Transcribe",
-      "version": "0.1.0",
-      "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux available as a fallback), spots a wake word with a streaming sherpa-onnx KeywordSpotter, endpoints the following utterance with silero VAD, and transcribes it with SenseVoice int8 -- all on the ARM cores, no NPU. Streams state (idle/listening/transcribing) and transcript text to the /appcenter panel.",
-      "image": "/appcenter/apps/voice-transcribe.png",
-      "scene": "Voice & Audio",
-      "author": "Seeed reCamera Pro",
-      "name_zh": "语音转录",
-      "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。通过 rkipc 的 RTSP 音频轨采集麦克风（不接管 /dev/snd，不影响视频），用流式 sherpa-onnx KeywordSpotter 检测唤醒词，用 silero VAD 对后续语句断句，再用 SenseVoice int8 转录，全程运行在 ARM 核心上，不使用 NPU。向 /appcenter 面板输出状态（空闲/聆听/转录）与转录文本。",
-      "scene_zh": "语音音频",
-      "capabilities": [
-        "audio",
-        "output"
-      ],
-      "arch": "arm64",
-      "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/voice-transcribe-0.1.0-arm64.tar.gz",
-        "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
-        "sha256": "abe531f2baa22680e660791051168bc7e2326c01d720703ce6389b3f9f88c914",
-        "size": 8158,
-        "signature": "MEUCIQD07ci3HJ7VuAFmYoGQZIK2ebUURoGcGTJKOn82eSRIpAIgWoo1AotUEiDg1wi/iVUeJ22AQrhMf44o/eN3SxUF2Cs=",
-        "signature_alg": "ecdsa-sha256"
-      },
-      "models": [
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/sensevoice_rv1126b_w4a16.rknn",
-          "filename": "sensevoice_rv1126b_w4a16.rknn",
-          "sha256": "3fa40ad9ab011f5f4134a355b0104c979d272450a0ff3c17ec34cba97f4f1c12",
-          "size": 133468923,
-          "target_path": "/userdata/local/models/asr"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/am.mvn",
-          "filename": "am.mvn",
-          "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
-          "size": 11203,
-          "target_path": "/userdata/local/models/asr"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/embedding.npy",
-          "filename": "embedding.npy",
-          "sha256": "83cf1fc5680fdf6d7edb411be5ce351cad4eca03b29a5bf5050aa19dfcc12267",
-          "size": 35968,
-          "target_path": "/userdata/local/models/asr"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/chn_jpn_yue_eng_ko_spectok.bpe.model",
-          "filename": "chn_jpn_yue_eng_ko_spectok.bpe.model",
-          "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
-          "size": 377341,
-          "target_path": "/userdata/local/models/asr"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/silero_vad.onnx",
-          "filename": "silero_vad.onnx",
-          "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
-          "size": 2327524,
-          "target_path": "/userdata/local/models/asr"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/kws/encoder.int8.onnx",
-          "filename": "encoder.int8.onnx",
-          "sha256": "1e721676515bcd42a186979733981213c66c80db680e1cc582dfedf3be76e678",
-          "size": 4807159,
-          "target_path": "/userdata/local/models/asr/kws"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/kws/decoder.int8.onnx",
-          "filename": "decoder.int8.onnx",
-          "sha256": "e40ff43297abe815e8898494c17e71bba2152d9d40fa3eb803f75d0f7533329a",
-          "size": 277985,
-          "target_path": "/userdata/local/models/asr/kws"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/kws/joiner.int8.onnx",
-          "filename": "joiner.int8.onnx",
-          "sha256": "eae9da0c7e1e6c6a3f4cc42d167899c388f6c6701b94cb96320e4f55df79624c",
-          "size": 163380,
-          "target_path": "/userdata/local/models/asr/kws"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/kws/tokens.txt",
-          "filename": "tokens.txt",
-          "sha256": "fd2ded4050a55d2b1578870ba8697d02371980217806b7558bd0a5cc60f3ba53",
-          "size": 5006,
-          "target_path": "/userdata/local/models/asr/kws"
-        },
-        {
-          "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models/voice-transcribe/kws/keywords.txt",
-          "filename": "keywords.txt",
-          "sha256": "6952c427ca8bd27b20c79c22d6bd611cf62401fa72fda14a447960f1b74c8a8d",
-          "size": 22,
-          "target_path": "/userdata/local/models/asr/kws"
-        }
-      ]
     },
     {
       "id": "waste-sorting",
@@ -371,7 +320,7 @@
         "filename": "waste-sorting-0.1.0-arm64.tar.gz",
         "sha256": "7c44fa41a7fb10d021d656dd46f504f30d72baee5e991201107cf14041186952",
         "size": 68908,
-        "signature": "MEQCIQDsneU9uhLvqPpraSGAu99iza2E/p1SYvhMLc/6Vrr4BwIfAaks40MwEoi21TIdcxCT0hoIdBzuoRWSGvx0cft8cw==",
+        "signature": "MEQCIEEvPEkVE8OzbWo+JdEwZqXTUiuypUDWjS88yBW3TdhcAiBDY1mgfRF62Xlds5hkSOLLZGW75RO9UfTLhiaIkjRLkQ==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -387,7 +336,7 @@
     {
       "id": "yolo-detector",
       "name": "YOLO Detector",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "description": "General-purpose object detection over the live camera. Runs YOLOv8n (COCO-80) on the RV1126B NPU and streams structured detections for the /appcenter overlay.",
       "image": "/appcenter/apps/yolo-detector.png",
       "author": "Seeed reCamera Pro",
@@ -396,11 +345,11 @@
       ],
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/yolo-detector-0.1.0-arm64.tar.gz",
-        "filename": "yolo-detector-0.1.0-arm64.tar.gz",
-        "sha256": "8b78f8abac329f633b125d23ab1bf30400a63b77ccb2823c352ed2ec2ff9b809",
-        "size": 3018913,
-        "signature": "MEQCIDRws1QA68aiTdyPFKs4Dkmcwe0Sm79WkkmIp9sJo0+DAiBVkxhMtH2TLpp+ccvOBgpG8AsO4En62VC8VptncPaaMg==",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/yolo-detector-0.1.4-arm64.tar.gz",
+        "filename": "yolo-detector-0.1.4-arm64.tar.gz",
+        "sha256": "1dd2f05533468fffbaa29bc2d2c6d754d1319b3ffce99b8a50fa109ef3d3a1c4",
+        "size": 3410225,
+        "signature": "MEUCIQCkMlTIGSoSXZYAbRy6ZARxzmgU0Xlt7I++xfv/4Vh9lAIgDnhQjIvpz8xM5KOipZZVfNvv+VRrn7yHDQRtqh9gr6E=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []

@@ -1,0 +1,190 @@
+#!/bin/sh
+# S94appmgr -- SysVinit start/stop for the reCamera Pro App Center manager.
+#
+# APP_CENTER_PORT_DESIGN §4.7: appmgr code + state live under /userdata (survive
+# OTA). This script starts `python3 -m appmgr serve` (loopback 127.0.0.1:8130)
+# as root and, as an OTA-safety fallback, re-injects the nginx edge conf
+# (ext_appmgr.conf) from its /userdata master copy into /oem/usr/etc/nginx/
+# whenever it is missing -- guarded by `nginx -t` so a bad config never reloads.
+#
+# Ordered S94 = after nginx (late init). Install: place in /etc/init.d/, master
+# copy in /userdata/config/system/etc/init.d/ for the OTA re-inject chain.
+
+NAME=appmgr
+APPMGR_PARENT=/userdata/local          # `python3 -m appmgr` resolves here
+PIDFILE=/var/run/$NAME.pid
+LOGFILE=/var/log/$NAME.log
+PYTHON=/usr/bin/python3
+
+NGINX_MASTER=/userdata/local/appcenter/ext_appmgr.conf
+NGINX_LIVE=/oem/usr/etc/nginx/ext_appmgr.conf
+# The stock nginx binary is built with conf-path=/etc/nginx/nginx.conf, which
+# does not exist on the device; the master is started with an explicit -c.
+# Every nginx invocation here must carry the same -c or `nginx -t` fails and
+# the re-inject below rolls itself back every boot.
+NGINX_CONF=/oem/usr/etc/nginx/nginx.conf
+
+# OTA-surviving master copy of THIS launcher. /etc (the live copy) is on the
+# rootfs and is wiped by an A/B OTA; /userdata survives. RkLunch's restore chain
+# (restore_etc_file_if_missing) only re-injects passwd/group/shadow -- it does
+# NOT cover /etc/init.d -- so nothing official redeploys this script after OTA.
+# We keep a current master here and ship an idempotent restore helper (see
+# appmgr-restore.sh) that re-drops it into /etc/init.d and starts appmgr. The
+# TRIGGER for that helper post-OTA is not fully automatic within the stock
+# firmware (no OTA-surviving boot hook sources /userdata); see RESTORE README.
+S94_MASTER=/userdata/config/system/etc/init.d/S94appmgr
+S94_LIVE=/etc/init.d/S94appmgr
+
+seed_s94_master() {
+    # Mirror the running launcher to its OTA-surviving master so a later restore
+    # always redeploys the latest version. Idempotent (cmp guards the copy).
+    src="$0"
+    case "$src" in /*) ;; *) src="$(pwd)/$src" ;; esac
+    [ -f "$src" ] || return 0
+    [ "$src" = "$S94_MASTER" ] && return 0
+    mkdir -p "$(dirname "$S94_MASTER")" 2>/dev/null || return 0
+    if ! cmp -s "$src" "$S94_MASTER" 2>/dev/null; then
+        if cp "$src" "$S94_MASTER" 2>/dev/null; then
+            chmod +x "$S94_MASTER" 2>/dev/null
+            echo "[S94appmgr] seeded OTA master copy -> $S94_MASTER"
+        fi
+    fi
+}
+
+reinject_nginx() {
+    # Restore the edge conf if OTA (or anything) wiped /oem, then reload if valid.
+    if [ -f "$NGINX_MASTER" ] && [ ! -f "$NGINX_LIVE" ]; then
+        cp "$NGINX_MASTER" "$NGINX_LIVE" 2>/dev/null || return 0
+        if nginx -c "$NGINX_CONF" -t >/dev/null 2>&1; then
+            nginx -c "$NGINX_CONF" -s reload >/dev/null 2>&1
+            echo "[S94appmgr] re-injected + reloaded nginx ext_appmgr.conf"
+        else
+            # bad config -> never leave a broken edge; roll back.
+            rm -f "$NGINX_LIVE"
+            echo "[S94appmgr] nginx -t failed after re-inject; rolled back"
+        fi
+    fi
+}
+
+# The pidfile is advisory, never authoritative. Two ways it goes stale:
+#   1. appmgr gets (re)started by something other than this script -- deploy-app.sh
+#      launches it under `setsid ... &`, and setsid FORKS when it is already a
+#      process-group leader (which a shell background job always is), so the `$!`
+#      that gets written is setsid's pid and it exits immediately. The pidfile is
+#      dead from the moment it is written.
+#   2. /var/run is tmpfs; after a reboot the file is gone while a pid could later
+#      be REUSED by an unrelated process.
+# `kill -0` cannot tell those apart, which made `restart` a silent no-op (stop
+# killed nothing, start hit appmgr's own flock and gave up, the original process
+# kept running) and, in the pid-reuse case, aimed a SIGKILL at a bystander.
+# So: verify identity through /proc/<pid>/cmdline, and fall back to scanning
+# /proc when the pidfile does not point at a real appmgr.
+MODULE_SIG="-m appmgr serve"
+
+is_appmgr_pid() {
+    [ -n "$1" ] || return 1
+    # Braces, not just `tr ... 2>/dev/null`: a failing `<` redirect is reported by
+    # the SHELL before tr ever runs, so the inner redirect misses it and every
+    # scan of a since-exited pid spams the console.
+    cmd=$({ tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null) || return 1
+    # Anchor on the interpreter: the serve process is `<python> -m appmgr serve`.
+    # A bare substring match also hits the shell that is running a restart
+    # (its cmdline quotes the same words), and `stop` would kill its caller --
+    # deploy-app.sh / the desktop App both restart appmgr from such a shell.
+    case "${cmd%% *}" in *python*) ;; *) return 1 ;; esac
+    case "$cmd" in *"$MODULE_SIG"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Echo the pid of the running appmgr, or nothing. Never matches this script's own
+# shell: scanning by cmdline is what `pkill -f 'appmgr serve'` gets wrong -- that
+# pattern matches the very command performing the restart and kills its own shell.
+resolve_pid() {
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    if is_appmgr_pid "$pid"; then
+        echo "$pid"
+        return 0
+    fi
+    for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+        [ "$pid" = "$$" ] && continue
+        [ "$pid" = "$PPID" ] && continue
+        if is_appmgr_pid "$pid"; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_running() {
+    [ -n "$(resolve_pid)" ]
+}
+
+start() {
+    seed_s94_master
+    reinject_nginx
+    running=$(resolve_pid)
+    if [ -n "$running" ]; then
+        # Re-point the pidfile at the process we actually found, so a serve that
+        # was started out-of-band (deploy-app.sh) becomes manageable from here.
+        echo "$running" > "$PIDFILE"
+        echo "$NAME already running (pid $running)"
+        return 0
+    fi
+    echo "Starting $NAME"
+    # BusyBox start-stop-daemon -b mishandles the shell wrapper we need to cd
+    # into /userdata/local, so launch directly: cd into the package parent,
+    # background python, record its pid. appmgr's own single-instance flock
+    # guards against a duplicate. appmgr supervises app children itself (each
+    # under setsid), so a plain background here is sufficient.
+    cd "$APPMGR_PARENT" || exit 1
+    "$PYTHON" -m appmgr serve >> "$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+    sleep 1
+    started=$(resolve_pid)
+    if [ -n "$started" ]; then
+        echo "$started" > "$PIDFILE"
+        echo "$NAME started (pid $started)"
+    else
+        rm -f "$PIDFILE"
+        echo "$NAME failed to start (see $LOGFILE)"
+    fi
+}
+
+stop() {
+    echo "Stopping $NAME"
+    # Loop: there can be more than one serve alive (that is precisely the state a
+    # broken restart leaves behind), and `restart` must not return while any of
+    # them still holds :8130 -- the follow-on start would just lose the flock race.
+    while :; do
+        pid=$(resolve_pid) || break
+        [ -n "$pid" ] || break
+        kill -TERM "$pid" 2>/dev/null
+        # Wait for it to actually go, rather than assuming one fixed sleep was
+        # enough. Integer sleeps only -- fractional `sleep` is a BusyBox build
+        # option (FEATURE_FANCY_SLEEP) and this script must not depend on it.
+        i=0
+        while [ $i -lt 5 ] && is_appmgr_pid "$pid"; do
+            sleep 1
+            i=$((i + 1))
+        done
+        is_appmgr_pid "$pid" && kill -KILL "$pid" 2>/dev/null
+        sleep 1
+        is_appmgr_pid "$pid" && { echo "$NAME pid $pid will not die"; break; }
+    done
+    rm -f "$PIDFILE"
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; sleep 1; start ;;
+    status)
+        pid=$(resolve_pid)
+        if [ -n "$pid" ]; then
+            echo "$NAME running (pid $pid)"
+        else
+            echo "$NAME not running"
+            exit 3           # LSB: program is not running
+        fi ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

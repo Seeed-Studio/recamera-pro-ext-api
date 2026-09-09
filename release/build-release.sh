@@ -3,7 +3,7 @@
 #
 # 用法:
 #   release/build-release.sh --rkipc <path> --entry-cgi <path> --version <x.y.z> \
-#                            [--factory-md5 <md5>]
+#                            [--baseline-md5 <md5>]
 #
 # 产出(写入 release/):
 #   recamera-ext-api-v<ver>.tar        固件 sideload 包(rkipc + entry.cgi + SDK +
@@ -12,10 +12,10 @@
 #                                      SHARE-README.md;不含任何固件)
 #
 # 副作用: 用实际 artifact 的 md5 自动写回
-#   release/pkg/install.sh   (RKIPC_MD5 / ENTRY_MD5 / SO_MD5 / VERIFIED_FACTORY_MD5S / KNOWN_EXT_BUILD_MD5S)
-#   release/pkg/rollback.sh  (VERIFIED_FACTORY_MD5S / KNOWN_EXT_BUILD_MD5S)
-#   release/pkg/MANIFEST.txt (3 个 artifact 的 md5+size / factory md5 / 版本 / 日期)
-#   注: 当前 build 的 rkipc md5 会自动并入 KNOWN_EXT_BUILD_MD5S(shipped 的 ext build 永不作为回滚目标)。
+#   release/pkg/install.sh   (RKIPC_MD5 / ENTRY_MD5 / SO_MD5 / VALIDATED_BASELINE_MD5S)
+#   release/pkg/MANIFEST.txt (3 个 artifact 的 md5+size / 已验证基线 md5 / 版本 / 日期)
+#   注: 回滚目标不再用 md5 白名单判定,改为按内容判定(见 install.sh 顶部注释),
+#       所以 rollback.sh 不含任何 md5 列表,这里也不再写回它。
 #   release/pkg/README.md    (标题版本 / 期望 rkipc md5)
 # 消除手工同步漂移。
 #
@@ -33,13 +33,13 @@ echo "Implement the manifest/BOM/source-build gates described in RELEASING.md be
 exit 1
 
 # ---- args --------------------------------------------------------------------
-RKIPC="" ENTRY="" VERSION="" VERIFIED_MD5S=""
+RKIPC="" ENTRY="" VERSION="" BASELINE_MD5S=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --rkipc)       RKIPC="$2";        shift 2 ;;
     --entry-cgi)   ENTRY="$2";        shift 2 ;;
     --version)     VERSION="$2";      shift 2 ;;
-    --factory-md5) VERIFIED_MD5S="$2"; shift 2 ;;  # verified clean-factory md5(s), space-sep
+    --baseline-md5|--factory-md5) BASELINE_MD5S="$2"; shift 2 ;;  # validated factory-baseline md5(s), space-sep
     -h|--help)     grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -88,24 +88,21 @@ ENTRY_SZ=$(sizeof "$ENTRY")
 SO_SZ=$(sizeof "$SDK_SRC/lib/$SO_NAME")
 TODAY=$(date +%F)
 
-# verified clean-factory list: --factory-md5 overrides, else reuse install.sh's.
-if [ -z "$VERIFIED_MD5S" ]; then
-  VERIFIED_MD5S=$(perl -ne 'print $1 if /^VERIFIED_FACTORY_MD5S="([^"]*)"/' "$PKG/install.sh")
-  [ -n "$VERIFIED_MD5S" ] || { echo "FATAL: 无法从 install.sh 读到 VERIFIED_FACTORY_MD5S,请用 --factory-md5" >&2; exit 1; }
-  echo "verified factory (沿用现有): $VERIFIED_MD5S"
+# validated firmware baselines (advisory only -- install.sh warns on an unlisted
+# baseline, it does not refuse). --baseline-md5 overrides, else reuse install.sh's.
+if [ -z "$BASELINE_MD5S" ]; then
+  BASELINE_MD5S=$(perl -ne 'print $1 if /^VALIDATED_BASELINE_MD5S="([^"]*)"/' "$PKG/install.sh")
+  [ -n "$BASELINE_MD5S" ] || { echo "FATAL: 无法从 install.sh 读到 VALIDATED_BASELINE_MD5S,请用 --baseline-md5" >&2; exit 1; }
+  echo "validated baselines (沿用现有): $BASELINE_MD5S"
 fi
-FACTORY_FIRST=$(echo "$VERIFIED_MD5S" | awk '{print $1}')   # single value for MANIFEST line
-# known-ext list: reuse install.sh's + always flag the rkipc we are shipping now (never a rollback target).
-KNOWN_EXT=$(perl -ne 'print $1 if /^KNOWN_EXT_BUILD_MD5S="([^"]*)"/' "$PKG/install.sh")
-case " $KNOWN_EXT " in *" $RKIPC_MD5 "*) : ;; *) KNOWN_EXT="${KNOWN_EXT:+$KNOWN_EXT }$RKIPC_MD5" ;; esac
+BASELINE_FIRST=$(echo "$BASELINE_MD5S" | awk '{print $1}')   # single value for MANIFEST line
 
 echo "=== inputs ==="
 echo "  version      $VERSION"
 echo "  rkipc        $RKIPC_MD5  ($RKIPC_SZ B)  <- $RKIPC"
 echo "  entry.cgi    $ENTRY_MD5  ($ENTRY_SZ B)  <- $ENTRY"
 echo "  $SO_NAME  $SO_MD5  ($SO_SZ B)"
-echo "  factory(ok)  $VERIFIED_MD5S"
-echo "  ext builds   $KNOWN_EXT"
+echo "  baselines    $BASELINE_MD5S"
 
 # ---- write back md5s into pkg metadata --------------------------------------
 setvar()  { # file VAR value  -- replace `VAR=<token>` keeping trailing comment
@@ -118,10 +115,7 @@ echo "=== write-back md5 into pkg/ metadata ==="
 setvar  "$PKG/install.sh"  RKIPC_MD5             "$RKIPC_MD5"
 setvar  "$PKG/install.sh"  ENTRY_MD5             "$ENTRY_MD5"
 setvar  "$PKG/install.sh"  SO_MD5                "$SO_MD5"
-setlist "$PKG/install.sh"  VERIFIED_FACTORY_MD5S "$VERIFIED_MD5S"
-setlist "$PKG/install.sh"  KNOWN_EXT_BUILD_MD5S  "$KNOWN_EXT"
-setlist "$PKG/rollback.sh" VERIFIED_FACTORY_MD5S "$VERIFIED_MD5S"
-setlist "$PKG/rollback.sh" KNOWN_EXT_BUILD_MD5S  "$KNOWN_EXT"
+setlist "$PKG/install.sh"  VALIDATED_BASELINE_MD5S "$BASELINE_MD5S"
 
 # MANIFEST.txt: version / built date / 3 artifact md5+size / factory md5
 perl -0777 -pi -e "
@@ -130,7 +124,7 @@ perl -0777 -pi -e "
   s/^(\s*rkipc\s+)[0-9a-f]{32}(\s+)\d+( B)/\${1}$RKIPC_MD5\${2}$RKIPC_SZ\${3}/m;
   s/^(\s*entry\.cgi\s+)[0-9a-f]{32}(\s+)\d+( B)/\${1}$ENTRY_MD5\${2}$ENTRY_SZ\${3}/m;
   s/^(\s*sdk\/lib\/\Q$SO_NAME\E\s+)[0-9a-f]{32}(\s+)\d+( B)/\${1}$SO_MD5\${2}$SO_SZ\${3}/m;
-  s/^(\s*factory rkipc md5\s+)[0-9a-f]{32}/\${1}$FACTORY_FIRST/m;
+  s/^(\s*validated baselines\s+)[0-9a-f]{32}/\${1}$BASELINE_FIRST/m;
 " "$PKG/MANIFEST.txt"
 
 # README.md: title version + expected rkipc md5
@@ -139,6 +133,13 @@ perl -0777 -pi -e "
   s/(# expect )[0-9a-f]{32}/\${1}$RKIPC_MD5/;
 " "$PKG/README.md"
 
+# kit/__init__.py: the kit CONTRACT version apps depend on via manifest "kit".
+# Written back here so a shipped kit can never disagree with the tarball it came
+# out of -- appmgr reads this literal to gate installs (appmgr/kitversion.py).
+perl -0777 -pi -e "s/^(__version__ = \")[^\"]*(\")/\${1}$VERSION\${2}/m" "$REPO/kit/__init__.py"
+grep -q "^__version__ = \"$VERSION\"\$" "$REPO/kit/__init__.py" || {
+    echo "FATAL: failed to write __version__=$VERSION into kit/__init__.py" >&2; exit 1; }
+
 # ---- staging -----------------------------------------------------------------
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
@@ -146,7 +147,14 @@ trap 'rm -rf "$STAGE"' EXIT
 scrub() { # remove build junk under $1
   find "$1" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "$1" -name '.pytest_cache' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  find "$1" \( -name '*.pyc' -o -name '.DS_Store' \) -delete 2>/dev/null || true
+  # Editor/refactor leftovers live next to the source they shadow. `cp -R` copies
+  # the whole tree, so an untracked `engine.py.bak-pre-ctypes` sitting in
+  # kit/runtime/ ships to every device unless it is dropped here. Same glob set
+  # release/deploy/build-packages.py uses for appmgr.
+  find "$1" \( -name '*.pyc' -o -name '.DS_Store' -o -name '._*' \
+               -o -name '*.bak' -o -name '*.bak.*' -o -name '*.bak-*' \
+               -o -name '*.orig' -o -name '*.rej' -o -name '*.swp' \) \
+       -delete 2>/dev/null || true
 }
 
 # firmware pkg staging (layout mirrors current release/pkg/ + sdk flat header)
@@ -265,10 +273,21 @@ check_list() { # file var must-contain-md5
 check_const "$PKG/install.sh"  RKIPC_MD5         "$RKIPC_MD5"
 check_const "$PKG/install.sh"  ENTRY_MD5         "$ENTRY_MD5"
 check_const "$PKG/install.sh"  SO_MD5            "$SO_MD5"
-check_list  "$PKG/install.sh"  VERIFIED_FACTORY_MD5S "$FACTORY_FIRST"
-check_list  "$PKG/install.sh"  KNOWN_EXT_BUILD_MD5S  "$RKIPC_MD5"
-check_list  "$PKG/rollback.sh" VERIFIED_FACTORY_MD5S "$FACTORY_FIRST"
-check_list  "$PKG/rollback.sh" KNOWN_EXT_BUILD_MD5S  "$RKIPC_MD5"
+check_list  "$PKG/install.sh"  VALIDATED_BASELINE_MD5S "$BASELINE_FIRST"
+# The rollback target is decided by content, not by an md5 list, so assert the
+# marker test itself instead: the rkipc/entry.cgi we ship MUST trip it, otherwise
+# every "is this a factory build?" check downstream silently answers yes.
+check_markers() { # file regex label
+  # NOTE: not `strings | grep -q` -- under pipefail, grep -q exiting early
+  # SIGPIPEs strings (141) and the whole pipeline reads as failure.
+  if grep -qaE "$2" "$1" 2>/dev/null; then
+    echo "  OK  $(basename "$1") carries $3 markers"
+  else
+    echo "FATAL self-check: $1 carries no $3 markers -- rollback guard would be blind" >&2; exit 1
+  fi
+}
+check_markers "$RKIPC" '/run/recamera|rc_ext_' rkipc-ext
+check_markers "$ENTRY" 'ExtApiHandler' entry.cgi-ext
 
 # verify firmware tar actually carries the expected rkipc/entry/so md5s
 verify_tar_member() { # tar arcname expected-md5
@@ -279,6 +298,88 @@ verify_tar_member() { # tar arcname expected-md5
 verify_tar_member "$FW_TAR" "./rkipc"                    "$RKIPC_MD5"
 verify_tar_member "$FW_TAR" "./entry.cgi"                "$ENTRY_MD5"
 verify_tar_member "$FW_TAR" "./sdk/lib/$SO_NAME"         "$SO_MD5"
+
+# ---- completeness: every git-tracked source file is really inside the kit pkg --
+# The kit package is assembled with `cp -R kit/ examples/ ...`, so a NEW source
+# file is picked up only as long as it sits under one of those trees. Nothing
+# used to assert that, which means a fix living in a file the layout does not
+# cover -- or a tree someone later switches to an explicit file list -- ships as
+# a package that silently lacks it, and the device keeps running the old code
+# without any error. Here the tarball is compared member-by-member against
+# `git ls-files`: a tracked file that is missing from the package, or present
+# with different bytes, fails the build.
+echo "=== completeness (git-tracked sources vs $(basename "$KIT_TGZ")) ==="
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  KIT_PREFIX="recamera-ext-kit-v$VERSION/" REPO="$REPO" KIT_TGZ="$KIT_TGZ" python3 - <<'PY'
+import fnmatch, hashlib, os, subprocess, sys, tarfile
+
+repo   = os.environ["REPO"]
+tgz    = os.environ["KIT_TGZ"]
+prefix = os.environ["KIT_PREFIX"]
+
+# repo-relative source tree -> path inside the package
+TREES = {
+    "kit":                      "kit",
+    "examples":                 "examples",
+    "sdk/python/recamera_ext":  "sdk/python/recamera_ext",
+}
+# mirrors scrub(): these are intentionally not shipped
+SKIP = ("*.pyc", ".DS_Store", "._*", "*.bak", "*.bak.*", "*.bak-*",
+        "*.orig", "*.rej", "*.swp", "*/__pycache__/*", "*/.pytest_cache/*")
+
+def skipped(rel):
+    base = os.path.basename(rel)
+    return any(fnmatch.fnmatch(base, g) or fnmatch.fnmatch(rel, g) for g in SKIP)
+
+members = {}
+with tarfile.open(tgz, "r:gz") as tar:
+    for ti in tar:
+        if ti.isreg():
+            members[ti.name] = hashlib.md5(tar.extractfile(ti).read()).hexdigest()
+
+missing, differing, checked = [], [], 0
+for tree, arcdir in TREES.items():
+    out = subprocess.run(["git", "-C", repo, "ls-files", "-z", "--", tree],
+                         capture_output=True, text=True, check=True).stdout
+    for rel in filter(None, out.split("\0")):
+        if skipped(rel):
+            continue
+        src = os.path.join(repo, rel)
+        if not os.path.isfile(src):          # tracked but deleted in the worktree
+            continue
+        arc = prefix + arcdir + rel[len(tree):]
+        checked += 1
+        if arc not in members:
+            missing.append(rel)
+            continue
+        got = hashlib.md5(open(src, "rb").read()).hexdigest()
+        if got != members[arc]:
+            differing.append("%s (src %s != pkg %s)" % (rel, got, members[arc]))
+
+for label, items in (("MISSING from package", missing),
+                     ("CONTENT DIFFERS", differing)):
+    if items:
+        print("FATAL completeness: %d file(s) %s:" % (len(items), label),
+              file=sys.stderr)
+        for it in items[:20]:
+            print("    " + it, file=sys.stderr)
+        if len(items) > 20:
+            print("    ... and %d more" % (len(items) - 20), file=sys.stderr)
+
+if missing or differing:
+    print("HINT: a source tree grew a file the packaging layout does not reach, "
+          "or the package predates the working tree. Re-run the build; if it "
+          "still fails, fix the staging step above -- do NOT relax this check.",
+          file=sys.stderr)
+    sys.exit(1)
+
+print("  OK  %d git-tracked files present in the package with matching md5" % checked)
+for probe in ("kit/runtime/engine.py", "kit/runtime/ctypes_rknn.py"):
+    print("  OK  %-32s md5=%s" % (probe, members.get(prefix + probe, "<absent>")))
+PY
+else
+  echo "  SKIP  not a git worktree -- completeness check needs 'git ls-files'" >&2
+fi
 
 echo "=== done ==="
 echo "  firmware sideload : $FW_TAR"

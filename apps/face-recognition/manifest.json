@@ -169,7 +169,7 @@
   "id": "face-recognition",
   "name": "Face Recognition",
   "name_zh": "人脸识别",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "image": "/appcenter/apps/face-recognition.png",
   "type": "self-hosted",
   "scene": "Access & Attendance",
@@ -288,7 +288,7 @@
         "from": "extra.faces[].liveness.decision",
         "type": "string",
         "optional": true,
-        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending"
+        "description": "'pending' | 'live' | 'spoof'. Pending until at least liveness_min_samples texture samples AND either motion evidence, a blink, or liveness_timeout_sec elapsed; identity is withheld while pending. A texture EMA below liveness_texture_spoof_max is 'spoof' regardless of the other terms"
       },
       {
         "name": "liveness_reason",
@@ -544,6 +544,16 @@
             "help_zh": "一个跟踪需要累积多少次纹理推理才输出结论。未达到时结论保持 pending 且不输出身份——运动人脸上的单帧 MiniFAS 不足以下结论。"
           },
           {
+            "key": "liveness_prime",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Prime the first texture samples on consecutive frames",
+            "title_zh": "首批纹理样本逐帧采集",
+            "default": true,
+            "help": "Take the first 'Texture samples before a verdict' MiniFAS passes on consecutive frames instead of on the re-embed cadence. Still that many independent passes over that many different frames, and the motion, blink and timeout terms are untouched; they just arrive earlier, so the verdict is not 'pending' for two re-embed intervals. Turn it off to restore the old cadence.",
+            "help_zh": "把「结论所需纹理样本数」的前几次 MiniFAS 推理放在连续帧上采，而不是跟着重提特征的节奏。仍然是同样多次独立推理、同样多张不同的帧，运动、眨眼与超时项都不变，只是更早拿到，结论不必在两个重提周期里一直 pending。关掉即恢复旧节奏。"
+          },
+          {
             "key": "liveness_motion_window_sec",
             "type": "number",
             "apply": "live",
@@ -760,9 +770,32 @@
             "min": 0.0,
             "max": 1.0,
             "step": 0.05,
-            "default": 1.0,
-            "help": "Added to the reported score once a blink has been observed. A blink also sets the verdict to live outright: it is the strongest passive evidence available, and no amount of texture uncertainty should override it.",
-            "help_zh": "观察到眨眼后加到报告分数上的增量。眨眼同时直接把结论置为 live：这是被动检测中最强的证据，纹理上的不确定性不应推翻它。"
+            "default": 0.1,
+            "help": "Added to the fused score once a blink has been observed, before the liveness_t_live / liveness_t_spoof band is applied. A blink does not decide the verdict on its own: a screen replay reproduces the blinks of the person it is replaying, so blink is scored as a bonus and never as a bypass.",
+            "help_zh": "观察到眨眼后加到融合分数上的增量，在 liveness_t_live / liveness_t_spoof 判定之前叠加。眨眼不单独决定结论：屏幕翻拍会一并回放被拍者的眨眼，因此眨眼只作加分项，不作直通项。"
+          },
+          {
+            "key": "liveness_texture_spoof_max",
+            "type": "number",
+            "apply": "live",
+            "title": "Texture spoof veto",
+            "title_zh": "纹理判假否决线",
+            "min": 0.0,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.35,
+            "help": "Texture EMA below which the verdict is spoof unconditionally, checked before motion, blink and depth and not subject to the hysteresis band. Offline track-level fit over 68 real / 127 print / 42 screen tracks puts every real track above 0.35 and every spoof track below it.",
+            "help_zh": "纹理 EMA 低于该值直接判为 spoof，在运动、眨眼、深度之前判定，且不受迟滞带影响。离线按 track 拟合（68 真人 / 127 打印 / 42 屏幕）中，所有真人 track 高于 0.35，所有攻击 track 低于 0.35。"
+          },
+          {
+            "key": "liveness_debug_frames",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Log liveness fields per frame",
+            "title_zh": "逐帧打印活体字段",
+            "default": false,
+            "help": "Print one line per face per frame with score, texture, motion, blink, verdict and reason. Off by default; turn it on to attribute a presentation-attack result to a specific term.",
+            "help_zh": "为每帧每张人脸打印一行，含 score、texture、motion、blink、结论与依据。默认关闭；排查呈现攻击时打开，用于定位是哪一项导致了该结论。"
           },
           {
             "key": "liveness_t_live",
@@ -953,5 +986,15 @@
     "media_type": "image/png"
   },
   "x-default_model": "scrfd",
-  "x-model_tag": "rv1126b:scrfd500m+mbf512@fp16"
+  "x-model_tag": "rv1126b:scrfd500m+mbf512@fp16",
+  "package": {
+    "exclude": [
+      "evaluation",
+      "models/convert",
+      "models/depth_out",
+      "models/depth_dav2_small_252_fp16.rknn",
+      "tools",
+      "docs"
+    ]
+  }
 }
