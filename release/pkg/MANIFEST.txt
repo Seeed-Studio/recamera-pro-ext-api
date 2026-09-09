@@ -1,5 +1,5 @@
-recamera-ext-api  v1.6.0
-Built: 2026-08-17   Target: reCamera Pro (RV1126B / recamera_v2)
+recamera-ext-api  v1.6.5
+Built: 2026-09-05   Target: reCamera Pro (RV1126B / recamera_v2)
 
 ARTIFACTS (md5)
   rkipc                             f683352a9d062a05a3df1f8df22d7d53   15585904 B  -> /oem/usr/bin/rkipc
@@ -18,7 +18,18 @@ PYTHON INFERENCE RUNTIME (rknnlite 2.3.2)  -- provisioned by install.sh into /us
   vision apps run via: PYTHONPATH=/userdata/local:/userdata/sdk/python LD_LIBRARY_PATH=/oem/usr/lib /userdata/rknnenv/bin/python3 <app>.py
 
 FACTORY / ROLLBACK
-  factory rkipc md5                 9826e9ecf8ed543a6dc78e3731102e0f    (clean factory, 0 ext sockets; the only valid rollback target)
+  rollback target test              CONTENT, not md5: a factory rkipc carries none of
+                                    /run/recamera | rc_ext_
+                                    (factory entry.cgi carries no ExtApiHandler).
+                                    Holds for any baseline -- no md5 list to maintain.
+                                    NOT osd_rgn_cover_ -- that is a vendor OSD symbol
+                                    present in factory rkipc too (measured: 2 hits in
+                                    d5e7ca93 factory, 8 in 9826e9ec ext).
+  validated baselines               ce3dfa64a554667028b47f4d9ce84981  (2026-08 factory,
+                                    2178232 B, seen on 192.168.42.1). Advisory only:
+                                    an unlisted baseline warns; --strict makes it abort.
+  no local backup?                  recover with a full OTA / update.img flash, which
+                                    rewrites /oem back to factory.
   factory entry.cgi                 saved to /userdata/entry.cgi.factory.bak
 
 CONTENTS OF THIS rkipc

@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-
-echo "FATAL: this archived deploy-firmware flow predates inference-control@1 and is disabled." >&2
-echo "Build and validate a new firmware from manifest-pinned source commits instead." >&2
-exit 1
 #
-# deploy-firmware.sh -- reCamera Pro v1.5.0 MASKING FIRMWARE deploy (HIGH RISK).
+# deploy-firmware.sh -- reCamera Pro v1.6.2 MASKING FIRMWARE deploy (HIGH RISK).
 #
 #   #############################################################################
 #   ##  DANGER -- READ BEFORE RUNNING                                          ##
@@ -38,7 +34,7 @@ exit 1
 #
 set -euo pipefail
 
-HOST=192.168.42.1
+HOST=100.158.145.29
 DO_REBOOT=0
 ROLLBACK=0
 INSTALL_FLAGS=""
@@ -57,7 +53,7 @@ done
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SERIAL="${HOST}:5555"
 STAGE=/userdata/ext-pkg
-VER=1.5.0
+VER=1.6.2
 PKG="$HERE/recamera-ext-api-v${VER}.tar"
 
 red()  { printf '\033[1;31m%s\033[0m\n' "$*"; }

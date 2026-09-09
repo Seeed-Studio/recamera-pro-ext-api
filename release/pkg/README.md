@@ -1,4 +1,4 @@
-# reCamera Pro Extension API — v1.6.0 (sideload package)
+# reCamera Pro Extension API — v1.6.5 (sideload package)
 
 > **ARCHIVED / DO NOT INSTALL**
 >

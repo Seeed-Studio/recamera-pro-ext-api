@@ -457,6 +457,41 @@ class TestLiveness(_Base):
         assert face["live"] is True
         assert face["name"] == "alice"
 
+    def test_texture_priming_fills_min_samples_on_consecutive_frames(self):
+        """★The 1.4 s that used to sit in front of every door★
+
+        The texture term rode `embed_interval` from the track's very first
+        frame, so the `min_samples`-th sample -- the one that lets the fusion
+        leave `insufficient_samples` -- landed
+        `(min_samples - 1) x embed_interval` frames in. With the shipped
+        `embed_interval = 5` at the measured 7 fps that is ~1.4 s in which the
+        identity is withheld and the embedder is not even allowed to run.
+
+        `embed_interval = 99` makes the difference unmissable: un-primed, three
+        frames can only ever produce ONE texture pass per head.
+        """
+        self.enroll(alice=0)
+        sink, _app = self.run_app(min_face_px=64, embed_interval=99,
+                                  liveness_enabled=True,
+                                  liveness_timeout_sec=0.0,
+                                  liveness_prime=False)
+        assert [m.calls for m in self.live] == [1, 1]
+        assert sink.payloads[-1][0]["faces"][0]["liveness"]["reason"] == \
+            "insufficient_samples"
+
+    def test_texture_priming_is_on_by_default_and_settles_the_verdict(self):
+        self.enroll(alice=0)
+        sink, _app = self.run_app(min_face_px=64, embed_interval=99,
+                                  liveness_enabled=True,
+                                  liveness_timeout_sec=0.0,
+                                  liveness_min_samples=3)
+        # Three frames, three passes per head: the same `min_samples`
+        # independent inferences over the same number of distinct frames.
+        assert [m.calls for m in self.live] == [N_EMITTED, N_EMITTED]
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["liveness"]["reason"] != "insufficient_samples"
+        assert face["live"] is True
+
     def test_the_two_heads_are_averaged_into_the_texture_score(self):
         self.p_fn = lambda k: 0.90
         self.p_v1se_fn = lambda k: 0.50
@@ -510,7 +545,10 @@ class TestLiveness(_Base):
         assert lv["decision"] == "live"
         assert lv["reason"] == "timeout_texture"
 
-    def test_a_blink_overrides_a_bad_texture_score(self):
+    def test_a_blink_does_not_override_a_bad_texture_score(self):
+        """★The 0.1.0 hole, end to end★ a screen replay carries the blinks of
+        the person it replays. Publishing a name on the strength of that blink
+        is exactly the door opening for a phone held up to the lens."""
         self.enroll(alice=0)
         self.p_fn = lambda k: 0.10
         self.ear_fn = lambda k: (0.10 if k == 1 else 0.30)
@@ -519,8 +557,23 @@ class TestLiveness(_Base):
         assert self.mesh[-1].calls == N_EMITTED
         assert set(self.mesh[-1].input_shapes) == {(192, 192, 3)}
         assert face["liveness"]["blink"] is True
-        assert face["liveness"]["reason"] == "blink"
-        assert face["live"] is True
+        assert face["liveness"]["decision"] == "spoof"
+        assert face["liveness"]["reason"] == "texture_spoof"
+        assert face["live"] is False
+        assert face["name"] is None
+
+    def test_a_blink_carries_a_lukewarm_texture_over_the_line(self):
+        """And the other side of it: blink is still evidence, it just adds to
+        the fused score instead of replacing it."""
+        self.enroll(alice=0)
+        self.p_fn = lambda k: 0.50
+        self.ear_fn = lambda k: (0.10 if k == 1 else 0.30)
+        sink, _app = self.run_app(liveness_facemesh_interval=1,
+                                  liveness_blink_bonus=0.10, **self.LIVE)
+        face = sink.payloads[-1][0]["faces"][0]
+        assert face["liveness"]["blink"] is True
+        assert face["liveness"]["decision"] == "live"
+        assert "blink" in face["liveness"]["reason"]
         assert face["name"] == "alice"
 
     def test_facemesh_is_sampled_not_run_every_frame(self):

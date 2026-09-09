@@ -345,6 +345,15 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             # catalog did not, and the catalog is all the store can see.
             **({"capabilities": man["capabilities"]}
                if isinstance(man.get("capabilities"), list) else {}),
+            # Kit requirement, forwarded verbatim -- same reason as capabilities
+            # above, one step earlier. appmgr enforces this at install time from
+            # the manifest INSIDE the package (appmgr/kitversion.py), so the gate
+            # holds with or without this field; but the device only sees the
+            # manifest after the browser has fetched the whole package and pushed
+            # it over. Carrying the requirement in the catalog is what lets the
+            # store compare it against the device's kit version and say "upgrade
+            # the kit first" BEFORE spending a 50 MB download on a refusal.
+            **({"kit": man["kit"]} if man.get("kit") else {}),
             "arch": "arm64",
             "package": package,
             # Shared models the browser drops into target_path before install.

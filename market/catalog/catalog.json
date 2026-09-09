@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-08T02:07:03Z",
+  "generated": "2026-09-08T09:07:52Z",
   "source": "recamera_pro/market/packaging/dist",
   "apps": [
     {
@@ -29,7 +29,7 @@
     {
       "id": "f1-access",
       "name": "F1 Door Access",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "Unmanned-store door access on one device. The recognition cascade is the face-recognition app's, unchanged: SCRFD-500M finds every face and its five landmarks, each face is warped to the canonical 112x112 ArcFace pose and embedded to 512 dimensions, matched 1:N against the enrolled gallery by cosine similarity over accumulated per-track evidence, with a fused anti-spoofing verdict that suppresses printed photos and phone screens. On top of it this app owns the door: an allowed decision closes a dry contact on one sysfs GPIO for a bounded pulse, and every decision -- allowed or not -- is published as an access/v1/events record carrying the score, the threshold, the liveness verdict, the face-library version and the model hash. The face library is pulled from a signed HTTP manifest and swapped atomically; no image and no embedding leaves the device. The gate is fail-safe by construction: the pin returns to its idle level on exit, on SIGKILL and on power loss, and a missing or inconsistent access config leaves the gate unarmed rather than open.",
       "image": "/appcenter/apps/f1-access.png",
       "scene": "Access & Attendance",
@@ -43,11 +43,11 @@
       "kit": ">=1.6.4",
       "arch": "arm64",
       "package": {
-        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.0-arm64.tar.gz",
-        "filename": "f1-access-0.1.0-arm64.tar.gz",
-        "sha256": "09b13c6180aafe4d4e88f1d4239214d9a7c0df1eb7a8ec07f5dfa8de8ee8a081",
-        "size": 41085674,
-        "signature": "MEUCIDCleu2TRol3ktFklPOUZPGlc0NfzOzLcJDW0YeyJnakAiEAyKE5Ppl2zwbp6EK7dU5+RAbDsDqzMUAvtN2olH1BGcA=",
+        "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/f1-access-0.1.1-arm64.tar.gz",
+        "filename": "f1-access-0.1.1-arm64.tar.gz",
+        "sha256": "9024f0bb4d6dc0a6c0602823ab32998b355cb03a0e05ca2f6c89512a5e2413f9",
+        "size": 41098772,
+        "signature": "MEUCIHla6RD2Vdn8vy3H+dLDEZXVOLXQbTV8A2USLWYj5rmyAiEAufiKb6jG+mXyPG9ntYk4PfbZfO24uRp6024GvOWGfWA=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -92,13 +92,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/facemesh-reader-0.1.0-arm64.tar.gz",
         "filename": "facemesh-reader-0.1.0-arm64.tar.gz",
         "sha256": "249e6a0fc9ff470ac58e761f34fcddba03b0b3e6deefebcf56e323412f28e2b8",
         "size": 6843123,
-        "signature": "MEQCIHqqmhR6jCXOAMqsLmutU7ShIds1KL9F7vi6oGUDGL8vAiACIfQA/8onduEFjT3GD5QtQ9KAvRE/LSI5rPF4jdYcoA==",
+        "signature": "MEQCIGMtG9JMAn3pPVNFeTizOso/7z0irlye0mg7YrZbIgYiAiA7nRaFXhYIVoygSM7pH20Yi8V4IO5EEVAjwcU9d0W86w==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -117,13 +118,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fall-detection-0.2.0-arm64.tar.gz",
         "filename": "fall-detection-0.2.0-arm64.tar.gz",
         "sha256": "6ed5eafc2835c506f4bda9d125ee1f14cef1a1c698808ca125c733a03638ba72",
         "size": 3053542,
-        "signature": "MEUCIQCSjzNgCi/sXe0VKCIxMQ7KcUHHxjA0EvO4IIrOH5YJCgIgDflgyyBRtFfPzdhAu/1gzoEDvFGyBLmfhEg9H3os4qw=",
+        "signature": "MEMCIGUNadMXT1OE7vgfHIYz/i44MlK856+w/0oUxe2sSCWcAh9UDNm7wNdfSGJ1sXym2sGEdbQJuB1UNBjFAkiMvUb9",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -142,13 +144,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/fitness-trainer-0.1.0-arm64.tar.gz",
         "filename": "fitness-trainer-0.1.0-arm64.tar.gz",
         "sha256": "0bbcbe7707f70f49f520beb6dc6755b7fe462511529b2e04617f942a886745a2",
         "size": 2867151,
-        "signature": "MEYCIQCHDcu4PO04Ngo2q4PGq36NxSpU9eS4wN3Ipj5aGEvvlgIhAJmVHAu2dDOpSYLqqxrM+9Xswv1am6uXkwbN24sm9ZYV",
+        "signature": "MEYCIQCryUfWvCk/GLgBWl1+FD9NmQcI5+uwVzF5WmBLLLGPRwIhAPCuB2JPa90lupFd9mtZT9vI6iZbOe7ifw1dah6qBsBz",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -220,13 +223,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/qrcode-reader-0.1.0-arm64.tar.gz",
         "filename": "qrcode-reader-0.1.0-arm64.tar.gz",
         "sha256": "b791b79dd5ef372e6ae260748945c8ca9c90bfff07674b1720e3765e2e7cf641",
         "size": 922415,
-        "signature": "MEUCIQCCOX1CaWRKzPssK/FDTLpokDa1TgKPDEtCEOUnnB5CMAIgMIpxuO8d86rclUNvN+9sSnuzHW2sztlvLV1LgpAfiHo=",
+        "signature": "MEYCIQCbQXXU1GwHm4kdDEeX+mOdBvs5/Tr/Z487KSBmzS/QYgIhAPJUH5dtfqCDHhoVKmcmR3JtNYoZsKt43pmivqHtwXnl",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -245,13 +249,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/retail-vision-0.1.0-arm64.tar.gz",
         "filename": "retail-vision-0.1.0-arm64.tar.gz",
         "sha256": "9c5efc040dc46a506effbf1aa5cd6c9e56853c136eff3a5113fa7a9955080f82",
         "size": 3023387,
-        "signature": "MEUCIQDxnEa5j5QQdbIIdAl26hT2tOfC7StgINcP3GL9tfVLDAIgTaFZzzZfQJaP7cZR/P9dvsTyHs/F43MhSmHtVsvI1GM=",
+        "signature": "MEUCIQDZPq6eT+Ep2BMBjzLXcl2CvDukk5Fan8AEEPWa50ZGggIgSJP9JX0dt5so7T+1YYIznfD11SvssHyzQ9ecZqWgrDM=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []
@@ -271,13 +276,14 @@
         "audio",
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/voice-transcribe-0.1.0-arm64.tar.gz",
         "filename": "voice-transcribe-0.1.0-arm64.tar.gz",
         "sha256": "abe531f2baa22680e660791051168bc7e2326c01d720703ce6389b3f9f88c914",
         "size": 8158,
-        "signature": "MEUCIQD07ci3HJ7VuAFmYoGQZIK2ebUURoGcGTJKOn82eSRIpAIgWoo1AotUEiDg1wi/iVUeJ22AQrhMf44o/eN3SxUF2Cs=",
+        "signature": "MEQCIELL7jvpyy4aP+Rnqtob7Kpr2xElQf6w3Gjx8vNNuFhbAiBm5oviuVneqSmuZ/nJ6JligjtTLgMsw2LXzHkL8wT5oA==",
         "signature_alg": "ecdsa-sha256"
       },
       "models": [
@@ -394,13 +400,14 @@
       "capabilities": [
         "output"
       ],
+      "kit": ">=0.1.0",
       "arch": "arm64",
       "package": {
         "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/yolo-detector-0.1.0-arm64.tar.gz",
         "filename": "yolo-detector-0.1.0-arm64.tar.gz",
         "sha256": "8b78f8abac329f633b125d23ab1bf30400a63b77ccb2823c352ed2ec2ff9b809",
         "size": 3018913,
-        "signature": "MEQCIDRws1QA68aiTdyPFKs4Dkmcwe0Sm79WkkmIp9sJo0+DAiBVkxhMtH2TLpp+ccvOBgpG8AsO4En62VC8VptncPaaMg==",
+        "signature": "MEUCICD9Ji2vw84h5112wUewc4jtUSZvYWpFUlHI3Crt4bMlAiEA9/ROT+9zMqQwjW7XlUXyQwaFNPxQATnKVbErv2sOUv4=",
         "signature_alg": "ecdsa-sha256"
       },
       "models": []

@@ -2,6 +2,12 @@
 # recamera-ext-api install.sh  (persistent sideload into /oem, survives reboot)
 # Run ON THE DEVICE as root:  adb push <this dir>/* /userdata/ext-pkg/ ; adb shell "sh /userdata/ext-pkg/install.sh"
 # Idempotent: backs up factory files once, md5-verifies every artifact, then overwrites /oem.
+#
+# Usage: sh install.sh [--reboot] [--strict] [--force]
+#   --reboot   reboot immediately after a successful install
+#   --strict   abort if the device's firmware baseline is not one we have
+#              validated this build against (default: warn and continue)
+#   --force    install even when the pre-flight refuses (last resort; see below)
 set -e
 
 # This directory is an archived sideload snapshot, not a releasable package.
@@ -19,69 +25,152 @@ PKG=$(cd "$(dirname "$0")" && pwd)
 RKIPC_MD5=f683352a9d062a05a3df1f8df22d7d53
 ENTRY_MD5=75a693c87c317a49c37c4dddb6b9ac7a
 SO_MD5=5cebfb9e4d9c001c45b58c75daafe934
-# Rollback safety -- a valid rollback target MUST be a genuine, unmodified factory rkipc.
-#   VERIFIED_FACTORY_MD5S : clean factory rkipc md5s (0 extension sockets). The ONLY md5s
-#     accepted as a rollback target. To add a device's factory: confirm
-#     `strings rkipc | grep /run/recamera` prints nothing, then append its md5 here.
-#   KNOWN_EXT_BUILD_MD5S  : rkipc builds that CARRY the extension endpoints. Listed so we
-#     NEVER mistake one for factory -- an ext build (incl. our own shipped rkipc) must not be
-#     captured as, or restored as, "factory", or the rollback becomes a silent no-op.
-VERIFIED_FACTORY_MD5S="9826e9ecf8ed543a6dc78e3731102e0f"   # V1.0.x clean factory (1.9MB, 0 ext sockets)
-KNOWN_EXT_BUILD_MD5S="9826e9ecf8ed543a6dc78e3731102e0f f93ac217c9920bc962771aeed1ac0550 f683352a9d062a05a3df1f8df22d7d53"  # ext builds -- NOT rollback targets
+
+DO_REBOOT=0; STRICT=0; FORCE=0
+for a in "$@"; do
+  case "$a" in
+    --reboot) DO_REBOOT=1 ;;
+    --strict) STRICT=1 ;;
+    --force)  FORCE=1 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown arg: $a" >&2; exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Rollback safety -- what makes a file a valid rollback target?
+#
+# A rollback target must be a FACTORY build: one that does NOT carry our
+# extension. That is a property of the file's CONTENT, so we test the content
+# directly instead of matching md5s against a hand-maintained allowlist.
+#
+# An md5 allowlist tests "have I seen this exact file before", which is not the
+# same question: it rejects every official firmware baseline we have not
+# personally catalogued (so a legitimate device gets refused in the field) while
+# telling us nothing about the one file it does accept. It also rots -- the list
+# it replaced had the same md5 in both the "factory" and "extension" columns.
+#
+# Our rkipc exports the extension endpoints and the hardware-mask symbols; a
+# factory rkipc has none of them. Our entry.cgi links rockchip::cgi::ExtApiHandler;
+# a factory entry.cgi does not. Both hold for any baseline, past or future.
+# ---------------------------------------------------------------------------
+RKIPC_EXT_MARKERS='/run/recamera|rc_ext_'
+ENTRY_EXT_MARKERS='ExtApiHandler'
+
+# Firmware baselines this rkipc has been validated against, by the md5 of the
+# device's FACTORY rkipc. Advisory only: an unlisted baseline warns (or aborts
+# under --strict), it never silently blocks a legitimate device.
+VALIDATED_BASELINE_MD5S="ce3dfa64a554667028b47f4d9ce84981"   # 2026-08 factory, 2178232 B (192.168.42.1)
 
 md5of() { md5sum "$1" 2>/dev/null | awk '{print $1}'; }
 need() { [ "$(md5of "$1")" = "$2" ] || { echo "FATAL md5 mismatch: $1 (got $(md5of "$1") want $2)"; exit 1; }; }
 in_list() { _v=$1; shift; for _m in $*; do [ "$_v" = "$_m" ] && return 0; done; return 1; }
-is_factory()   { in_list "$1" $VERIFIED_FACTORY_MD5S; }
-is_ext_build() { in_list "$1" $KNOWN_EXT_BUILD_MD5S; }
 
-echo "=== [1/7] verify package artifacts ==="
+# has_ext <file> <marker-regex> -- true if the binary carries our extension.
+# busybox strings may be absent; grep -a over the raw binary is the fallback.
+has_ext() {
+  if command -v strings >/dev/null 2>&1; then
+    strings -a "$1" 2>/dev/null | grep -qE "$2"
+  else
+    grep -aqE "$2" "$1"
+  fi
+}
+is_factory_rkipc() { [ -f "$1" ] && ! has_ext "$1" "$RKIPC_EXT_MARKERS"; }
+is_factory_entry() { [ -f "$1" ] && ! has_ext "$1" "$ENTRY_EXT_MARKERS"; }
+
+forced() {  # forced <what> -- honour --force, otherwise abort
+  if [ "$FORCE" = 1 ]; then
+    echo "  --force: continuing anyway ($1). NO valid rollback point will exist."
+    return 0
+  fi
+  echo "       Re-run with --force to install anyway (you will have no local"
+  echo "       rollback point; recovery would need a full OTA / update.img flash,"
+  echo "       which rewrites /oem back to factory)."
+  exit 1
+}
+
+echo "=== [1/8] verify package artifacts ==="
 need "$PKG/rkipc" "$RKIPC_MD5"
 need "$PKG/entry.cgi" "$ENTRY_MD5"
 need "$PKG/sdk/lib/librecamera_ext.so.1.0.0" "$SO_MD5"
+# The package must itself be an extension build -- if these markers are missing
+# the marker test below is meaningless and every check would silently pass.
+has_ext "$PKG/rkipc" "$RKIPC_EXT_MARKERS" || { echo "FATAL: package rkipc carries no extension markers -- wrong or corrupt build"; exit 1; }
+has_ext "$PKG/entry.cgi" "$ENTRY_EXT_MARKERS" || { echo "FATAL: package entry.cgi carries no extension markers -- wrong or corrupt build"; exit 1; }
 echo "package OK"
 
-echo "=== [2/7] backup factory rkipc (once, verified-factory only) ==="
+echo "=== [2/8] firmware baseline compatibility (advisory) ==="
+[ -f /oem/usr/bin/rkipc ] || { echo "FATAL: /oem/usr/bin/rkipc missing -- this is not a reCamera Pro rootfs"; exit 1; }
 CUR=$(md5of /oem/usr/bin/rkipc)
+CUR_SIZE=$(wc -c < /oem/usr/bin/rkipc 2>/dev/null | tr -d ' ')
+OSVER=$(. /etc/os-release 2>/dev/null; echo "${NAME:-?} ${VERSION:-?}")
+echo "  device factory rkipc : $CUR  ($CUR_SIZE B)"
+echo "  device rootfs        : $OSVER"
+if is_factory_rkipc /oem/usr/bin/rkipc && ! in_list "$CUR" $VALIDATED_BASELINE_MD5S; then
+  echo "  WARN: this rkipc build has NOT been validated against this firmware baseline."
+  echo "        Installing replaces the camera pipeline binary with our build, which was"
+  echo "        compiled from a different baseline -- anything that baseline added on top"
+  echo "        of ours is lost until you roll back. The install still creates a rollback"
+  echo "        point, so this is reversible."
+  if [ "$STRICT" = 1 ]; then echo "  --strict: aborting."; exit 1; fi
+else
+  echo "  baseline OK (or /oem already holds an extension build -- see next step)"
+fi
+
+echo "=== [3/8] backup factory rkipc (once, content-verified) ==="
 if [ -f /userdata/rkipc.factory.bak ]; then
-  BAK=$(md5of /userdata/rkipc.factory.bak)
-  if is_factory "$BAK"; then
-    echo "backup exists, verified factory: $BAK"
+  if is_factory_rkipc /userdata/rkipc.factory.bak; then
+    echo "backup exists and carries no extension markers: $(md5of /userdata/rkipc.factory.bak)"
   else
-    echo "FATAL: existing /userdata/rkipc.factory.bak ($BAK) is NOT a verified factory rkipc."
-    echo "       Restoring it would leave a non-factory (likely extension) build on /oem."
-    echo "       Replace the backup with a true factory rkipc, then re-run."; exit 1
+    echo "REFUSING: existing /userdata/rkipc.factory.bak ($(md5of /userdata/rkipc.factory.bak)) CARRIES"
+    echo "       extension markers -- it is one of our builds, not a factory rkipc."
+    echo "       Restoring it would be a no-op and would leave the extension on /oem forever."
+    forced "bad existing backup"
   fi
 else
-  # First install: only capture a backup if /oem currently holds a clean factory rkipc.
-  # (Capturing an already-installed ext build as "factory" is exactly what breaks rollback.)
-  if is_factory "$CUR"; then
+  # First install: only capture a backup if /oem currently holds a factory rkipc.
+  # Capturing an already-installed ext build as "factory" is what breaks rollback.
+  if is_factory_rkipc /oem/usr/bin/rkipc; then
     cp /oem/usr/bin/rkipc /userdata/rkipc.factory.bak
-    echo "saved /userdata/rkipc.factory.bak (verified factory $CUR)"
-  elif is_ext_build "$CUR"; then
-    echo "FATAL: /oem rkipc ($CUR) is a known EXTENSION build, not clean factory, and no"
-    echo "       factory backup exists -- refusing to capture an ext build as 'factory'."
-    echo "       Restore the true factory rkipc first (md5 one of: $VERIFIED_FACTORY_MD5S)."; exit 1
+    # Provenance sidecar: which baseline this device shipped with. Support needs
+    # this when a device turns up later with an unfamiliar rkipc.
+    {
+      echo "md5=$CUR"
+      echo "size=$CUR_SIZE"
+      echo "rootfs=$OSVER"
+      echo "captured_by=recamera-ext-api install.sh"
+      echo "captured_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
+    } > /userdata/rkipc.factory.bak.info
+    echo "saved /userdata/rkipc.factory.bak ($CUR, $CUR_SIZE B) + .info"
   else
-    echo "FATAL: /oem rkipc ($CUR) is neither a verified factory nor a known build."
-    echo "       Refusing to guess a rollback target. Verify this device's factory rkipc"
-    echo "       (strings rkipc | grep /run/recamera  must be empty), append its md5 to"
-    echo "       VERIFIED_FACTORY_MD5S, then re-run."; exit 1
+    echo "REFUSING: /oem rkipc ($CUR) CARRIES extension markers -- it is already one of our"
+    echo "       builds, and no factory backup exists. Refusing to capture an extension"
+    echo "       build as 'factory': that would turn every future rollback into a no-op."
+    forced "no factory rkipc to capture"
   fi
 fi
 
-echo "=== [3/7] backup factory entry.cgi (once) ==="
-if [ ! -f /userdata/entry.cgi.factory.bak ]; then
+echo "=== [4/8] backup factory entry.cgi (once, content-verified) ==="
+if [ -f /userdata/entry.cgi.factory.bak ]; then
+  if is_factory_entry /userdata/entry.cgi.factory.bak; then
+    echo "entry.cgi backup exists and carries no extension markers"
+  else
+    echo "WARN: /userdata/entry.cgi.factory.bak carries extension markers -- not a factory"
+    echo "      entry.cgi. Leaving it alone; restoring it would be a no-op. Recover the"
+    echo "      factory entry.cgi with an OTA / update.img flash if you need it."
+  fi
+elif is_factory_entry /oem/usr/www/cgi-bin/entry.cgi; then
   cp /oem/usr/www/cgi-bin/entry.cgi /userdata/entry.cgi.factory.bak
-  echo "saved /userdata/entry.cgi.factory.bak"
+  echo "saved /userdata/entry.cgi.factory.bak ($(md5of /userdata/entry.cgi.factory.bak))"
 else
-  echo "entry.cgi backup exists"
+  echo "WARN: /oem entry.cgi already carries extension markers and no backup exists --"
+  echo "      skipping capture (an extension entry.cgi must never be stored as factory)."
 fi
 
-echo "=== [4/7] verify /oem writable ==="
+echo "=== [5/8] verify /oem writable ==="
 touch /oem/.wtest && rm -f /oem/.wtest && echo "OEM writable" || { echo "FATAL /oem not writable"; exit 1; }
 
-echo "=== [5/7] install into /oem (persistent) ==="
+echo "=== [6/8] install into /oem (persistent) ==="
 cp "$PKG/rkipc"    /oem/usr/bin/rkipc                    && chmod 755 /oem/usr/bin/rkipc
 cp "$PKG/entry.cgi" /oem/usr/www/cgi-bin/entry.cgi       && chmod 755 /oem/usr/www/cgi-bin/entry.cgi
 cp "$PKG/sdk/lib/librecamera_ext.so.1.0.0" /oem/usr/lib/ && chmod 755 /oem/usr/lib/librecamera_ext.so.1.0.0
@@ -94,7 +183,7 @@ cp "$PKG/sdk/recamera_ext.h" /userdata/sdk/ 2>/dev/null || true
 sync
 echo "installed. post md5:"; md5of /oem/usr/bin/rkipc; md5of /oem/usr/www/cgi-bin/entry.cgi; md5of /oem/usr/lib/librecamera_ext.so.1.0.0
 
-echo "=== [6/7] provision rknnlite python runtime (best-effort) ==="
+echo "=== [7/8] provision rknnlite python runtime (best-effort) ==="
 # Adds the Python inference runtime (rknn-toolkit-lite2 + deps) so vision apps run
 # out of the box. Failures here only WARN -- the rkipc install above is already done,
 # so we never block the main path.  Idempotent: skips work already present.
@@ -153,6 +242,6 @@ echo "    PYTHONPATH=/userdata/local:/userdata/sdk/python \\"
 echo "    LD_LIBRARY_PATH=/oem/usr/lib \\"
 echo "    $RKNNENV/bin/python3 <app>.py"
 
-echo "=== [7/7] reboot to activate new rkipc ==="
+echo "=== [8/8] reboot to activate new rkipc ==="
 echo "run 'reboot' now (or pass --reboot). After ~1-2min self-check: ls /run/recamera/"
-if [ "$1" = "--reboot" ]; then sync; reboot; fi
+if [ "$DO_REBOOT" = 1 ]; then sync; reboot; fi

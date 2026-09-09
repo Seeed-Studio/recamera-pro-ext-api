@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# deploy-app.sh -- reCamera Pro v1.5.0 application-layer one-shot deploy.
+# deploy-app.sh -- reCamera Pro v1.6.2 application-layer one-shot deploy.
 #
-# Brings a device to the full v1.5.0 application state, in order:
+# Brings a device to the full v1.6.2 application state, in order:
 #   1. kit + SDK + inference wheels (jinja2/markupsafe)  -> /userdata/local/kit, /userdata/sdk, /userdata/rknnenv
 #   2. appmgr (App Center manager)                       -> /userdata/local/appmgr   (+ restart)
 #      + nginx edge conf ext_appmgr.conf (/api/appMgr/ -> :8130) and the
@@ -26,7 +26,7 @@
 # Usage:
 #   ./deploy-app.sh [--host <ip>] [--skip-kit] [--skip-frontend] [--with-apps]
 #                   [--no-activate]
-#     --host          device IP (default 192.168.42.1), adb serial = <ip>:5555
+#     --host          device IP (default 100.158.145.29), adb serial = <ip>:5555
 #     --activate-app  app id to activate at the end (default retail-vision)
 #     --skip-kit      skip step 1 (kit already installed)
 #     --skip-frontend skip step 3
@@ -45,7 +45,7 @@
 set -euo pipefail
 
 # ---- args ------------------------------------------------------------------
-HOST=192.168.42.1
+HOST=100.158.145.29
 ACTIVATE_APP=retail-vision
 SKIP_KIT=0
 SKIP_FRONTEND=0
@@ -68,7 +68,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SERIAL="${HOST}:5555"
 TS="$(date +%Y%m%d-%H%M%S)"
 STAGE=/userdata/_deploy
-VER=1.5.0
+VER=1.6.3
 
 PKG_KIT="$HERE/recamera-ext-kit-v${VER}.tar.gz"
 PKG_APPMGR="$HERE/appmgr-v${VER}.tar.gz"
@@ -231,9 +231,16 @@ EDGE_OUT="$(ash 'M=/userdata/local/appcenter/ext_appmgr.conf; L=/oem/usr/etc/ngi
      rm -f $L.prev')"
 case "$EDGE_OUT" in *edge-reloaded*) ;; *) die "nginx rejected ext_appmgr.conf (nginx -t failed); previous edge conf restored: $EDGE_OUT" ;; esac
 EDGE_CODE="$(ash "sleep 1; curl -sk -m 8 -o /dev/null -w '%{http_code}' https://127.0.0.1/api/appMgr/list; echo")"
+# 401 and 403 both mean "the JWT gate rejected an unauthenticated request", and
+# which one comes out is the firmware's choice, not ours: nginx passes through
+# whatever auth_request -> entry.cgi answers, and the shipped verifier answers
+# 403 with HTTPS on (measured on recamera-pro-test, 2026-08-19). Accepting only
+# 401 aborted the deploy on every HTTPS-enabled device, after the conf was
+# already installed. The failure this check exists to catch -- the edge not
+# wired to :8130 -- still shows up, as 404/502/000.
 case "$EDGE_CODE" in
-  200|401) ok "nginx edge live: /api/appMgr/ -> :8130 (HTTP $EDGE_CODE); S94appmgr installed for boot" ;;
-  *) die "nginx edge check failed: GET /api/appMgr/list -> HTTP ${EDGE_CODE:-?} (expected 401 behind the JWT gate)" ;;
+  200|401|403) ok "nginx edge live: /api/appMgr/ -> :8130 (HTTP $EDGE_CODE); S94appmgr installed for boot" ;;
+  *) die "nginx edge check failed: GET /api/appMgr/list -> HTTP ${EDGE_CODE:-?} (expected 200/401/403 behind the JWT gate)" ;;
 esac
 
 # ---- step 3: frontend (differential sync) ----------------------------------

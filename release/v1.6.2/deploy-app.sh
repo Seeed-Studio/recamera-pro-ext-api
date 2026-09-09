@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# deploy-app.sh -- reCamera Pro v1.5.0 application-layer one-shot deploy.
+# deploy-app.sh -- reCamera Pro v1.6.2 application-layer one-shot deploy.
 #
-# Brings a device to the full v1.5.0 application state, in order:
+# Brings a device to the full v1.6.2 application state, in order:
 #   1. kit + SDK + inference wheels (jinja2/markupsafe)  -> /userdata/local/kit, /userdata/sdk, /userdata/rknnenv
 #   2. appmgr (App Center manager)                       -> /userdata/local/appmgr   (+ restart)
 #      + nginx edge conf ext_appmgr.conf (/api/appMgr/ -> :8130) and the
@@ -26,7 +26,7 @@
 # Usage:
 #   ./deploy-app.sh [--host <ip>] [--skip-kit] [--skip-frontend] [--with-apps]
 #                   [--no-activate]
-#     --host          device IP (default 192.168.42.1), adb serial = <ip>:5555
+#     --host          device IP (default 100.158.145.29), adb serial = <ip>:5555
 #     --activate-app  app id to activate at the end (default retail-vision)
 #     --skip-kit      skip step 1 (kit already installed)
 #     --skip-frontend skip step 3
@@ -45,7 +45,7 @@
 set -euo pipefail
 
 # ---- args ------------------------------------------------------------------
-HOST=192.168.42.1
+HOST=100.158.145.29
 ACTIVATE_APP=retail-vision
 SKIP_KIT=0
 SKIP_FRONTEND=0
@@ -68,7 +68,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SERIAL="${HOST}:5555"
 TS="$(date +%Y%m%d-%H%M%S)"
 STAGE=/userdata/_deploy
-VER=1.5.0
+VER=1.6.2
 
 PKG_KIT="$HERE/recamera-ext-kit-v${VER}.tar.gz"
 PKG_APPMGR="$HERE/appmgr-v${VER}.tar.gz"
