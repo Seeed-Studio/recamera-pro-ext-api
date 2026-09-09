@@ -86,6 +86,18 @@ PROCESS_FENCE_SETTLE_SEC = float(os.environ.get(
     "APPMGR_PROCESS_FENCE_SETTLE_SEC", "0.8"))
 _PROCESS_FENCE_POLL_SEC = 0.05
 
+# ---- app log retention (runtime ring buffer via pipe drain) ---------------- #
+# app.log is drained from the app's stdout/stderr by a per-run pump thread
+# (see _app_log_pump) -- NOT handed to the child as a direct fd -- so it can be
+# rotated WHILE the app runs, not only between runs.  When the live app.log
+# reaches APP_LOG_MAX_BYTES the generations shift app.log -> .1 -> ... -> .N
+# (oldest dropped), bounding the on-disk footprint of a long-running app to
+# (APP_LOG_BACKUPS + 1) * APP_LOG_MAX_BYTES.  Set APP_LOG_MAX_BYTES<=0 to
+# disable rotation (the pump then just appends without bounding).
+APP_LOG_MAX_BYTES = int(os.environ.get(
+    "APPMGR_APP_LOG_MAX_BYTES", str(2 * 1024 * 1024)))
+APP_LOG_BACKUPS = int(os.environ.get("APPMGR_APP_LOG_BACKUPS", "3"))
+
 # ---- app child registry (健壮#17) ------------------------------------------- #
 # pid -> Popen for the app children THIS appmgr launched. SIGCHLD reaping consults
 # ONLY this registry (via Popen.poll(), the single reaper for each app pid) and
@@ -95,6 +107,11 @@ _PROCESS_FENCE_POLL_SEC = 0.05
 # stolen status as ChildProcessError -> returncode 0, so a FAILED runtime probe
 # would read as success (voiceruntime.py judges "present" off that return code).
 _apps: Dict[int, "subprocess.Popen"] = {}
+
+# Per-app log-drain threads (one per RUNNING app).  start() spawns the pump to
+# drain the child's stdout/stderr pipe into app.log with live rotation; stop()
+# / _terminate_proc join it after the group is dead so the final bytes flush.
+_log_pumps: Dict[str, threading.Thread] = {}
 
 # The three files in one run record have an explicit commit order
 # (PGID -> boot ID -> PID commit marker), but rename(2) can only make each file
@@ -450,7 +467,7 @@ def reap_children() -> int:
     return n
 
 
-def _sigchld(signum, frame):           # pragma: no cover - trivial, exercised via reap_children
+def _sigchld(*_):           # pragma: no cover - trivial, exercised via reap_children
     reap_children()
 
 
@@ -986,21 +1003,199 @@ def _clear_ready(app_id: str) -> None:
         pass
 
 
-def _log_tail(app_id: str, limit: int = 1500) -> str:
-    """Last `limit` bytes of the app's stdout/stderr log -- the root cause a
-    failed startup left behind (ImportError, `model not found`, bind refused)."""
+def _shift_log_generations(logpath: str, *, backups: int) -> None:
+    """Rotate ``logpath`` -> ``.1`` -> ``.2`` -> ... -> ``.N`` (oldest dropped).
+
+    Pure path-based generation shift with NO size check; the caller decides
+    WHEN to rotate (the pump checks the cap, the pre-spawn path stats first).
+    ``backups < 1`` deletes ``logpath`` outright.  Every step is best-effort: a
+    missing file, a read-only tree, or a race with an uninstall must never raise
+    -- a failed rotation only means the next chunk keeps appending to app.log.
+    """
+    if backups < 1:
+        try:
+            os.unlink(logpath)
+        except OSError:
+            pass
+        return
+    logdir = os.path.dirname(logpath)
+    # Drop the oldest generation, then shift the survivors up by one.
     try:
-        with open(os.path.join(paths.logdir(app_id), "app.log"), "rb") as f:
-            try:
-                f.seek(-limit, os.SEEK_END)
-            except OSError:
-                f.seek(0)
-            return f.read().decode("utf-8", "replace").strip()
+        os.unlink(os.path.join(logdir, "app.log.%d" % backups))
     except OSError:
-        return ""
+        pass
+    for gen in range(backups - 1, 0, -1):
+        src = os.path.join(logdir, "app.log.%d" % gen)
+        dst = os.path.join(logdir, "app.log.%d" % (gen + 1))
+        try:
+            os.replace(src, dst)
+        except OSError:
+            pass
+    try:
+        os.replace(logpath, os.path.join(logdir, "app.log.1"))
+    except OSError:
+        pass
 
 
-def _await_ready(app_id: str, proc: "subprocess.Popen", ready_path: str,
+def _rotate_app_log(app_id: str, *, max_bytes: int, backups: int) -> None:
+    """Pre-spawn rotation: shift the previous run's ``app.log`` out of the way
+    before the pump reopens a fresh file.
+
+    Size-gated so a small leftover log is left in place (the pump will rotate it
+    live once it actually crosses the cap), preserving recent history across the
+    restart instead of bumping every generation on every launch.  ``max_bytes<=0``
+    disables rotation entirely.  Kept on the app_id-based signature the tests
+    exercise; the live-rotation path uses ``_shift_log_generations`` directly.
+    """
+    if max_bytes <= 0:
+        return
+    logpath = os.path.join(paths.logdir(app_id), "app.log")
+    try:
+        if os.path.getsize(logpath) <= max_bytes:
+            return
+    except OSError:
+        return
+    _shift_log_generations(logpath, backups=backups)
+
+
+def _write_log_chunk(logf, logpath: str, chunk: bytes, *, max_bytes: int,
+                     backups: int):
+    """Append ``chunk`` to ``logf``, rotating mid-chunk so app.log never exceeds
+    ``max_bytes`` by more than the last chunk's worth of slack.
+
+    Returns the (possibly re-opened) file object the caller must keep using.
+    ``max_bytes<=0`` skips the cap entirely (unbounded append).
+    """
+    if max_bytes <= 0:
+        logf.write(chunk)
+        return logf
+    offset = 0
+    n = len(chunk)
+    while offset < n:
+        try:
+            cur = os.path.getsize(logpath)
+        except OSError:
+            cur = 0
+        room = max_bytes - cur
+        if room <= 0:
+            # Current file is full: rotate and reopen before continuing.
+            try:
+                logf.close()
+            except OSError:
+                pass
+            _shift_log_generations(logpath, backups=backups)
+            logf = open(logpath, "ab", buffering=0)
+            continue
+        take = min(room, n - offset)
+        logf.write(chunk[offset:offset + take])
+        offset += take
+    return logf
+
+
+def _app_log_pump(pipe_fd: int, logpath: str, *, max_bytes: int,
+                  backups: int) -> None:
+    """Drain the app's stdout/stderr pipe into ``app.log`` with live rotation.
+
+    Runs in a daemon thread for the lifetime of ONE app run.  The child's
+    stdout/stderr is wired to a pipe (NOT a direct file fd) precisely so this
+    thread can rotate the log WHILE the app runs: the child no longer owns the
+    app.log inode, so renaming the path reclaims it.  The pipe yields EOF once
+    every writer -- the leader and any helper that inherited its stdout --
+    has exited, so the pump drains the final buffered bytes and exits.
+
+    A failure here (disk full, permission, vanished path) must never kill the
+    supervised app or appmgr: it is swallowed and draining simply stops, leaving
+    the app running with its output discarded.
+    """
+    logf = None
+    try:
+        pipe = os.fdopen(pipe_fd, "rb", buffering=0)
+        try:
+            logf = open(logpath, "ab", buffering=0)
+            while True:
+                chunk = pipe.read(16384)
+                if not chunk:
+                    break
+                logf = _write_log_chunk(
+                    logf, logpath, chunk, max_bytes=max_bytes, backups=backups)
+        finally:
+            try:
+                pipe.close()
+            except OSError:
+                pass
+    except Exception:
+        # Best-effort drain: a broken log sink cannot cascade into appmgr.
+        pass
+    finally:
+        if logf is not None:
+            try:
+                logf.close()
+            except OSError:
+                pass
+
+
+def _join_log_pump(app_id: str, *, timeout: float = 2.0) -> None:
+    """Best-effort flush of a run's final log bytes.
+
+    Pops and joins the app's drain thread.  Must be called ONLY after the
+    process group is dead (so the pipe has reached EOF); otherwise the join
+    blocks up to ``timeout`` and then yields with the daemon pump still running.
+    Never raises -- a lingering pump is harmless (it exits on its own once the
+    pipe EOFs) and must not interfere with the lifecycle caller.
+    """
+    pump = _log_pumps.pop(app_id, None)
+    if pump is None:
+        return
+    try:
+        pump.join(timeout)
+    except Exception:
+        pass
+
+
+def _read_log_file_tail(path: str, budget: int) -> bytes:
+    """Last up to ``budget`` bytes of ``path``, or ``b""`` if absent/unreadable."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - budget), os.SEEK_SET)
+            return f.read(budget)
+    except OSError:
+        return b""
+
+
+def _log_tail(app_id: str, limit: int = 1500) -> str:
+    """Last `limit` bytes of the app's CURRENT-RUN log (app.log only) -- the
+    root cause a failed startup left behind (ImportError, `model not found`,
+    bind refused).  Deliberately single-file so a startup-failure message never
+    mixes in the previous run's rotated tail (app.log.1)."""
+    return _read_log_file_tail(
+        os.path.join(paths.logdir(app_id), "app.log"), limit
+    ).decode("utf-8", "replace").strip()
+
+
+def read_log_span(app_id: str, budget: int = 512 * 1024) -> bytes:
+    """Last up to ``budget`` bytes of the app's log stream, spanning app.log
+    AND, when the current app.log is smaller than ``budget``, the tail of
+    app.log.1.
+
+    For the web log view: a request right after a rotation would otherwise see
+    only the few bytes written since the rotation; spanning the boundary keeps
+    the window full.  If app.log is momentarily absent (the sub-ms rotation gap
+    between rename and reopen) app.log.1 alone fills the budget.  Returns b""
+    when no log exists yet.  ``_log_tail`` (startup-failure path) intentionally
+    does NOT span, to avoid mixing runs.
+    """
+    data = _read_log_file_tail(
+        os.path.join(paths.logdir(app_id), "app.log"), budget)
+    if len(data) < budget:
+        data = _read_log_file_tail(
+            os.path.join(paths.logdir(app_id), "app.log.1"),
+            budget - len(data)) + data
+    return data
+
+
+def _await_ready(proc: "subprocess.Popen", ready_path: str,
                  timeout: float) -> bool:
     """Block until the app signals READY, dies, or `timeout` elapses.
 
@@ -1071,6 +1266,9 @@ def _terminate_proc(app_id: str, proc: "subprocess.Popen", grace: float = 3.0,
     _assert_process_fence_cleared(
         app_id, pid, pgid, leader_authenticated=True)
     drain_exits()
+    # The group is now dead -> the pipe has EOF'd -> join the drain thread so
+    # its final buffered bytes reach app.log before this run is forgotten.
+    _join_log_pump(app_id)
     _clear_ready(app_id)
     _clear_pidfile(app_id, pid)
     _clear_pgidfile(app_id, pgid)
@@ -1090,6 +1288,13 @@ def _startup_failure(app_id: str, proc: "subprocess.Popen", timeout: float) -> s
                 f"(code={info.get('code')}, signal={info.get('signal')})")
     else:
         base = f"app {app_id!r} did not signal ready within {timeout:g}s"
+    # The pump drains the child's final stderr (the crash traceback) only after
+    # the child exits and the pipe EOFs.  Best-effort: when the leader has
+    # already exited (rc is not None) join briefly so _log_tail sees the cause
+    # instead of stopping one read short; a still-live timeout case skips this
+    # (a running app's pipe cannot be drained).  _terminate_proc re-joins later.
+    if rc is not None:
+        _join_log_pump(app_id, timeout=0.5)
     tail = _log_tail(app_id)
     return base + (f"; last log:\n{tail}" if tail else "")
 
@@ -1144,8 +1349,15 @@ def start(app_id: str, *, wait_ready: bool = True,
     cmd = _build_cmd(app_id, manifest)
 
     os.makedirs(paths.logdir(app_id), exist_ok=True)
+    # Bound app.log across restarts: rotate the previous run's leftover out of
+    # the way before the pump reopens a fresh file (see _rotate_app_log).
+    _rotate_app_log(app_id, max_bytes=APP_LOG_MAX_BYTES, backups=APP_LOG_BACKUPS)
     logpath = os.path.join(paths.logdir(app_id), "app.log")
-    logf = open(logpath, "ab", buffering=0)
+    # The child's stdout/stderr goes to a PIPE, not a direct file fd, so the
+    # drain thread can rotate app.log WHILE the app runs without the child still
+    # holding the old inode.  The parent must close write_fd right after Popen
+    # or the pipe would never reach EOF when the child exits.
+    read_fd, write_fd = os.pipe()
 
     env = _build_env(
         app_id, manifest, npu_managed=npu_managed,
@@ -1163,12 +1375,21 @@ def start(app_id: str, *, wait_ready: bool = True,
         cmd,
         cwd=d,
         env=env,
-        stdout=logf,
+        stdout=write_fd,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         start_new_session=True,     # setsid: child is session+group leader, pgid == pid
     )
-    logf.close()
+    os.close(write_fd)             # parent must not hold the write end
+    pump = threading.Thread(
+        target=_app_log_pump,
+        args=(read_fd, logpath),
+        kwargs={"max_bytes": APP_LOG_MAX_BYTES, "backups": APP_LOG_BACKUPS},
+        name="app-log-%s" % app_id,
+        daemon=True,
+    )
+    _log_pumps[app_id] = pump
+    pump.start()
     pgid = proc.pid                  # start_new_session => leader PID == PGID
     _register_child(proc, app_id=app_id, pgid=pgid, boot_id=boot_id)
     try:
@@ -1196,7 +1417,7 @@ def start(app_id: str, *, wait_ready: bool = True,
         return proc.pid
 
     timeout = READY_TIMEOUT if ready_timeout is None else ready_timeout
-    if _await_ready(app_id, proc, ready_path, timeout):
+    if _await_ready(proc, ready_path, timeout):
         return proc.pid
     # Startup failed: capture the cause, then guarantee teardown (no orphan) so
     # the caller's transactional rollback starts from a clean slate.
@@ -1299,20 +1520,6 @@ def _owned_live_pgid(pid: int, app_id: str) -> Optional[int]:
               "pid=%s actual_pgid=%s" % (app_id, pid, pgid), flush=True)
         return None
     return pgid
-
-
-def _killpg(pid: int, sig: int) -> None:
-    """Legacy helper for callers that only have a live leader PID."""
-    try:
-        pgid = os.getpgid(pid)
-    except OSError:
-        pgid = None
-    if pgid is not None and _killpg_id(pgid, sig):
-        return
-    try:
-        os.kill(pid, sig)
-    except OSError:
-        pass
 
 
 def stop(app_id: str, grace: float = 5.0,
@@ -1422,6 +1629,10 @@ def stop(app_id: str, grace: float = 5.0,
     # Only a proven-empty authenticated fence may retire its exit event and
     # durable identity records.
     drain_exits()
+    # The process group is dead -> every pipe writer has gone -> the drain
+    # thread sees EOF.  Join it so this app's final log bytes are flushed to
+    # app.log before a subsequent start() might rotate the file away.
+    _join_log_pump(app_id)
 
     # ★No global `pkill -x ffmpeg`★ (健壮#19 / P4). The app was launched with
     # start_new_session, so its pgid == its pid, and the ffmpeg the kit frame

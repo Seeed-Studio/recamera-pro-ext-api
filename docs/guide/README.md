@@ -663,6 +663,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **硬件隐私遮罩** — [hw-mask-api.md](./hw-mask-api.md)：`rc_ext_mask_*` / `MaskControl` 控制 VI 层硬件 COVER 遮块，增量移动不闪、不落盘；auto/manual 配额 `[3,6)`/`[0,3)`。
 - **RK 硬件编解码** — [hw-codec-gstreamer.md](./hw-codec-gstreamer.md)：出厂镜像缺的是 `gstreamer-rockchip` 插件层而非芯片能力（MPP/RGA 库与 `/dev/mpp_service` 都在）。零源码修改交叉编译出 `libgstrockchipmpp.so`，`h265parse` 取 buildroot 现成产物，只写 `/userdata`，硬件 H.265 **解码**端到端实测通过（`gi` + `cv2.CAP_GSTREAMER`）；**编码器未测**，且会与 rkipc 抢 VEPU。含三条坑（`LD_LIBRARY_PATH` 必须追加、registry 缓存）。
 - **输出组件（声明式结果输出）** — [output-sink.md](./output-sink.md)：manifest 声明 `capabilities:["output"]` + `output` 块（fields/映射/模板），kit 的 `ConfigurableSink` 把每帧结果发到 MQTT/HTTP/UART/WS，含 Home Assistant Discovery + 上下线 LWT，**app.py 零输出代码**；不声明则 app 自己发。
+- **应用日志（app.log 轮转 + Web 查看）** — [app-log.md](./app-log.md)：appmgr 把每个 app 的 stdout/stderr 接到 pipe、由后台 drain 线程写进 `app.log` 并**运行期实时轮转**（单文件默认 2 MiB、留 3 代、单应用 ≤ 8 MiB），长期运行也不无限增长；Web 日志页跨 `app.log`+`app.log.1` 补足 512 KiB 窗口，轮转后也不会看到空。
 
 ---
 

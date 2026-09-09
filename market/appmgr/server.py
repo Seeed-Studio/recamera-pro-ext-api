@@ -3187,15 +3187,9 @@ def do_v1_logs(app_id: str, tail: int = 200) -> dict:
     except (TypeError, ValueError) as exc:
         raise ValueError("tail must be an integer") from exc
     tail = min(2000, max(1, tail))
-    logfile = os.path.join(paths.logdir(app_id), "app.log")
-    try:
-        with open(logfile, "rb") as source:
-            source.seek(0, os.SEEK_END)
-            size = source.tell()
-            source.seek(max(0, size - 512 * 1024), os.SEEK_SET)
-            data = source.read(512 * 1024)
-    except FileNotFoundError:
-        data = b""
+    # Span app.log + app.log.1 so a request right after a rotation still sees a
+    # full 512 KiB window instead of the near-empty freshly-rotated app.log.
+    data = supervisor.read_log_span(app_id, 512 * 1024)
     lines = data.decode("utf-8", "replace").splitlines()[-tail:]
     return {"id": app_id, "lines": lines, "text": "\n".join(lines)}
 
