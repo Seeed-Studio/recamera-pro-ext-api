@@ -3536,6 +3536,25 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        output_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/output/(preview|test)", path)
+        if output_match:
+            try:
+                from . import output_tools
+                app_id, action = output_match.groups()
+                body = self._body_json_v1(cap=256 * 1024)
+                manifest, base = {}, {}
+                if app_id != builtin.BUILTIN_ID:
+                    _require_installed(app_id)
+                    with open(os.path.join(paths.app_dir(app_id), "manifest.json")) as source:
+                        manifest = json.load(source)
+                    if "output" not in (manifest.get("capabilities") or []):
+                        raise ValueError("application does not support configurable output")
+                    base = appconfig.effective_values(manifest, app_id)
+                operation = output_tools.preview if action == "preview" else output_tools.test_delivery
+                return self._send(200, operation(app_id, body, manifest=manifest, base=base))
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/api/app-center/v1/uploads":
             try:
                 try:

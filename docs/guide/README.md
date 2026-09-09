@@ -655,6 +655,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 - **音频 PCM** — [audio-pcm.md](./audio-pcm.md)：`arecord -D ai_asr -r 16000 -c 4 -f S16_LE` 从预留的 ALSA `ai_asr` 通道取 4 通道麦克风原始 PCM（软件取 ch0，勿用 `-c 1`），dsnoop 共享、不与 rkipc 音频冲突、无 VQE（AEC/NS 自理）。
 - **GPIO 结果触发** — [gpio-result-trigger.md](./gpio-result-trigger.md)：订阅 notify WS 拿结果 + gmgr API 写引脚（`GPIO3_B2`=pin106 / `GPIO3_B3`=pin107），检测到目标即拉高/拉低引脚。仅数字 0/1，无 PWM。不需改固件。
 - **前端扩展挂载** — [frontend-extension.md](./frontend-extension.md)：放一个 `ext_<name>.conf` 到 nginx 配置目录，把你的页面/后端挂到 `/extension/<name>/`，复用官方 dashboard 的 JWT 登录会话。
+- **AI 消息发送设置** — [output-settings.md](./output-settings.md)：结果输出配置、草稿预览和 HTTP/MQTT 发送测试，以及网页结果与实际投递状态的区别。
 - **结果推送（notify）** — [result-push.md](./result-push.md)：向 `/var/tmp/notify` 写 `<le32 len><InferenceResult>`，分发到 WS/MQTT/HTTP/UART。仅分发、不上 OSD、无鉴权、受全局限速。要叠加请改用本文 §4 的结果注入；托管应用要按结果启动录像则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 - **rkipc RPC 现状** — [rkipc-rpc-status.md](./rkipc-rpc-status.md)：`/var/tmp/rkipc` 是 rkipc↔entry.cgi 的内部 RPC，不承诺稳定、勿直连；配置类需求走 entry.cgi HTTP API，等 M4 版本化控制面。
 - **统一 AI 结果与软件叠加** — [result-hub-v2.md](./result-hub-v2.md) / [ai-result-overlay.md](./ai-result-overlay.md)：`/ws/ai/results/v2` 以稳定 v2 envelope 合并 builtin 与多 app，支持 raw/formatted、latest frame、status 保留与 event 短重放；8123/8124 只作 legacy 兼容。浏览器叠加不进码流。
