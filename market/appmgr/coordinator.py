@@ -5,10 +5,12 @@ import json
 import os
 import time
 import uuid
+from dataclasses import replace
 from typing import Callable, Optional
 
 from . import (
     config as appconfig,
+    dependencies,
     inference_auth,
     paths,
     resources,
@@ -33,6 +35,7 @@ class AppCoordinator:
     def __init__(self, *, resource_manager: Optional[resources.ResourceManager] = None,
                  supervisor_module=supervisor, state_module=state,
                  dependency_probe: Optional[Callable[[str], bool]] = None,
+                 ipc_dependency_probe: Optional[Callable[[resources.Plan], dict]] = None,
                  result_gateway_sock: Optional[str] = None,
                  inference_service_sock: Optional[str] = None,
                  inference_registry=None):
@@ -40,6 +43,7 @@ class AppCoordinator:
         self.supervisor = supervisor_module
         self.state = state_module
         self.dependency_probe = dependency_probe or resources.probe_inference_service
+        self.ipc_dependency_probe = ipc_dependency_probe or dependencies.probe_plan
         self.result_gateway_sock = (result_gateway_sock
                                     if result_gateway_sock is not None
                                     else paths.RESULT_GATEWAY_SOCK)
@@ -101,6 +105,29 @@ class AppCoordinator:
                 instance_id=instance_id,
                 generation=int(generation),
             )
+
+    def _check_dependencies(self, plan, launch_mode="managed"):
+        """Keep preflight and post-failure rechecks on the same read-only path."""
+        if plan.npu_mode == "scheduled":
+            dependency = self.dependency_probe(self.inference_service_sock)
+            if not isinstance(dependency, dict):
+                dependency = {"available": bool(dependency),
+                              "socket": self.inference_service_sock}
+            available = (dependency.get("available") if isinstance(dependency, dict)
+                         else bool(dependency))
+            if not available:
+                return False, dependency, "scheduled inference service unavailable"
+        # The historical activate/switch callback performs the direct NPU
+        # hand-off even for manifests without model declarations. Probe that
+        # actual callback dependency too, without changing its resource plan.
+        ipc_plan = (replace(plan, npu_mode="legacy-direct")
+                    if launch_mode == "legacy" else plan)
+        dependency = self.ipc_dependency_probe(ipc_plan)
+        if not isinstance(dependency, dict):
+            dependency = {"available": bool(dependency), "socket": "IPC"}
+        available = (dependency.get("available") if isinstance(dependency, dict)
+                     else bool(dependency))
+        return available, dependency, "IPC dependency unavailable"
 
     def start(self, app_id: str, *, manifest: Optional[dict] = None,
               operation: str = "start", launch: Optional[Callable[..., int]] = None,
@@ -241,22 +268,31 @@ class AppCoordinator:
                 launch_mode=launch_mode,
                 reset_restart_history=reset_restart_history)
             generation = int(rec["generation"])
-        # Scheduled NPU is a service dependency, not a claim on the direct
-        # inference-control owner.  Until inferenced exists, keep the desired
-        # application visible as waiting_dependency rather than silently falling
-        # back to direct RKNN ownership.
+        # Probe before reserving resources or spawning children. A temporarily
+        # absent firmware endpoint is a dependency wait, not an application
+        # crash; it must not burn the manifest's bounded restart budget.
         dependency = None
-        if plan.npu_mode == "scheduled" and require_dependencies:
-            dependency = self.dependency_probe(self.inference_service_sock)
-            available = (dependency.get("available") if isinstance(dependency, dict)
-                         else bool(dependency))
+        if require_dependencies:
+            available, dependency, label = self._check_dependencies(plan, launch_mode)
         else:
             available = True
         if not available:
+            # Only an unspawned generation reaches this point. Drop any
+            # reservation left by an interrupted pre-spawn admission.
+            self.resources.release(instance_id, generation)
             detail = ((dependency or {}).get("error")
                       if isinstance(dependency, dict) else None)
-            reason = "scheduled inference service unavailable: %s%s" % (
-                self.inference_service_sock, ": " + detail if detail else "")
+            endpoint = ((dependency or {}).get("socket", self.inference_service_sock)
+                        if isinstance(dependency, dict) else self.inference_service_sock)
+            reason = "%s: %s%s" % (
+                label, endpoint, ": " + detail if detail else "")
+            if isinstance(dependency, dict) and dependency.get("retryable") is False:
+                rec = self.state.transition(
+                    app_id, "failed", reason=reason,
+                    resource_plan=plan.as_dict(), dependency=dependency,
+                    allocations=[],
+                    frame_stream_contract={"id": "", "kind": "none"})
+                return self._result(app_id, rec, None, accepted=False)
             if (reuse_wait_identity
                     and current.get("observed_state") == "waiting_dependency"
                     and current.get("reason") == reason
@@ -269,6 +305,7 @@ class AppCoordinator:
             else:
                 rec = self.state.transition(
                     app_id, "waiting_dependency", reason=reason,
+                    allocations=[],
                     resource_plan=plan.as_dict(),
                     frame_stream_contract=frame_stream_contract,
                     dependency=dependency)
@@ -441,6 +478,23 @@ class AppCoordinator:
                     )
                 raise
             self.resources.release(instance_id, generation)
+            if require_dependencies:
+                available, dependency, label = self._check_dependencies(plan, launch_mode)
+                if (not available and isinstance(dependency, dict)
+                        and dependency.get("retryable") is not False):
+                    # IPC may vanish after preflight and before the child
+                    # opens its real endpoints. Only a fresh failed dependency
+                    # probe permits waiting; a child error while IPC is healthy
+                    # remains an application failure. Teardown/revocation above
+                    # must already have completed before releasing admission.
+                    rec = self.state.transition(
+                        app_id, "waiting_dependency", pid=None, pgid=None,
+                        instance_id=None, allocations=[], teardown_pending=False,
+                        resource_plan=plan.as_dict(), dependency=dependency,
+                        frame_stream_contract={"id": "", "kind": "none"},
+                        reason="%s after launch failure: %s" % (
+                            label, dependency.get("error") or exc))
+                    return self._result(app_id, rec, None, accepted=True)
             self.state.transition(
                 app_id, "failed", pid=None, pgid=None, allocations=[],
                 teardown_pending=False,
@@ -729,7 +783,15 @@ class AppCoordinator:
         if rec.get("desired_state") != state.DESIRED_RUNNING:
             return {"id": app_id, "action": "stopped",
                     "observed_state": rec.get("observed_state")}
-        if rec.get("launch_mode") != "managed":
+        # Legacy activate/switch still does not auto-restart crashed children.
+        # A boot-time dependency wait never launched a child, however, and may
+        # safely retry the same compatibility callback once IPC becomes ready.
+        legacy_admission_wait = (
+            rec.get("observed_state") in ("waiting_dependency", "waiting_resource")
+            and rec.get("pid") is None and rec.get("pgid") is None
+            and not rec.get("started_at") and not rec.get("runtime_guard")
+            and not rec.get("teardown_pending"))
+        if rec.get("launch_mode") != "managed" and not legacy_admission_wait:
             return {"id": app_id, "action": "legacy-unmanaged",
                     "observed_state": rec.get("observed_state")}
 
@@ -741,7 +803,8 @@ class AppCoordinator:
                         "observed_state": observed}
             try:
                 return self.start(app_id, manifest=manifest,
-                                  operation="reconcile_wait", launch=launch)
+                                  operation="reconcile_wait", launch=launch,
+                                  launch_mode=rec.get("launch_mode", "managed"))
             except Exception as exc:
                 return {"id": app_id, "action": "failed",
                         "observed_state": "failed", "reason": str(exc)}
@@ -758,6 +821,11 @@ class AppCoordinator:
             except Exception as exc:
                 return {"id": app_id, "action": "failed",
                         "observed_state": "failed", "reason": str(exc)}
+
+        dependency = rec.get("dependency")
+        if isinstance(dependency, dict) and dependency.get("retryable") is False:
+            return {"id": app_id, "action": "dependency-incompatible",
+                    "observed_state": observed, "reason": rec.get("reason")}
 
         policy = self._restart_policy(manifest)
         if policy["policy"] != "on-failure":

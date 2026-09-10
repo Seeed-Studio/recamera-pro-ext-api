@@ -143,11 +143,15 @@ class ExternalStartFailClosedTests(unittest.TestCase):
         server.supervisor.start = lambda app_id, **kw: (self.started.append(app_id) or 4321)
         server.supervisor.stop = lambda app_id, **kw: (self.stopped.append(app_id) or {})
         server.supervisor.is_running = lambda app_id: None
+        self.coordinator = server._coordinator()
+        self.real_ipc_probe = self.coordinator.ipc_dependency_probe
+        self.coordinator.ipc_dependency_probe = lambda _plan: {"available": True}
         state.set_active(None, None)
         self.addCleanup(self._restore)
 
     def _restore(self):
         # Do not leak this test's active selection into later host suites.
+        self.coordinator.ipc_dependency_probe = self.real_ipc_probe
         state.set_active(None, None)
         server.builtin.stop = self.real["builtin_stop"]
         server._builtin_running = self.real["builtin_running"]

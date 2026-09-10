@@ -64,7 +64,9 @@ import json
 import os
 import queue
 import re
+import signal
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -540,7 +542,8 @@ class BusyError(Exception):
 
 @contextmanager
 def busy_gate(*, wait_timeout: float = 0.0,
-              retry_interval: Optional[float] = None):
+              retry_interval: Optional[float] = None,
+              allow_stopping: bool = False):
     """Acquire the process-wide mutation gate.
 
     The default remains the legacy non-blocking contract.  App Center v1's
@@ -559,6 +562,8 @@ def busy_gate(*, wait_timeout: float = 0.0,
     acquired = False
     try:
         while True:
+            if _service_stopping and not allow_stopping:
+                raise BusyError("appmgr is stopping; no new mutation is accepted")
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 acquired = True
@@ -576,6 +581,8 @@ def busy_gate(*, wait_timeout: float = 0.0,
                     raise BusyError(
                         "appmgr busy: another install/switch/stop in progress")
                 time.sleep(min(retry, remaining))
+        if _service_stopping and not allow_stopping:
+            raise BusyError("appmgr is stopping; no new mutation is accepted")
         yield
     finally:
         try:
@@ -1824,11 +1831,9 @@ def _coordinated_legacy_start(app_id: str, operation: str, proof=None, *,
     """
     manifest = _read_manifest(app_id) or {}
 
-    def launch(**identity):
-        return _start_external_authorized(app_id, proof, **identity)
-
     result = _coordinator().start(
-        app_id, manifest=manifest, operation=operation, launch=launch,
+        app_id, manifest=manifest, operation=operation,
+        launch=_legacy_launch(app_id, operation, proof),
         launch_mode="legacy",
         reset_restart_history=reset_restart_history)
     if result.get("pid") is None:
@@ -1837,6 +1842,15 @@ def _coordinated_legacy_start(app_id: str, operation: str, proof=None, *,
             (operation, app_id, result.get("reason") or
              result.get("observed_state")))
     return int(result["pid"])
+
+
+def _legacy_launch(app_id: str, operation: str, proof=None):
+    """Run the authoritative hand-off only after dependency admission succeeds."""
+    def launch(**identity):
+        current_proof = (proof if proof is not None
+                         else _prepare_external_start(operation, app_id))
+        return _start_external_authorized(app_id, current_proof, **identity)
+    return launch
 
 
 def _stop_external(app_id: str) -> dict:
@@ -3439,6 +3453,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+        if path == "/health":
+            # The HTTP loop starts only after our own result listeners bind.
+            # IPC availability belongs to each application's dependency state.
+            ready = (not _service_stopping and _result_hub_instance is not None
+                     and _result_gateway_instance is not None)
+            return self._send(200 if ready else 503, {
+                "service": "appmgr", "ready": ready,
+            })
         if path == "/api/app-center/v1/policy":
             return self._send(200, do_v1_policy())
         if path == "/api/app-center/v1/store/catalog":
@@ -3893,11 +3915,19 @@ class _Handler(BaseHTTPRequestHandler):
             return self._v1_error(exc)
 
 
+class _ServiceShutdown(Exception):
+    """Leave serve_forever only at its ordinary poll boundary."""
+
+
 class _AppHTTPServer(ThreadingHTTPServer):
     # SSE connections are intentionally long lived.  They must not prevent a
     # service restart from closing the listening socket and exiting promptly.
     daemon_threads = True
     allow_reuse_address = True
+
+    def service_actions(self):
+        if _service_stopping:
+            raise _ServiceShutdown()
 
 
 _single_instance_fh = None
@@ -3993,7 +4023,8 @@ def _reconcile_install_transaction() -> Optional[dict]:
 
 def _recover_incomplete_teardowns(
         coord, *, audit_prefix: str, swept_apps=(),
-        recover_stale_lifecycle: bool = False) -> None:
+        recover_stale_lifecycle: bool = False,
+        stop_event: Optional[threading.Event] = None) -> None:
     """Retire process fences without losing their original desired intent.
 
     ``supervisor.sweep_stale`` runs first at each caller.  It removes a
@@ -4013,6 +4044,8 @@ def _recover_incomplete_teardowns(
         if isinstance(app_id, str) and paths.valid_app_id(app_id)
     }
     for app_id, rec in state.app_states().items():
+        if _lifecycle_stopping(stop_event):
+            return
         try:
             running = supervisor.is_running(app_id)
             has_record = supervisor.has_run_record(app_id)
@@ -4065,8 +4098,14 @@ def _recover_incomplete_teardowns(
                   (audit_prefix, app_id, exc), flush=True)
 
 
-def _boot_restore_locked() -> None:
+def _lifecycle_stopping(stop_event: Optional[threading.Event] = None) -> bool:
+    return _service_stopping or (stop_event is not None and stop_event.is_set())
+
+
+def _boot_restore_locked(stop_event: Optional[threading.Event] = None) -> None:
     """Restore desired apps while the caller owns the mutation gate."""
+    if _lifecycle_stopping(stop_event):
+        return
     coord = _coordinator()
 
     try:
@@ -4080,7 +4119,7 @@ def _boot_restore_locked() -> None:
         swept = supervisor.sweep_stale()
         _recover_incomplete_teardowns(
             coord, audit_prefix="boot", swept_apps=swept,
-            recover_stale_lifecycle=True)
+            recover_stale_lifecycle=True, stop_event=stop_event)
         stale = coord.reconcile_allocations()
         if stale:
             print(f"[appmgr] released stale allocations: {stale}", flush=True)
@@ -4089,6 +4128,8 @@ def _boot_restore_locked() -> None:
 
     active = state.get_active()
     for app_id in state.desired_apps():
+        if _lifecycle_stopping(stop_event):
+            return
         try:
             if not os.path.isdir(paths.app_dir(app_id)):
                 state.transition(app_id, "failed",
@@ -4120,10 +4161,12 @@ def _boot_restore_locked() -> None:
                 # Keep its exact identity/leases and never mint over the fence.
                 continue
             if rec.get("launch_mode") == "legacy" and app_id == active:
-                proof = _prepare_external_start("boot_restore", app_id)
-                pid = _coordinated_legacy_start(
-                    app_id, "boot_restore", proof)
-                result = {"pid": pid, "observed_state": "running"}
+                # Keep desired=running when IPC is still coming up. The legacy
+                # CGI/broker hand-off is deferred until admission succeeds.
+                result = coord.start(
+                    app_id, manifest=manifest, operation="boot_restore",
+                    launch_mode="legacy",
+                    launch=_legacy_launch(app_id, "boot_restore"))
             else:
                 result = coord.start(
                     app_id, manifest=manifest, operation="boot_restore",
@@ -4140,7 +4183,7 @@ def _boot_restore_locked() -> None:
                   flush=True)
 
 
-def _boot_restore() -> None:
+def _boot_restore(stop_event: Optional[threading.Event] = None) -> None:
     """Reconcile and restore every desired-running app, independently.
 
     ``serve`` owns the single-daemon lock, but a short-lived CLI process may
@@ -4151,20 +4194,33 @@ def _boot_restore() -> None:
     gate is allowed to finish; boot then retries from a fresh state/resource
     snapshot instead of serving with stale allocations or dropping a restore.
     """
-    while True:
+    while not _lifecycle_stopping(stop_event):
         try:
-            with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
-                _boot_restore_locked()
+            # The background worker waits outside the gate so shutdown can
+            # cancel contention promptly. Synchronous callers keep their API.
+            timeout = (paths.V1_OPERATION_BUSY_TIMEOUT_SEC
+                       if stop_event is None else 0.0)
+            with busy_gate(wait_timeout=timeout):
+                if stop_event is None:
+                    _boot_restore_locked()
+                else:
+                    _boot_restore_locked(stop_event)
             return
         except BusyError:
             _audit("boot_restore_waiting", reason="mutation gate busy")
             print("[appmgr] boot-restore waiting: mutation gate busy",
                   flush=True)
-            time.sleep(max(0.01, float(paths.V1_OPERATION_BUSY_RETRY_SEC)))
+            delay = max(0.01, float(paths.V1_OPERATION_BUSY_RETRY_SEC))
+            if stop_event is None:
+                time.sleep(delay)
+            else:
+                stop_event.wait(delay)
 
 
-def _reconcile_once() -> list:
+def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
     """Advance desired lifecycle state once; safe to call from host tests."""
+    if _lifecycle_stopping(stop_event):
+        return []
     try:
         supervisor.reap_children()
         supervisor.drain_exits()
@@ -4181,9 +4237,12 @@ def _reconcile_once() -> list:
     # tick; liveness reads remain accurate without cleanup.
     try:
         with busy_gate():
+            if _lifecycle_stopping(stop_event):
+                return []
             swept = supervisor.sweep_stale()
             _recover_incomplete_teardowns(
-                coord, audit_prefix="reconcile", swept_apps=swept)
+                coord, audit_prefix="reconcile", swept_apps=swept,
+                stop_event=stop_event)
             stale = coord.reconcile_allocations()
             if stale:
                 print(f"[appmgr] released stale allocations: {stale}",
@@ -4194,6 +4253,8 @@ def _reconcile_once() -> list:
         pass
     results = []
     for app_id in state.desired_apps():
+        if _lifecycle_stopping(stop_event):
+            break
         rec = state.get_app(app_id) or {}
         # Public legacy activate/switch applications are not auto-restarted,
         # but they still need crash observation: exact inference revocation,
@@ -4204,6 +4265,8 @@ def _reconcile_once() -> list:
             continue
         try:
             with busy_gate():
+                if _lifecycle_stopping(stop_event):
+                    break
                 # Re-read after taking the mutation gate: an explicit stop may
                 # have won the race while this tick was enumerating desired ids.
                 # The install-dir check and its app-wide Hub invalidation also
@@ -4224,9 +4287,12 @@ def _reconcile_once() -> list:
                     continue
                 manifest = _read_manifest(app_id) or {}
                 before = current.get("observed_state")
+                launch = (_legacy_launch(app_id, "reconcile")
+                          if current.get("launch_mode") == "legacy" else
+                          _managed_launch(app_id, "reconcile", manifest))
                 result = coord.reconcile_one(
                     app_id, manifest=manifest,
-                    launch=_managed_launch(app_id, "reconcile", manifest),
+                    launch=launch,
                     retry_interval=float(os.environ.get(
                         "APPMGR_RECONCILE_RETRY", "1.0")))
                 results.append(result)
@@ -4252,19 +4318,33 @@ def _reconcile_once() -> list:
     return results
 
 
-def _reconcile_loop(stop_event: threading.Event, interval: float) -> None:
+def _reconcile_loop(stop_event: threading.Event, interval: float,
+                    restore: bool = False) -> None:
+    # Serialize boot adoption and later retries in one worker; HTTP requests
+    # continue to use the same cross-process mutation gate as this worker.
+    while restore and not _lifecycle_stopping(stop_event):
+        try:
+            _boot_restore(stop_event)
+            restore = False
+        except Exception as exc:
+            _audit("boot_restore_retry", error=repr(exc))
+            stop_event.wait(max(0.1, interval))
     while not stop_event.wait(max(0.1, interval)):
-        _reconcile_once()
+        if _lifecycle_stopping(stop_event):
+            return
+        _reconcile_once(stop_event)
 
 
-def _start_reconciler() -> None:
+def _start_reconciler(*, restore: bool = False) -> None:
     global _reconcile_stop, _reconcile_thread
+    if _service_stopping:
+        return
     if _reconcile_thread is not None and _reconcile_thread.is_alive():
         return
     _reconcile_stop = threading.Event()
     interval = float(os.environ.get("APPMGR_RECONCILE_INTERVAL", "1.0"))
     _reconcile_thread = threading.Thread(
-        target=_reconcile_loop, args=(_reconcile_stop, interval), daemon=True,
+        target=_reconcile_loop, args=(_reconcile_stop, interval, restore), daemon=True,
         name="appmgr-lifecycle-reconciler")
     _reconcile_thread.start()
 
@@ -4273,9 +4353,12 @@ def _stop_reconciler() -> None:
     global _reconcile_stop, _reconcile_thread
     if _reconcile_stop is not None:
         _reconcile_stop.set()
-    thread, _reconcile_thread = _reconcile_thread, None
+    thread = _reconcile_thread
     if thread is not None and thread is not threading.current_thread():
-        thread.join(timeout=2.0)
+        # A current launch/teardown is bounded by the supervisor. Do not tear
+        # down result endpoints while that transaction is still using them.
+        thread.join()
+    _reconcile_thread = None
     _reconcile_stop = None
 
 
@@ -4295,16 +4378,99 @@ def _stop_recording_bridge() -> bool:
     return False
 
 
+def _shutdown_apps() -> None:
+    """Close owned generations while IPC/result services are still available."""
+    failures = []
+    # New HTTP/queued lifecycle mutations are rejected once stopping is set.
+    # Let a transaction that already owns the gate finish rather than throwing
+    # from a signal handler into its durable writes. S94 provides the ultimate
+    # bounded TERM -> KILL timeout if a transaction or kernel fence is stuck.
+    with busy_gate(wait_timeout=90.0, allow_stopping=True):
+        coord = _coordinator()
+        records = state.app_states()
+        app_ids = set(records)
+        # Include same-boot orphan records even if a crash happened before the
+        # coordinator could publish the corresponding state.json entry.
+        try:
+            app_ids.update(app_id for app_id in os.listdir(paths.APPS_DIR)
+                           if paths.valid_app_id(app_id)
+                           and supervisor.has_run_record(app_id))
+        except FileNotFoundError:
+            pass
+        for app_id in sorted(app_ids):
+            rec = records.get(app_id) or {}
+            try:
+                if (supervisor.is_running(app_id) is None
+                        and not supervisor.has_run_record(app_id)
+                        and not rec.get("teardown_pending")
+                        and rec.get("observed_state") not in (
+                            "starting", "ready", "running", "degraded", "stopping")):
+                    continue
+                desired = rec.get("desired_state", state.DESIRED_STOPPED)
+                if desired not in state.DESIRED_STATES:
+                    desired = state.DESIRED_STOPPED
+                coord.stop(app_id, desired=desired)
+                _invalidate_result_if_inactive(app_id)
+                _audit("service_shutdown_stopped", id=app_id, desired=desired)
+            except Exception as exc:
+                failures.append("%s: %s" % (app_id, exc))
+                _audit("service_shutdown_failed", id=app_id, error=repr(exc))
+                print("[appmgr] shutdown failed for %s: %s" % (app_id, exc),
+                      file=sys.stderr, flush=True)
+    if failures:
+        raise RuntimeError("application shutdown incomplete: " + "; ".join(failures))
+
+
 def serve(host: str = None, port: int = None) -> None:
+    global _service_stopping
+    previous_stopping = _service_stopping
+    _service_stopping = False
+    previous_handler = None
+    install_handler = threading.current_thread() is threading.main_thread()
+    lifecycle = {"owned": False, "shutdown_attempted": False}
+
+    def request_stop(signum, frame):
+        # Only assign a flag. A Python signal may interrupt a thread holding an
+        # Event/IO lock; no joins, HTTP shutdown, logging or exceptions here.
+        global _service_stopping
+        _service_stopping = True
+
+    if install_handler:
+        previous_handler = signal.signal(signal.SIGTERM, request_stop)
+    try:
+        _serve(host, port, lifecycle=lifecycle)
+    except BusyError:
+        if not _service_stopping or not lifecycle["owned"]:
+            raise
+    finally:
+        try:
+            # TERM may arrive during startup recovery, before HTTP/result
+            # listeners exist. The current gate owner still completes, and a
+            # refused next startup transaction must also retire old owned apps.
+            if (_service_stopping and lifecycle["owned"]
+                    and not lifecycle["shutdown_attempted"]):
+                _stop_reconciler()
+                _shutdown_apps()
+        finally:
+            if install_handler:
+                signal.signal(signal.SIGTERM, previous_handler)
+            # Existing daemon request threads may still be unwinding. Keep
+            # their mutation gate closed after serve returns; only a deliberate
+            # subsequent serve() may reset the flag for a new service lifetime.
+            _service_stopping = previous_stopping or lifecycle["owned"]
+
+
+def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
     global _operation_manager_instance
-    global _store_manager_instance, _service_stopping
-    _service_stopping = False
+    global _store_manager_instance
+    global _service_stopping
     host = host or paths.HTTP_HOST
     port = port or paths.HTTP_PORT
     if not _acquire_single_instance():
         raise SystemExit("appmgr already running (single-instance lock held)")
+    lifecycle["owned"] = True
     # Lock order is appmgr.lock -> busy.lock -> state._LOCK.  Persist old raw
     # records before creating the coordinator or inspecting desired boot state;
     # ordinary load()/GET paths remain side-effect free.
@@ -4418,12 +4584,11 @@ def serve(host: str = None, port: int = None) -> None:
         print("[appmgr] result hub on unix://%s -> ws://%s:%s" %
               (paths.SYSTEM_RESULT_SOCK, paths.RESULT_HUB_HOST,
                _result_hub_instance.ws_port), flush=True)
-        # Boot-restore after both public endpoints are bound.  Resume every
-        # desired app independently; a failed app does not block HTTP or peers.
-        _boot_restore()
-        _start_reconciler()
+        # Serve management/health requests while applications wait for IPC.
+        # The worker restores desired apps before its first reconciliation.
+        _start_reconciler(restore=True)
         httpd.serve_forever()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, _ServiceShutdown):
         pass
     finally:
         _service_stopping = True
@@ -4433,6 +4598,19 @@ def serve(host: str = None, port: int = None) -> None:
         if _store_manager_instance is not None:
             _store_manager_instance.close()
             _store_manager_instance = None
+        if _operation_manager_instance is not None:
+            # close() refuses new queue submissions. Any current mutation
+            # finishes under busy_gate before _shutdown_apps acquires it.
+            _operation_manager_instance.close()
+        shutdown_error = None
+        try:
+            lifecycle["shutdown_attempted"] = True
+            _shutdown_apps()
+        except Exception as exc:
+            shutdown_error = exc
+            _audit("service_shutdown_incomplete", error=repr(exc))
+            print("[appmgr] service shutdown incomplete: %s" % exc,
+                  file=sys.stderr, flush=True)
         if _result_gateway_instance is not None:
             _result_gateway_instance.stop()
             _result_gateway_instance = None
@@ -4447,5 +4625,6 @@ def serve(host: str = None, port: int = None) -> None:
             _result_hub_instance.stop()
             _result_hub_instance = None
         if _operation_manager_instance is not None:
-            _operation_manager_instance.close()
             _operation_manager_instance = None
+        if shutdown_error is not None:
+            raise shutdown_error

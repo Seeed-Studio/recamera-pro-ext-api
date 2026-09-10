@@ -739,9 +739,10 @@ Owner 导入 body 为
 
 ## 8. 现状与限制（诚实标注）
 
-- **appmgr 是应用方旁挂实现，非原厂内建**。规格 §1（14-20 行）明确"打包分发/签名/沙箱不在本版固件范围"，
-  列为 P1/P2。appmgr 代码+状态放在 `/userdata`（survive OTA），靠 `S94appmgr` 开机重注入
-  nginx 边缘 conf，OTA 后的重注入触发链**不完全自动**（需 `appmgr-restore.sh`，见 `S94appmgr:22-30`）。
+- **平台服务由匹配固件提供**。appmgr/inferenced 代码安装到 `/usr/lib/recamera`，
+  `S93inferenced`、`S94appmgr` 安装到 `/oem/usr/etc/init.d`，在发起 IPC 后启动。
+  nginx 配置直接随固件安装；应用与配置状态保留在 `/userdata`。OTA 需更新匹配的
+  rootfs/OEM，服务脚本不再从 `/userdata` 回注。详见 [部署与运维 §4.2](deploy-ops.md#42-固件服务启动与运维)。
 - **签名/上架是半成品（生态侧）**：机制完整可跑，但只有单密钥自签、无第三方开发者证书体系。
   方案商要上架出厂设备，需 Seeed 侧签发、或自管公钥、或关闭强制。详见 §5。
 - **有卸载、仍无版本管理 API**：卸载已接出（HTTP `POST /api/appMgr/uninstall`

@@ -2,7 +2,7 @@
 
 > **读者**：把扩展 API / 应用中心部署到设备、或负责设备维护的人（Seeed 内部 / 集成商）。
 > **对象设备**：reCamera Pro（RV1126B / recamera_v2），kernel 6.1.157、rootfs `/` 与 `/oem` ext4 rw、`/userdata` ext4 rw 无 noexec。
-> **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`../../CHANGELOG.md`、`../api/spec.md`、`app-center-publishing.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。应用中心部署脚本（`S94appmgr` / `ext_appmgr.conf` / `appmgr-restore.sh`）属发布方私有打包流程，不在公开仓。
+> **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`../../CHANGELOG.md`、`../api/spec.md`、`app-center-publishing.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。当前固件服务入口见 `market/deploy/` 与本节 §4.2。
 > **状态（2026-08-19）**：本文保留了历史部署记录，但当前 checkout 的
 > `release/pkg` 不是可部署发布物：实文件与 MANIFEST/install.sh 哈希不一致，
 > factory/ext rkipc 哈希集合还发生重叠，并且包不含 `inference-control@1`。
@@ -208,29 +208,34 @@ adb shell "dmesg | grep -iE 'vpss|fifo|Oops' | tail"   # 无 VPSS 崩溃
      对 POST/PUT/DELETE 再做一次规范化 scheme/host/port 比较。跨站请求返回 403，
      本机无 Origin 的运维调用请走 `127.0.0.1:8130`。
 
-### 4.2 持久化 S94appmgr（+ OTA restore 机制）
+### 4.2 固件服务启动与运维
 
-`S94appmgr`（应用中心私有打包内的部署脚本，不在公开仓）是 SysVinit 启停脚本，排在 nginx（late init）之后（S94）：
-- `start` 时先 `seed_s94_master`（把自己镜像到 OTA 存活的主拷贝 `/userdata/config/system/etc/init.d/S94appmgr`）→ `reinject_nginx`（`/oem` 上的 `ext_appmgr.conf` 缺失时从 `/userdata/local/appcenter/ext_appmgr.conf` 主拷贝回注，**`nginx -t` 通过才 reload；不通过则删除回注文件、绝不留坏配置**）→ 直接后台 `python3 -m appmgr serve`（不用 busybox `start-stop-daemon -b`，它 mishandle 需要 cd 的 shell wrapper）。
+当前源码把 `S93inferenced`、`S94appmgr` 安装到 `/oem/usr/etc/init.d/`，由
+`RkLunch.sh` 在发起 `rkipc` 后按编号执行。迁移目录只保证 IPC 已收到启动命令，
+不代表摄像头接口已经完成初始化。停止时按 `S94 → S93 → IPC` 的顺序执行。
 
-安装：
+- 服务代码位于 `/usr/lib/recamera/{appmgr,inferenced}`；nginx 配置由构建安装到
+  `/oem/usr/etc/nginx/ext_appmgr.conf`。应用、虚拟环境、配置与状态仍在 `/userdata`。
+- `S93` 通过 inferenced 的 Hello + Status 握手判断就绪；`S94` 请求本机
+  `http://127.0.0.1:8130/health`，验证服务身份和自身初始化状态。探针及重试均有上限，
+  新启动进程超时会清理并返回失败；存在 PID 或 socket 文件不算启动成功。
+- appmgr 先提供管理 HTTP 接口，应用恢复在后台执行。依赖 IPC 或 inferenced 的应用
+  按自身能力声明等待协议接口；未就绪时进入 `waiting_dependency` 并自动重试，
+  保留启动意图、不消耗应用崩溃重启次数。无相关依赖的应用可以正常启动。
+- 构建会清除旧 `/etc/init.d/S93inferenced`、`S94appmgr`，避免重复启动。
+  不再使用 `/userdata` 中的脚本或 nginx 主拷贝回注固件。
+
+检查与手动重启（设备必须已安装匹配固件）：
+
 ```sh
-# 1. 放 live 脚本 + 主拷贝
-adb push S94appmgr /etc/init.d/S94appmgr
-adb shell "chmod +x /etc/init.d/S94appmgr"
-adb shell "mkdir -p /userdata/config/system/etc/init.d && cp /etc/init.d/S94appmgr /userdata/config/system/etc/init.d/"
-# 2. 放 nginx 主拷贝
-adb shell "mkdir -p /userdata/local/appcenter && cp ext_appmgr.conf /userdata/local/appcenter/"
-# 3. 启动（会自动 seed master + 回注 nginx + 起 appmgr）
-adb shell "/etc/init.d/S94appmgr start"
-adb shell "/etc/init.d/S94appmgr status"
+adb shell "/oem/usr/etc/init.d/S93inferenced status"
+adb shell "/oem/usr/etc/init.d/S94appmgr status"
+adb shell "/oem/usr/etc/init.d/S94appmgr restart"
 ```
 
-**OTA 存活（诚实标注半成品）**：A/B OTA 会重刷 rootfs，抹掉 `/etc/init.d/S94appmgr`；官方 RkLunch 的 restore 链只回注 `/etc/passwd` `/etc/group` `/etc/shadow`，**不覆盖 `/etc/init.d`**。appmgr 代码、S94 主拷贝、nginx 主拷贝都在 `/userdata`（存活），但**没有 OTA 存活的 boot 钩子会自动 source `/userdata`**，因此**无法在 stock 固件内做到 100% 自动恢复**。当前做法：OTA 后手动跑一次 `appmgr-restore.sh`（幂等）：
-```sh
-adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
-```
-它把主拷贝 `S94appmgr` 复制回 `/etc/init.d/` 并 `start`（后者再自动回注 nginx conf）。从仍有 S94appmgr 的 slot 启动则无需任何操作。
+升级时必须同时提供匹配的 rootfs 和 OEM 内容。`market/deploy/appmgr-restore.sh`
+仅作为旧运维入口兼容：验证固件内两个 OEM 脚本存在后按序启动，不再复制旧 launcher。
+若新固件缺少服务，需安装匹配固件，不能用历史 `/userdata` 代码补齐。
 
 ### 4.3 分步验证：先传 appmgr 核心（<1 MB），再传 app 包（81 MB）
 
@@ -294,9 +299,9 @@ adb shell "sh /userdata/local/appcenter/appmgr-restore.sh"
 - **OTA 会洗 `/oem`**：A/B 刷 rootfs 后前端产物被还原成原厂，**需重新铺一遍**（与 rkipc/entry.cgi 热替换同一类 OTA-非存活问题，见 §4.2 / 第 2.1 节）。铺前先备份原厂 `www`（`www-official-backup`，§6 二级回滚已列）。
 - **文件 mode 必须 644**：铺进 `/oem/usr/www` 的静态文件权限位要给读（`chmod 644`，目录 755）。**权限不对 nginx 返 500**（读不到文件），不是 404——排查"页面 500"先查 www 下文件 mode，busybox `cp` 不保留位、`scp`/解包后按 umask 可能落成非 644。
 
-**S94appmgr 启动隐患（TODO）**：
+**服务启动行为与实机验证**：
 
-- **boot 不自动拉起 active app**：`S94appmgr start` 只 `python3 -m appmgr serve`，不 `start <active>`。已加 `_boot_restore()`（serve HTTP 起后读 active 非空且未跑则 `supervisor.start`，幂等）缓解——确认重启后 active app 自动恢复。
+- **后台恢复**：appmgr 的后台协调线程恢复期望运行的应用，HTTP 接口可用于观察等待原因与停止应用；实机需覆盖 IPC 延迟启动、不可用和重启后的应用恢复。
 - **setsid 分层**：app 子进程由 supervisor 以 `start_new_session=True`（setsid，各自 session/进程组 leader，`supervisor.py:194`）拉起；而 **`appmgr serve` 自身**从 S94 只用普通后台 `&`（`S94appmgr:81-84`，因 busybox `start-stop-daemon -b` mishandle 需 cd 的 wrapper），未单独 setsid 脱离会话。当前靠 pidfile + appmgr flock 单实例兜。**TODO / 需核实**：serve 未 setsid 化在非 init 启动路径（adb shell 手动 `start` 后退出 shell）下是否被 reap——init 路径下 reparent 到 init 无碍，手动调试路径参照 §7"adb shell 一退就没了"行处理（写脚本 `exec` 或验完 reboot）。
 
 ---
@@ -321,7 +326,7 @@ reboot / 部署后依次核对：
   print("rc =", s.send_detections(123456, [(0.05,0.07,0.62,0.94,0.9,"person",0)]))  # 归一化 [0,1]; 0 = accepted
   PY
   ```
-- [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/etc/init.d/S94appmgr status`）
+- [ ] **应用中心**（若部署）：`/appcenter/` catalog 页面可开、`/api/appMgr/list` 经 JWT 返回正常、`appmgr` 进程在（`/oem/usr/etc/init.d/S94appmgr status`）
 - [ ] **运行时 provision**（装任何 app 前）：`sh /userdata/local/appcenter/provision-runtime.sh` 打印 `RESULT: PASS`——venv python 在、`recamera_sdk.pth` 已写、`librecamera_ext.so.1` 在、venv 下 `import recamera_ext` 自检通过
 - [ ] **共享模型 app**（若装 voice-transcribe 类）：`interpreter` venv 就位（`ls /userdata/rknnenv/bin/python`）、共享模型已落盘（`ls -lh /userdata/local/models/asr/` 必需 5 文件齐、rknn ~133 MB）、`rknnlite` 可导入（在该 venv 里 `python -c "import rknnlite"`）、音频依赖可导入（`python -c "import voxedge, sherpa_onnx"`）。音频运行时正常由应用中心按需补齐，查 `curl 'http://127.0.0.1:8130/api/appMgr/runtime?name=audio'` 应为 `present: true`；**完全离线**时才需要 `sh provision-voice.sh` 打印 `PASS`
 - [ ] **装完 numpy 没被动过**（装过音频运行时后必查）：`/userdata/rknnenv/bin/python3 -c "import numpy; print(numpy.__version__)"` 应仍是 **1.23.5**，且 `import rknnlite` 仍通过——numpy 被顶上去会连累 9 个视觉 app
@@ -355,7 +360,7 @@ reboot / 部署后依次核对：
 | **画了检测框但 RTSP / 编码流里看不到**（datetime 却可见）| VENC 只合成部分 RGN layer：每通道最高层不被合成。INFER overlay 用被合成的低 layer（主 **1** 子 **5**，不是 3/7）。排查"画了不显示"先怀疑 layer 值，不是坐标/颜色/SetBitMap。附带：OSD 调色板注意 ARGB/BGRA 字节序（品红写反显示成青色）。|
 | **改过 osd 的自编 rkipc 起不来**（`osd_manager_init` 因 `rkipc.ini` 缺 `[osd] cfg=` 返 `-ENOENT`）| 已修：`osd_manager_load_cfg` 缺 cfg 降级为内置默认（inferenceOverlay 默认开）而非 init 失败。用含此修复的 rkipc（本 release 已含）。|
 | **扩展应用连麦克风 / 相机权限拒绝** | `/dev/snd` `/dev/video` `/dev/mpi` 全 root 属主，SSH 的 admin（uid 1000）不在 audio 组、开不了硬件。**扩展应用必须以 root 运行**（appmgr / 约定的 SysVinit 脚本以 root 启动）。调试用 adb（root）而非 ssh admin。|
-| **nginx 挂扩展前端 404 / 冲突** | 出厂 nginx 只显式列 `svc_*`，`ext_` 是新约定；确认 `common_relay.conf` 有 `include ext_*.conf` 且 `ext_appmgr.conf` 已回注到 `/oem/usr/etc/nginx/`。校验必须**用完整合成配置**：`nginx -t`（或 `nginx -T` 打印）通过再 `nginx -s reload`；reload 失败就删掉该 conf 再 reload 恢复。（S94appmgr 的 `reinject_nginx` 已内建这套 `nginx -t` 守卫。）|
+| **nginx 挂扩展前端 404 / 冲突** | 出厂 nginx 只显式列 `svc_*`，`ext_` 是新约定；确认 `common_relay.conf` 有 `include ext_*.conf` 且固件已安装 `ext_appmgr.conf` 到 `/oem/usr/etc/nginx/`。校验必须**用完整合成配置**：`nginx -t`（或 `nginx -T` 打印）通过再 `nginx -s reload`；reload 失败应恢复之前的配置再 reload。服务启动脚本不改写 nginx 配置。|
 | **busybox 工具缺失 / 行为不同** | 设备 busybox：**无 `stat`、无 `timeout`**；`cp` 不保留执行位（cp 后 chmod）；`tar` **不认 `-z`**，解压 `.tar.gz` 用 `gunzip -c x.tar.gz \| tar -x`。校验 nginx 用 `nginx -t`（必要时 `-c` 指定合成配置路径）。复杂命令别在 `adb shell "sh -c \"...$(...)...\""` 里嵌套引号（busybox 报 `syntax error unexpected "("`）→ echo 成脚本文件 push 后 `sh`。|
 | **Tailscale 慢链路传大文件超时 / 卡死** | 设备在 Tailscale（100.x）时延迟 35-82ms，adb/scp 给足 timeout、别在一条命令里死等。大文件用小包 / 逐 tar 单文件传，或走 Mac 中转（`fleet pull <src> ... <mac>` → `adb push`）。局域网同网段（192.168.x）可直连（<1ms），优先直连。|
 

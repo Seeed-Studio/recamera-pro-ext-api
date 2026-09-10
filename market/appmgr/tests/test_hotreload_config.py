@@ -70,6 +70,12 @@ class SetConfigApplyTests(unittest.TestCase):
         server.supervisor.stop = fake_stop
         server.supervisor.start = fake_start
         server.builtin.stop = lambda *a, **k: {"stop_confirmed": True}
+        # This suite tests config apply routing with a stubbed supervisor, not
+        # board IPC. Protocol/readiness behavior has its own dependency tests.
+        coord = server._coordinator()
+        previous_probe = coord.ipc_dependency_probe
+        coord.ipc_dependency_probe = lambda _plan: {"available": True}
+        self.addCleanup(lambda: setattr(coord, "ipc_dependency_probe", previous_probe))
 
     def _make_app(self, app_id="demo"):
         d = paths.app_dir(app_id)

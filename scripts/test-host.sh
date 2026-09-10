@@ -17,4 +17,5 @@ RECAMERA_RELEASE_ARTIFACT_TESTS=0 exec uv run --exact --frozen --python 3.11 \
     market/catalog \
     market/packaging \
     tools/test_install_platform_services.py \
+    tools/test_service_launchers.py \
     "$@"

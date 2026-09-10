@@ -1,5 +1,6 @@
 #!/bin/sh
 # S93inferenced -- platform-owned multi-model RKNN scheduling service.
+# Installed in /oem/usr/etc/init.d, in RkLunch's post-IPC-launch phase.
 
 NAME=recamera-inferenced
 PIDFILE=/run/$NAME.pid
@@ -9,6 +10,7 @@ LOGFILE=/var/log/$NAME.log
 PYTHON=/usr/bin/python3
 PYTHONPATH_VALUE=/usr/lib/recamera:/usr/lib/python3.11/site-packages
 LD_LIBRARY_PATH_VALUE=/usr/lib:/oem/usr/lib:/oem/lib
+START_ATTEMPTS=15
 
 is_service_pid() {
     [ -n "$1" ] || return 1
@@ -19,14 +21,60 @@ is_service_pid() {
 
 resolve_pid() {
     pid=$(cat "$PIDFILE" 2>/dev/null)
-    is_service_pid "$pid" || return 1
-    echo "$pid"
+    if is_service_pid "$pid"; then
+        echo "$pid"
+        return 0
+    fi
+    for pid in /proc/[0-9]*; do
+        pid=${pid##*/}
+        if is_service_pid "$pid"; then
+            echo "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+is_ready() {
+    PYTHONPATH="$PYTHONPATH_VALUE" "$PYTHON" -m appmgr.service_health \
+        inferenced --socket "$SOCKET" --timeout 1 >/dev/null 2>&1
+}
+
+wait_ready() {
+    i=0
+    while [ "$i" -lt "$START_ATTEMPTS" ]; do
+        is_service_pid "$1" || return 1
+        is_ready && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+stop_pid() {
+    is_service_pid "$1" || return 0
+    kill -TERM "$1" 2>/dev/null
+    i=0
+    while [ "$i" -lt 10 ] && is_service_pid "$1"; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if is_service_pid "$1"; then
+        kill -KILL "$1" 2>/dev/null
+        sleep 1
+    fi
+    ! is_service_pid "$1"
 }
 
 start() {
     pid=$(resolve_pid) && {
-        echo "$NAME already running (pid $pid)"
-        return 0
+        echo "$pid" >"$PIDFILE"
+        if wait_ready "$pid"; then
+            echo "$NAME already running and ready (pid $pid)"
+            return 0
+        fi
+        echo "$NAME running but not ready (pid $pid; see $LOGFILE)"
+        return 1
     }
     rm -f "$PIDFILE"
     mkdir -p /run/recamera || return 1
@@ -44,23 +92,16 @@ start() {
         --authorization-dir "$AUTH_DIR" >>"$LOGFILE" 2>&1 &
     pid=$!
     echo "$pid" >"$PIDFILE"
-    i=0
-    while [ "$i" -lt 10 ]; do
-        if ! is_service_pid "$pid"; then
-            rm -f "$PIDFILE"
-            echo "$NAME failed to start (see $LOGFILE)"
-            return 1
-        fi
-        [ -S "$SOCKET" ] && {
-            echo "$NAME started (pid $pid)"
-            return 0
-        }
-        sleep 1
-        i=$((i + 1))
-    done
-    kill -TERM "$pid" 2>/dev/null
+    # Allow the background shell to exec Python before checking /proc identity.
+    sleep 1
+    if wait_ready "$pid"; then
+        echo "$NAME started and ready (pid $pid)"
+        return 0
+    fi
+    stop_pid "$pid" || return 1
     rm -f "$PIDFILE"
-    echo "$NAME did not create $SOCKET"
+    [ -S "$SOCKET" ] && rm -f "$SOCKET"
+    echo "$NAME failed readiness handshake (see $LOGFILE)"
     return 1
 }
 
@@ -72,18 +113,10 @@ stop() {
         return 0
     }
     echo "Stopping $NAME (pid $pid)"
-    kill -TERM "$pid" 2>/dev/null
-    i=0
-    while [ "$i" -lt 10 ] && is_service_pid "$pid"; do
-        sleep 1
-        i=$((i + 1))
-    done
-    if is_service_pid "$pid"; then
-        kill -KILL "$pid" 2>/dev/null
-        sleep 1
-    fi
+    stop_pid "$pid" || return 1
     rm -f "$PIDFILE"
     [ -S "$SOCKET" ] && rm -f "$SOCKET"
+    return 0
 }
 
 case "$1" in
@@ -92,7 +125,8 @@ case "$1" in
     restart) stop && start ;;
     status)
         pid=$(resolve_pid) || { echo "$NAME not running"; exit 3; }
-        echo "$NAME running (pid $pid)"
+        is_ready || { echo "$NAME running but not ready (pid $pid)"; exit 1; }
+        echo "$NAME running and ready (pid $pid)"
         ;;
     *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
 esac

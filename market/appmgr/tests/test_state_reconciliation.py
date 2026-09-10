@@ -426,6 +426,9 @@ def test_boot_restore_retries_from_fresh_state_after_cli_gate_contention(
 
 
 def test_serve_reconciles_after_singleton_and_before_coordinator(monkeypatch):
+    # serve owns one daemon lifetime and deliberately leaves mutation admission
+    # closed on exit. Isolate that lifecycle from later unit tests in this VM.
+    monkeypatch.setattr(server, "_service_stopping", False)
     events = []
 
     def acquire():

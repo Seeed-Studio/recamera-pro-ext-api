@@ -117,8 +117,13 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
     if not vendor_key.is_file() or vendor_key.is_symlink():
         raise FileNotFoundError(vendor_key)
     os.chmod(vendor_key, 0o644)
-    _copy_file(repo / "market/deploy/S93inferenced", rootfs / "etc/init.d/S93inferenced", 0o755)
-    _copy_file(repo / "market/deploy/S94appmgr", rootfs / "etc/init.d/S94appmgr", 0o755)
+    # OEM init runs its S50-S99 phase after issuing the IPC start command.
+    # Remove the former rootfs hooks and OTA masters on incremental builds;
+    # keeping either would allow a second start or resurrect an old launcher.
+    for name in ("S93inferenced", "S94appmgr"):
+        _copy_file(repo / "market/deploy" / name, oem / "etc/init.d" / name, 0o755)
+        for directory in ("etc/init.d", "userdata/config/system/etc/init.d"):
+            (rootfs / directory / name).unlink(missing_ok=True)
     _copy_file(repo / "market/deploy/ext_appmgr.conf", oem / "etc/nginx/ext_appmgr.conf", 0o644)
     _assert_clean(platform)
     required = (
@@ -126,14 +131,15 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         platform / "appmgr/result_hub.py",
         platform / "appmgr/visualization.py",
         platform / "appmgr/inference_auth.py",
+        platform / "appmgr/service_health.py",
         platform / "appmgr/trust.py",
         platform / "appmgr/schema/manifest-v2.schema.json",
         vendor_key,
         platform / "inferenced/__main__.py",
         platform / "inferenced/authorization.py",
         platform / "inferenced/server.py",
-        rootfs / "etc/init.d/S93inferenced",
-        rootfs / "etc/init.d/S94appmgr",
+        oem / "etc/init.d/S93inferenced",
+        oem / "etc/init.d/S94appmgr",
         oem / "etc/nginx/ext_appmgr.conf",
     )
     missing = [str(path) for path in required if not path.is_file()]

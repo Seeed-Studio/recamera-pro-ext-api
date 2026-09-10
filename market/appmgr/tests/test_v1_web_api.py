@@ -1611,7 +1611,7 @@ def test_sse_subscriber_count_and_each_subscriber_queue_are_bounded():
 def test_lifecycle_reconciler_runs_without_any_get_request(layout, monkeypatch):
     called = threading.Event()
     monkeypatch.setenv("APPMGR_RECONCILE_INTERVAL", "0.02")
-    monkeypatch.setattr(server, "_reconcile_once", lambda: called.set() or [])
+    monkeypatch.setattr(server, "_reconcile_once", lambda stop_event=None: called.set() or [])
     server._stop_reconciler()
     try:
         server._start_reconciler()

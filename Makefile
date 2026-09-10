@@ -162,8 +162,11 @@ verify: sdk-install python-install rknn-runtime-install platform-services-instal
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/trust.py"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/schema/manifest-v2.schema.json"
 	@test -f "$(PLATFORM_PYTHON_ROOT)/inferenced/server.py"
-	@test -x "$(OUT_ROOT)/etc/init.d/S93inferenced"
-	@test -x "$(OUT_ROOT)/etc/init.d/S94appmgr"
+	@test -f "$(PLATFORM_PYTHON_ROOT)/appmgr/service_health.py"
+	@test -x "$(OEM_STAGING_ROOT)/etc/init.d/S93inferenced"
+	@test -x "$(OEM_STAGING_ROOT)/etc/init.d/S94appmgr"
+	@test ! -e "$(OUT_ROOT)/etc/init.d/S93inferenced"
+	@test ! -e "$(OUT_ROOT)/etc/init.d/S94appmgr"
 	@test -f "$(OEM_STAGING_ROOT)/etc/nginx/ext_appmgr.conf"
 	@for native in \
 		"$(PYTHON_SITE)/rknnlite/api/rknn_runtime.cpython-311-aarch64-linux-gnu.so" \
@@ -195,6 +198,10 @@ clean:
 		"$(PLATFORM_PYTHON_ROOT)/inferenced" \
 		"$(OUT_ROOT)/etc/init.d/S93inferenced" \
 		"$(OUT_ROOT)/etc/init.d/S94appmgr" \
+		"$(OUT_ROOT)/userdata/config/system/etc/init.d/S93inferenced" \
+		"$(OUT_ROOT)/userdata/config/system/etc/init.d/S94appmgr" \
+		"$(OEM_STAGING_ROOT)/etc/init.d/S93inferenced" \
+		"$(OEM_STAGING_ROOT)/etc/init.d/S94appmgr" \
 		"$(OEM_STAGING_ROOT)/etc/nginx/ext_appmgr.conf"
 
 distclean: clean

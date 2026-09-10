@@ -9,6 +9,7 @@ exclusive compatibility resource and is never presented as multi-owner NPU.
 from __future__ import annotations
 
 import glob
+import errno
 import json
 import math
 import os
@@ -56,9 +57,14 @@ def _send_control(sock: socket.socket, header: dict) -> None:
     sock.sendall(struct.pack("!I", len(raw)) + raw)
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
+def _recv_exact(sock: socket.socket, size: int, deadline=None) -> bytes:
     chunks = []
     while size:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("inferenced readiness timed out")
+            sock.settimeout(remaining)
         chunk = sock.recv(size)
         if not chunk:
             raise ConnectionError("inferenced closed during response")
@@ -67,25 +73,31 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
     return b"".join(chunks)
 
 
-def _recv_control(sock: socket.socket) -> dict:
-    size = struct.unpack("!I", _recv_exact(sock, 4))[0]
+def _recv_control(sock: socket.socket, deadline=None) -> dict:
+    size = struct.unpack("!I", _recv_exact(sock, 4, deadline))[0]
     if size < 1 or size > 64 * 1024:
         raise ValueError("invalid inferenced response header size")
-    response = json.loads(_recv_exact(sock, size).decode("utf-8"))
+    response = json.loads(_recv_exact(sock, size, deadline).decode("utf-8"))
     if not isinstance(response, dict):
         raise ValueError("inferenced response is not an object")
     tensors = response.get("tensors") or []
     if tensors:
         raise ValueError("unexpected tensors in inferenced status response")
+    if type(response.get("protocol")) is not int or response["protocol"] != 1:
+        raise ValueError("unsupported inferenced protocol version")
     return response
 
 
 def probe_inference_service(path: str, timeout: float = 0.5) -> dict:
     """Perform inferenced hello then status; an inode alone is not health."""
     started = time.monotonic()
+    timeout = float(timeout)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("inferenced probe timeout must be positive and finite")
+    deadline = started + min(timeout, 2.0)
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        conn.settimeout(max(0.05, float(timeout)))
+        conn.settimeout(min(timeout, 2.0))
         conn.connect(path)
         request_id = uuid.uuid4().hex
         _send_control(conn, {
@@ -93,13 +105,33 @@ def probe_inference_service(path: str, timeout: float = 0.5) -> dict:
             "app_id": "appmgr", "instance_id": "health-%d" % os.getpid(),
             "generation": 0, "control_only": True,
         })
-        hello = _recv_control(conn)
-        if hello.get("ok") is not True or hello.get("op") != "hello":
-            raise ConnectionError("inferenced hello rejected")
+        hello = _recv_control(conn, deadline)
+        if hello.get("ok") is not True:
+            error = hello.get("error") or {}
+            return {"available": False, "socket": path,
+                    "error": "inferenced hello rejected: %s" % error,
+                    "retryable": isinstance(error, dict) and error.get("retryable") is True}
+        if hello.get("op") != "hello" or hello.get("request_id") != request_id:
+            raise ValueError("invalid inferenced hello response")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("inferenced readiness timed out")
+        conn.settimeout(remaining)
         _send_control(conn, {"op": "status", "request_id": request_id})
-        status = _recv_control(conn)
-        if status.get("ok") is not True or status.get("op") != "status":
-            raise ConnectionError("inferenced status rejected")
+        status = _recv_control(conn, deadline)
+        if status.get("ok") is not True:
+            error = status.get("error") or {}
+            return {"available": False, "socket": path,
+                    "error": "inferenced status rejected: %s" % error,
+                    "retryable": isinstance(error, dict) and error.get("retryable") is True}
+        if status.get("op") != "status" or status.get("request_id") != request_id:
+            raise ValueError("invalid inferenced status response")
+        if status.get("state") in ("faulted", "stopping") or status.get("fault"):
+            return {"available": False, "socket": path,
+                    "error": "inferenced is %s" % status.get("state"),
+                    "retryable": True}
+        if status.get("state") != "running":
+            raise ValueError("invalid inferenced service state")
         return {
             "available": True,
             "socket": path,
@@ -108,8 +140,14 @@ def probe_inference_service(path: str, timeout: float = 0.5) -> dict:
             "status": {k: v for k, v in status.items()
                        if k not in ("protocol", "tensors", "request_id", "ok", "op")},
         }
-    except Exception as exc:
-        return {"available": False, "socket": path, "error": str(exc)}
+    except (ValueError, PermissionError) as exc:
+        return {"available": False, "socket": path, "error": str(exc),
+                "retryable": False}
+    except OSError as exc:
+        return {"available": False, "socket": path, "error": str(exc),
+                "retryable": exc.errno is None or exc.errno in (
+                    errno.ENOENT, errno.ECONNREFUSED, errno.ECONNRESET,
+                    errno.EPIPE, errno.EAGAIN, errno.EINTR, errno.ETIMEDOUT)}
     finally:
         conn.close()
 

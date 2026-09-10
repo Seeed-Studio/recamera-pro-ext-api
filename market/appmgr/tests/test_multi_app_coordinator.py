@@ -122,6 +122,7 @@ def managed(tmp_path, monkeypatch):
     coord = coordinator.AppCoordinator(
         resource_manager=manager, supervisor_module=fake,
         dependency_probe=lambda _path: {"available": True},
+        ipc_dependency_probe=lambda _plan: {"available": True},
         result_gateway_sock=str(tmp_path / "results.sock"),
         inference_service_sock=str(tmp_path / "inferenced.sock"),
         inference_registry=FakeInferenceRegistry(events))

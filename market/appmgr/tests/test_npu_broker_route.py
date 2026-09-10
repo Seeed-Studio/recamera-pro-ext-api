@@ -71,10 +71,16 @@ class BrokerRouteTests(unittest.TestCase):
         server.supervisor.stop = lambda app_id, **kw: (
             self.stopped.append(app_id) or {})
         server.supervisor.is_running = lambda app_id: None
+        # This unit fixture models routing with marker files and a fake
+        # supervisor. Real readiness/handshake peers live in test_ipc_dependencies.
+        self.coordinator = server._coordinator()
+        self.real_ipc_probe = self.coordinator.ipc_dependency_probe
+        self.coordinator.ipc_dependency_probe = lambda _plan: {"available": True}
         state.set_active(None, None)
         self.addCleanup(self._restore)
 
     def _restore(self):
+        self.coordinator.ipc_dependency_probe = self.real_ipc_probe
         state.set_active(None, None)
         server.builtin.stop = self.real["builtin_stop"]
         server._builtin_running = self.real["builtin_running"]

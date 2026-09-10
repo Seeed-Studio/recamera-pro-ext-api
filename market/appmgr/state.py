@@ -161,7 +161,15 @@ def _normalise(raw) -> dict:
                 rec["blocked_resource"] = None
                 rec["resource_owners"] = []
                 rec["runtime_guard"] = None
-            if rec.get("observed_state") != "waiting_dependency":
+            # Preserve a terminal dependency diagnostic so the reconciler does
+            # not turn authentication/protocol rejection into endless crash
+            # retries. An explicit start probes again after an operator repair.
+            terminal_dependency = (
+                rec.get("observed_state") == "failed"
+                and isinstance(rec.get("dependency"), dict)
+                and rec["dependency"].get("retryable") is False)
+            if (rec.get("observed_state") != "waiting_dependency"
+                    and not terminal_dependency):
                 rec["dependency"] = None
             history = rec.get("restart_history")
             if not isinstance(history, list):

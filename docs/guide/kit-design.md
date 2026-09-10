@@ -73,7 +73,7 @@ recamera-pro-apps/
 │   ├── catalog/                  #   云端目录 + 浏览器代取(catalog.json schema, sha256校验)
 │   ├── packaging/                #   打包签名: <id>-<ver>-arm64.tar.gz + 公钥验签
 │   ├── spa/                      #   LEGACY 早期 vanilla SPA(已被官方 React /app-center 取代,非现役前端)
-│   ├── deploy/                   #   ext_appmgr.conf(nginx) + S94appmgr(自启动) + OTA回注hook
+│   ├── deploy/                   #   ext_appmgr.conf(nginx) + S93/S94(OEM自启动) + 兼容运维入口
 │   └── auth/                     #   复用 sensecraft_token; nginx auth_request /_jwt_verify
 ├── kit/                          # 通用层 (一个 Python 包, 所有应用 import)
 │   ├── adapters/                 # L0 —— 曲折/官方 切换点

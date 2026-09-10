@@ -55,8 +55,11 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     assert (rootfs / "usr/lib/recamera/inferenced/authorization.py").is_file()
     vendor_key = rootfs / "usr/lib/recamera/appmgr/keys/release_pub.pem"
     assert stat.S_IMODE(vendor_key.stat().st_mode) == 0o644
-    assert (rootfs / "etc/init.d/S93inferenced").stat().st_mode & 0o100
-    assert (rootfs / "etc/init.d/S94appmgr").stat().st_mode & 0o100
+    assert (rootfs / "usr/lib/recamera/appmgr/service_health.py").is_file()
+    assert (oem / "etc/init.d/S93inferenced").stat().st_mode & 0o100
+    assert (oem / "etc/init.d/S94appmgr").stat().st_mode & 0o100
+    assert not (rootfs / "etc/init.d/S93inferenced").exists()
+    assert not (rootfs / "etc/init.d/S94appmgr").exists()
     assert (oem / "etc/nginx/ext_appmgr.conf").is_file()
     edge = (oem / "etc/nginx/ext_appmgr.conf").read_text()
     locations = re.findall(
@@ -91,16 +94,43 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
             edge,
             re.MULTILINE,
         )
-    launcher = (rootfs / "etc/init.d/S94appmgr").read_text()
+    launcher = (oem / "etc/init.d/S94appmgr").read_text()
     assert "APPMGR_PARENT=/usr/lib/recamera" in launcher
     assert "PYTHONPATH_VALUE=/usr/lib/recamera:/usr/lib/python3.11/site-packages" in launcher
     assert "APPMGR_KIT_PARENT_VALUE=/usr/lib/python3.11/site-packages" in launcher
     assert "LD_LIBRARY_PATH_VALUE=/usr/lib:/oem/usr/lib:/oem/lib" in launcher
     assert "reinject_nginx" not in launcher
-    inference_launcher = (rootfs / "etc/init.d/S93inferenced").read_text()
+    inference_launcher = (oem / "etc/init.d/S93inferenced").read_text()
     assert "AUTH_DIR=/run/recamera/inference-authorizations" in inference_launcher
     assert '--authorization-dir "$AUTH_DIR"' in inference_launcher
     platform = rootfs / "usr/lib/recamera"
     assert not list(platform.rglob("test_*.py"))
     assert not list(platform.rglob("__pycache__"))
     assert not list(platform.rglob("*.pyc"))
+
+
+def test_incremental_stage_removes_old_launchers_and_ota_masters(tmp_path):
+    rootfs, oem = tmp_path / "root", tmp_path / "oem"
+    retired = [rootfs / directory / name
+               for directory in ("etc/init.d", "userdata/config/system/etc/init.d")
+               for name in ("S93inferenced", "S94appmgr")]
+    for path in retired:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n# old userdata code launcher\n")
+    sibling = rootfs / "etc/init.d/S95other"
+    sibling.write_text("preserve this unrelated service")
+    cache = rootfs / "usr/lib/recamera/appmgr/__pycache__/old.pyc"
+    cache.parent.mkdir(parents=True)
+    cache.write_bytes(b"old bytecode")
+
+    for _ in range(2):
+        subprocess.run([
+            sys.executable, str(SCRIPT), "--repo-root", str(REPO),
+            "--rootfs", str(rootfs), "--oem", str(oem),
+        ], check=True)
+        assert all(not path.exists() for path in retired)
+        assert not cache.exists()
+        assert sibling.read_text() == "preserve this unrelated service"
+        for name in ("S93inferenced", "S94appmgr"):
+            assert (oem / "etc/init.d" / name).read_bytes() == (
+                REPO / "market/deploy" / name).read_bytes()

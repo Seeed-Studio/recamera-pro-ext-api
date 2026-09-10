@@ -63,6 +63,12 @@ def _pin_paths(tc):
     tc.addCleanup(lambda: [setattr(paths, k, v) for k, v in saved.items()])
     for d in (pins["APPS_DIR"], pins["APPMGR_DIR"], pins["APPDATA_DIR"]):
         os.makedirs(d, exist_ok=True)
+    # These tests stub the firmware hand-off and exercise lifecycle/rollback.
+    # Socket protocol/readiness integration is covered by test_ipc_dependencies.
+    coord = server._coordinator()
+    previous_probe = coord.ipc_dependency_probe
+    coord.ipc_dependency_probe = lambda _plan: {"available": True}
+    tc.addCleanup(lambda: setattr(coord, "ipc_dependency_probe", previous_probe))
 
 
 def _alive_running(pid):

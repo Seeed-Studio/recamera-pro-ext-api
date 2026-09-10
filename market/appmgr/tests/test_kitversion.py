@@ -113,6 +113,8 @@ def test_server_rejects_incompatible_target_before_any_teardown_or_reservation(
     app_id = "demo"
     app_dir = tmp_path / app_id
     app_dir.mkdir()
+    monkeypatch.setattr(paths, "APPS_DIR", str(tmp_path / "apps"))
+    monkeypatch.setattr(paths, "APPMGR_DIR", str(tmp_path / "appmgr"))
     events = []
     monkeypatch.setattr(paths, "app_dir", lambda _id: str(app_dir))
     monkeypatch.setattr(server, "_read_manifest", lambda _id: {"id": app_id, "kit": ">=99.0"})
