@@ -1,0 +1,7 @@
+interface:
+  display_name: "reCamera Pro Python Development"
+  short_description: "Assess and build RV1126B Python SDK apps"
+  default_prompt: "Use $recamera-pro-skill to assess and implement a reCamera Pro Python SDK app."
+
+policy:
+  allow_implicit_invocation: true
