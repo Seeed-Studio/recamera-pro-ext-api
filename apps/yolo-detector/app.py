@@ -28,6 +28,7 @@ class YoloDetectorApp(App):
     # Only boxes are consumed -- never frame.data pixels -- so the frame source
     # can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"
+    model_dma_input = True    # consume the borrowed frame within this loop
 
     # `conf` / `iou` are auto-bound from manifest config_schema (and re-bound on
     # SIGHUP, since both are apply:"live") -- no setup/on_config_reload needed.
@@ -35,7 +36,7 @@ class YoloDetectorApp(App):
     def run(self):
         for frame in self.frames():
             x = self.pre(frame)
-            outs = self.models.det.infer(x.data)
+            outs = self.models.det.infer(x)
             dets = postprocess(outs, x.info,
                                conf_thres=self.conf, iou_thres=self.iou)
             self.emit([E.detection(d) for d in dets], frame.pts, results=dets)

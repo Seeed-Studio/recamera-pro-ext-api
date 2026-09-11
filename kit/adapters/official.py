@@ -114,6 +114,11 @@ class OfficialFrameSource(FrameSource):
        to_bgr), so `Frame.data` is safe to hold after release. We never keep a
        zero-copy view alive across iterations.
 
+       Kit's additional ``deferred_preprocess`` opt-in may defer conversion
+       until model invocation and write directly into private RKNN DMA input.
+       Explicit .data access still materializes an independent RGB copy;
+       unmaterialized borrowed frames must be copied within their iteration.
+
     4. PTS ALIGNMENT. `frame.pts_us` (CLOCK_MONOTONIC microseconds, the VI PTS)
        is carried as `Frame.pts = pts_us / 1e6` seconds. OfficialResultSink
        converts it back with `round(pts * 1e6)` -- an exact integer round-trip
@@ -130,6 +135,7 @@ class OfficialFrameSource(FrameSource):
                  width: int = 0, height: int = 0, fps_divisor: int = 0,
                  input_size: int = 0, direct_preprocess: bool = False,
                  hw_letterbox: bool = False, hw_roi: bool = False,
+                 deferred_preprocess: bool = False,
                  timeout_ms: int = 1000, prefer_rga: bool = True,
                  lib_path: Optional[str] = None, verbose: bool = True,
                  **_ignored):
@@ -150,6 +156,9 @@ class OfficialFrameSource(FrameSource):
         self.fps_divisor = int(fps_divisor)
         self.input_size = int(input_size)
         self.direct_preprocess = bool(direct_preprocess and self.input_size > 0)
+        # Only Kit explicitly enables this after negotiating private DMA IO.
+        # Direct SDK/adapter callers retain the original eager array contract.
+        self.deferred_preprocess = bool(deferred_preprocess and self.direct_preprocess)
         # ROI mode: like `direct` for the model image (RGA letterbox IS `data`,
         # NO full-resolution RGB convert), but the source ALSO keeps the NV12
         # dma-buf reachable so a cascade app can crop per-object ROIs from it on
@@ -248,6 +257,69 @@ class OfficialFrameSource(FrameSource):
         padded = np.full((net_h, net_w, 3), 114, dtype=np.uint8)
         padded[top:top + sh, left:left + sw] = small
         return np.ascontiguousarray(padded), info
+
+    def _deferred_frame(self, frame):
+        if not getattr(self, "deferred_preprocess", False) or not self.direct_preprocess:
+            return None
+        if not self._rga_decided:
+            self._decide_backend(frame)
+        can_letterbox = getattr(self._rga, "can_letterbox", None)
+        if not callable(can_letterbox) or not can_letterbox(dma_output=True):
+            return None
+        try:
+            sw, sh, left, top, info, net_w, net_h = self._letterbox_geometry(
+                int(frame.width), int(frame.height))
+        except ValueError:
+            return None
+        from kit.buffer import ImageBuffer
+        from ._model_frame import DeferredModelImage
+
+        def materialize():
+            rgb, model_data, model_info = self._convert(frame)
+            if model_data is not None:
+                return model_data
+            if model_info is not None:
+                return rgb
+            from kit.runtime.preprocess import letterbox
+            return letterbox(rgb, (net_h, net_w))[0]
+
+        def prepare(target):
+            shape = tuple(target.get("shape", ()))
+            strides = tuple(target.get("strides", ()))
+            if (shape != (1, net_h, net_w, 3) or len(strides) != 4
+                    or target.get("offset", 0) != 0
+                    or strides[3] != 1 or strides[2] != 3 or strides[1] % 3
+                    or target.get("size", 0) < strides[1] * net_h
+                    or not self.deferred_preprocess):
+                return False
+            off, stride, vstride = frame.planes[0]
+            if off != 0:
+                return False
+            try:
+                self._rga.letterbox_nv12_to_rgb(
+                    fd=frame.fd, width=int(frame.width), height=int(frame.height),
+                    y_stride=int(stride), y_vstride=int(vstride),
+                    dst_width=net_w, dst_height=net_h,
+                    dst_window=(left, top, left + sw, top + sh),
+                    dst_fd=target["fd"], dst_w_stride=strides[1] // 3,
+                    dst_h_stride=net_h, pad_value=114,
+                )
+                return True
+            except Exception as exc:
+                self.deferred_preprocess = False
+                self._log("RGA bound-input path disabled (%s); using RGB tensor path" % exc)
+                return False
+
+        image = DeferredModelImage(materialize, prepare)
+        result = Frame(
+            buffer=ImageBuffer.from_backend(
+                image, width=net_w, height=net_h, format="RGB",
+                planes=[(0, net_w * 3, net_h)], memory="backend"),
+            w=int(frame.width), h=int(frame.height), fmt="RGB",
+            pts_us=int(frame.pts_us), model_info=info,
+        )
+        result._deferred_model_image = image
+        return result
 
     def _convert(self, frame):
         """Return ``(rgb, model_data, model_info)`` as fresh contiguous arrays.
@@ -432,6 +504,18 @@ class OfficialFrameSource(FrameSource):
                         ) from terminal
 
             for ext_frame in strict_frames():
+                deferred = self._deferred_frame(ext_frame)
+                if deferred is not None:
+                    image = deferred._deferred_model_image
+                    self._deferred_image = image
+                    try:
+                        yield deferred
+                    finally:
+                        # Synchronize expiration with any active RGA call before
+                        # the SDK advances and ACKs its borrowed camera buffer.
+                        image.expire()
+                        self._deferred_image = None
+                    continue
                 rgb, model_data, model_info = self._convert(ext_frame)  # standalone copies
                 # hw-roi: attach a cropper bound to THIS borrowed dma-buf so the
                 # app can crop ROIs from it during its loop body. Only when the
@@ -472,6 +556,10 @@ class OfficialFrameSource(FrameSource):
                 )
 
     def close(self) -> None:
+        image = getattr(self, "_deferred_image", None)
+        if image is not None:
+            image.expire()
+            self._deferred_image = None
         src, self._src = self._src, None
         if src is not None:
             try:

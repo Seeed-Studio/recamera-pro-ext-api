@@ -2,8 +2,9 @@
 
 ``RemoteRknnSession`` mirrors the small public surface of :class:`RknnSession`
 but never imports ``rknnlite`` and never acquires the device NPU lease.  The
-platform daemon is the sole RKNN owner; applications only exchange validated
-tensor messages over a versioned Unix socket.
+platform daemon owns the managed applications' RKNN contexts. Applications use
+validated tensor messages or negotiated private DMA buffers over a Unix socket;
+the built-in IPC model remains a separate, coordinated driver client.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from kit.errors import (
 )
 
 from ._inference_protocol import ProtocolError, recv_message, send_message
+from ._inference_shared import SHARED_IO_VERSION, SharedIOClient, dma_buf_sync, recv_fds
 from .engine import InferenceStats, ModelSpec
 
 
@@ -152,6 +154,7 @@ class RemoteRknnSession:
         app_id: Optional[str] = None,
         instance_id: Optional[str] = None,
         generation: Optional[int] = None,
+        shared_io: bool = True,
     ) -> None:
         self.spec = (
             model
@@ -227,6 +230,8 @@ class RemoteRknnSession:
         self._failures = 0
         self._total_ms = 0.0
         self._last_ms = 0.0
+        self._shared_io = None
+        self._last_timings_ms = {}
 
         if not isinstance(memory_mb, int) or isinstance(memory_mb, bool) or memory_mb <= 0:
             raise InputValidationError(
@@ -293,7 +298,7 @@ class RemoteRknnSession:
                 self._sock.settimeout(remaining)
                 try:
                     self._sock.connect(self.socket_path)
-                    self._exchange(
+                    hello, _ = self._exchange(
                         {
                             "op": "hello",
                             "request_id": next(self._request_ids),
@@ -327,12 +332,22 @@ class RemoteRknnSession:
                 },
                 operation="remote_model.load",
             )
+            if (shared_io and hello.get("capabilities", {}).get("shared_io")
+                    == SHARED_IO_VERSION):
+                self._exchange(
+                    {"op": "open_shared_io", "request_id": next(self._request_ids),
+                     "alias": self._alias, "version": SHARED_IO_VERSION},
+                    operation="remote_model.shared_io",
+                )
         except BaseException:
             try:
                 self._sock.close()
             except BaseException:
                 pass
             self._released = True
+            if self._shared_io is not None:
+                self._shared_io.close()
+                self._shared_io = None
             raise
         finally:
             # Per-request deadlines below temporarily replace this value.
@@ -353,6 +368,15 @@ class RemoteRknnSession:
                 last_ms=self._last_ms,
             )
 
+    @property
+    def io_transport(self):
+        return SHARED_IO_VERSION if self._shared_io is not None else "tensor-v1"
+
+    @property
+    def last_timings_ms(self):
+        with self._lock:
+            return dict(self._last_timings_ms)
+
     def _exchange(
         self,
         header: Mapping[str, Any],
@@ -366,6 +390,16 @@ class RemoteRknnSession:
                 self._sock.settimeout(timeout)
             send_message(self._sock, header, tensors)
             response, outputs = recv_message(self._sock)
+            if (header.get("op") == "open_shared_io" and response.get("ok") is True
+                    and response.get("shared_io") is not None):
+                descriptor = response["shared_io"]
+                if not isinstance(descriptor, dict) or not isinstance(descriptor.get("outputs"), list):
+                    raise ProtocolError("invalid shared IO response")
+                fds = recv_fds(self._sock, 1 + len(descriptor["outputs"]))
+                try:
+                    self._shared_io = SharedIOClient(descriptor, fds)
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ProtocolError(f"invalid shared IO mapping: {exc}") from exc
         except (OSError, EOFError, ProtocolError) as exc:
             self._transport_broken = True
             try:
@@ -430,6 +464,18 @@ class RemoteRknnSession:
         return result
 
     def infer(self, inputs: Any, *, timeout: float = 30.0) -> list[np.ndarray]:
+        return self._infer(inputs, timeout=timeout)
+
+    def infer_prepared(self, prepare, fallback, *, timeout=30.0):
+        """Internal Kit hook: prepare this call's private input while locked.
+
+        ``prepare(descriptor)`` synchronously writes the DMA input and returns
+        True, or returns False without submitting work to request the ndarray
+        fallback. No borrowed camera FD crosses the process boundary.
+        """
+        return self._infer(None, timeout=timeout, prepare=prepare, fallback=fallback)
+
+    def _infer(self, inputs, *, timeout, prepare=None, fallback=None):
         started = time.monotonic()
         with self._lock:
             if self._released:
@@ -463,21 +509,48 @@ class RemoteRknnSession:
                     "timeout must be finite and in the range (0, 300] seconds",
                     operation="remote_model.infer.validate",
                 )
-            arrays = self._ordered_inputs(inputs)
+            arrays = self._ordered_inputs(inputs) if prepare is None else None
             request_id = next(self._request_ids)
             self._calls += 1
             try:
-                _, outputs = self._exchange(
-                    {
-                        "op": "infer",
-                        "request_id": request_id,
-                        "alias": self._alias,
-                        "timeout_ms": max(1, int(timeout * 1000)),
-                    },
-                    arrays,
-                    operation="remote_model.infer",
-                    timeout=timeout + 1.0,
-                )
+                channel = self._shared_io
+                ready = False
+                if prepare is not None and channel is not None:
+                    ready = prepare(dict(channel.input.descriptor))
+                if not ready and arrays is None:
+                    arrays = self._ordered_inputs(fallback() if fallback is not None else inputs)
+                request = {"request_id": request_id, "alias": self._alias,
+                           "timeout_ms": max(1, int(timeout * 1000))}
+                if channel is not None:
+                    if not ready:
+                        if (len(arrays) != 1 or arrays[0].shape != channel.input.shape
+                                or arrays[0].dtype != channel.input.dtype):
+                            raise InputValidationError(
+                                "input does not match the model's shared IO contract",
+                                operation="remote_model.infer.validate")
+                        with dma_buf_sync(channel.input.fd, write=True):
+                            np.copyto(channel.input.array, arrays[0], casting="no")
+                    channel.sequence += 1
+                    request.update(op="infer_shared", token=channel.token,
+                                   sequence=channel.sequence)
+                    try:
+                        response, outputs = self._exchange(
+                            request, operation="remote_model.infer", timeout=timeout + 1.0)
+                        if (response.get("token") != channel.token
+                                or response.get("sequence") != channel.sequence or outputs):
+                            raise ProtocolError("shared IO completion does not match request")
+                        outputs = channel.results()
+                    except BaseException:
+                        # Never reuse input/output after an uncertain completion.
+                        # The daemon retains its allocation until work has ended.
+                        self._transport_broken = True
+                        self._sock.close()
+                        raise
+                else:
+                    request["op"] = "infer"
+                    response, outputs = self._exchange(
+                        request, arrays, operation="remote_model.infer", timeout=timeout + 1.0)
+                self._last_timings_ms = dict(response.get("timings_ms") or {})
                 if self.spec.outputs and len(outputs) != len(self.spec.outputs):
                     raise InputValidationError(
                         "remote output count does not match ModelSpec",
@@ -527,6 +600,9 @@ class RemoteRknnSession:
             finally:
                 self._released = True
                 self._sock.close()
+                if getattr(self, "_shared_io", None) is not None:
+                    self._shared_io.close()
+                    self._shared_io = None
 
     close = release
 

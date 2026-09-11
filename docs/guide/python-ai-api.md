@@ -734,6 +734,11 @@ ctypes backend 接受调用方的静态单输入 `uint8/NHWC` 合约。native gr
 不会隐式切换 backend。managed 模式的上游 lease 与 driver lock 仍然生效；早期
 RSS 数字来自 8 月 19 日的旧路径，新 daemon 仍需在设备上验证。
 
+静态视觉模型新增可选常驻 IO 与 `rknn-dma-v1` 共享传输。输出仍为原形状的独立
+FLOAT32 数组，不支持的模型/服务继续走原通路。`ESK_RKNN_IO_MODE=legacy` 可强制
+普通 RKNN API；绑定失败的 auto 回退会重建 context，区别于切换 backend。
+完整协商、预算、生命周期和 RGA 规则见[共享推理 IO](./shared-inference-io.md)。
+
 ### 12. API versions and NPU backend
 
 The kit supports API `0.2.0` and legacy API `1.6.5` in parallel. A v1 manifest is checked against

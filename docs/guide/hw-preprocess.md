@@ -217,3 +217,5 @@ class MyCascadeApp(App):
 ### 7.5 性能
 
 **收益（+多少 fps）待真机 A/B benchmark。** 本批只做实现 + 离线正确性验证（几何/尺寸/通道与 numpy 参考对拍、越界灰边、回退与 dispatch，见 `kit/adapters/test_rga_roi.py`），**未在设备上测过吞吐，未编造 fps 数字**。理论收益来自每帧省掉一次全分辨率 NV12→RGB（1280×720 约 2.7 MB）+ numpy 裁 + PIL resize，但 §4 已记录两个未定变量：硬件模式下 `infer_ms` 会升（疑 RGA/NPU 带宽争用），以及 RGA 与 NPU 并发的实际表现；ROI 裁剪引入的 RGA 调用次数（每帧 k 个 ROI）也需在真机上确认没有把 RGA 打满。**上设备后按 §4 的方式做稳态 A/B，再回填本节。**
+> 本页已有的性能数字属于历史 RGA 路径测试。新的常驻 DMA IO 与 RGA 直写路径见
+> [共享推理 IO](./shared-inference-io.md)，其实际性能需单独验证，不能沿用历史提升比例。

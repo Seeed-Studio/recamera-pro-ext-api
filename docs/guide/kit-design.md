@@ -135,12 +135,36 @@ class App(ABC):
     def run(self):                                   # ★整条流水线就是普通 Python
         for frame in self.frames():                  #   取帧/跳灰帧/热更/预热=基类
             x = self.pre(frame)                      #   letterbox(可走 RGA)
-            outs = self.models.det.infer(x.data)     #   manifest models[] 已加载
+            outs = self.models.det.infer(x)          #   支持常驻 DMA 输入；旧 Kit 也兼容
             self.emit(events, frame.pts, results=r)  #   输出扇出=基类
 ```
 
 一个应用 = `manifest.json`(声明) + `app.py`(继承 App, 写 `run()` 业务循环, 需要时加 `setup`)。
 `config_schema` 里的参数由基类自动绑定为 `self.<key>`(SIGHUP 热更同一路径), 应用不解析 config。
+
+### 循环处理耗时与性能指标
+
+使用 `for frame in self.frames()` 的应用约每秒发送一条 `type: "metrics"` 消息。
+`latency_ms.loop` 是该统计窗口内**每轮应用循环体总耗时的平均值**，单位毫秒：
+从 Kit 将帧交给应用前开始，到本轮应用循环体返回时结束，包含前处理、模型调用、
+后处理/业务逻辑、同步结果发送，以及 `emit()` 返回后继续执行的业务工作。
+异步发送只计当前线程的入队开销，不等待后台网络投递完成。
+取帧等待、源端在交帧前完成的处理、Kit 自身周期 metrics 发送不计入 `loop`。
+此值直接累计完整循环计时，不由已舍入的分阶段数据相加得出。
+
+原有字段保持兼容：`pre`、`infer`、`post`、`app`、`emit` 仍在 `latency_ms` 中；
+`post` 与 `app` 是同一业务时间桶，不应重复相加。结果消息的 `pipeline_ms` 仍只计到
+`emit()` 入口，`inference_time_ms` 仍是本帧模型调用累计耗时，均不替代 `loop`。
+规范 Result Hub 消息会将这些统计放在 `metrics.latency_ms` 中，包括新增的 `loop`。
+
+`fps` 继续表示窗口内完成的应用循环帧数除以墙钟时间，并非消息接收速率；
+应用循环内部 `continue` 跳过推理的帧仍沿用原有计数行为。
+CPU-only 应用即使 `infer=0`，也会有完整的 `loop` 耗时。
+协商 DMA IO 后，`hw-direct` 的延迟 RGA 前处理发生在循环体内，计入 `pre` 与 `loop`，
+不重复计入 `infer`。访问 `x.data` 仍会得到可修改的独立数组；直接传 `infer(x)`
+可省掉这次图像物化。详见[共享推理 IO](./shared-inference-io.md)。
+`needs_frames=False` 的音频应用不生成这组帧循环指标；语音应查看其转写事件中的
+`audio_sec` 和 `rtf`，不能将未提供的循环耗时显示为有效的 0 毫秒。
 
 ## 4. 适配层 = "曲折现在 / 官方将来" 的唯一切换点
 - `kit/adapters/registry.py` 启动探测官方口(frame.sock/audio.sock/结果注入/版本化API)是否存在 → 每个适配器工厂选 `Official*` 或 `Workaround*`。

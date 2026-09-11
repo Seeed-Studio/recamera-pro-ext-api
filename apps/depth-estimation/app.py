@@ -91,6 +91,7 @@ class DepthEstimationApp(App):
     # Nothing here reads original-resolution pixels -- the depth map, the grid
     # and every ROI live in letterbox space -- so take the cheapest frame path.
     model_frame = "hw-direct"
+    model_dma_input = True
     input_size = 256
     # No detector, so the kit's COCO80 default would be meaningless; the grid
     # cells carry their own near/mid/far label.
@@ -244,7 +245,7 @@ class DepthEstimationApp(App):
                                              # the publish -- that is the point
             x = self.pre(frame)
             t0 = time.monotonic()
-            outs = self.models.depth.infer(x.data)
+            outs = self.models.depth.infer(x)
             infer_ms = (time.monotonic() - t0) * 1000.0
             depth = outs[0] if isinstance(outs, (list, tuple)) else outs
             results, extra = self.analyse(depth, x.info)

@@ -90,6 +90,27 @@ class PreparedInput:
         return iter((self.data, self.info))
 
 
+class _DeferredPreparedInput(PreparedInput):
+    def __init__(self, image, info):
+        self._image = image
+        self.info = info
+
+    @property
+    def data(self):
+        if hasattr(self, "_data_override"):
+            return self._data_override
+        return self._image.map()
+
+    @data.setter
+    def data(self, value):
+        self._data_override = value
+
+    def _prepare(self, descriptor):
+        if hasattr(self, "_data_override"):
+            return False
+        return self._image.prepare(descriptor)
+
+
 class _ModelHandle:
     """One preloaded model. `infer()` is timed into the owning app's frame budget."""
 
@@ -102,6 +123,29 @@ class _ModelHandle:
 
     def infer(self, x):
         """Run one forward pass. Accepts a raw array or a `PreparedInput`."""
+        if isinstance(x, _DeferredPreparedInput):
+            prepare_ms = 0.0
+
+            def timed(call, *args):
+                nonlocal prepare_ms
+                started = time.monotonic()
+                try:
+                    return call(*args)
+                finally:
+                    elapsed = time.monotonic() - started
+                    prepare_ms += elapsed
+                    self._owner._t_pre += elapsed
+
+            started = time.monotonic()
+            try:
+                infer_prepared = getattr(self._impl, "infer_prepared", None)
+                if callable(infer_prepared):
+                    return infer_prepared(
+                        lambda target: timed(x._prepare, target),
+                        lambda: timed(lambda: x.data))
+                return self._impl.infer(timed(lambda: x.data))
+            finally:
+                self._owner._t_infer += max(0.0, time.monotonic() - started - prepare_ms)
         if isinstance(x, PreparedInput):
             x = x.data
         t0 = time.monotonic()
@@ -567,6 +611,9 @@ class App:
     # geometry, never an error.  For "hw-roi", a librga without ``improcess_t``
     # degrades to "hw" (full-res data + numpy ROI crop), still correct.
     model_frame: str = "cpu"
+    # Opt in only when the application consumes each frame inside its loop.
+    # Historical apps retain eager, independent RGB frame storage by default.
+    model_dma_input: bool = False
 
     def __init__(self) -> None:
         # config_schema-backed knobs (defaults; overridden in setup())
@@ -1035,6 +1082,9 @@ class App:
                 direct_preprocess=(mode == "hw-direct"),
                 hw_letterbox=(mode == "hw"),
                 hw_roi=(mode == "hw-roi"),
+                deferred_preprocess=(self.model_dma_input is True
+                    and mode == "hw-direct" and len(self.models) > 0
+                    and getattr(self.models[0]._impl, "io_transport", None) == "rknn-dma-v1"),
             )
         else:
             # No camera at all (needs_frames = False). Everything else below --
@@ -1178,8 +1228,9 @@ class App:
             the pre-migration loop did (it warmed the NPU, then `continue`d
             before the business-logic callback), which is what keeps a stateful
             app's tracker/dwell/window identical across the migration;
-          * measures the frame budget and flushes the periodic `metrics` meta
-            event (pre/infer/emit measured by kit, the remainder is `app`);
+          * measures the complete loop-body budget and flushes the periodic
+            `metrics` meta event (`loop` includes work after emit; pre/infer/
+            emit are measured by kit, the remainder is `app`);
           * stops after `--n` processed frames.
         """
         rt = self._rt
@@ -1200,7 +1251,7 @@ class App:
         METRICS_PERIOD = 1.0
         m_t0 = time.monotonic()
         m_frames = 0
-        m_pre = m_inf = m_emit = m_app = 0.0
+        m_pre = m_inf = m_emit = m_app = m_loop = 0.0
 
         got_real = False
         fidx = 0
@@ -1253,6 +1304,7 @@ class App:
             m_inf += self._t_infer
             m_emit += self._t_emit
             m_app += max(0.0, app_ms)
+            m_loop += total
 
             m_now = time.monotonic()
             m_dt = m_now - m_t0
@@ -1264,6 +1316,10 @@ class App:
                         "app": self.id,
                         "fps": round(m_frames / m_dt, 1),
                         "latency_ms": {
+                            # Complete application loop body, including all
+                            # emit calls and work after them. Frame acquisition
+                            # and this metrics publication are outside `total`.
+                            "loop": round(m_loop / m_frames * 1000, 1),
                             # `pre`/`infer`/`post` keep the existing appmgr /
                             # debug-panel contract; in the new shape the app owns
                             # post-processing, so `post` IS the app bucket. `app`
@@ -1281,7 +1337,7 @@ class App:
                     pass    # telemetry must never break the inference loop
                 m_t0 = m_now
                 m_frames = 0
-                m_pre = m_inf = m_emit = m_app = 0.0
+                m_pre = m_inf = m_emit = m_app = m_loop = 0.0
 
             if verbose:
                 p = self._last_payload or {}
@@ -1334,6 +1390,9 @@ class App:
         """
         t0 = time.monotonic()
         try:
+            deferred = getattr(frame, "_deferred_model_image", None)
+            if deferred is not None:
+                return _DeferredPreparedInput(deferred, frame.model_info)
             info = getattr(frame, "model_info", None)
             padded = getattr(frame, "model_data", None)
             if padded is None:

@@ -44,6 +44,7 @@ class RetailVisionApp(App):
     # Only boxes/tracks are consumed -- never frame.data pixels -- so the frame
     # source can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"
+    model_dma_input = True
 
     # Fallbacks for the auto-bound config_schema keys: these are what the app
     # runs with when a key is absent from the effective config (the manifest
@@ -143,7 +144,7 @@ class RetailVisionApp(App):
         for frame in self.frames():
             # -- 1. pre / infer / post ---------------------------------- #
             x = self.pre(frame)
-            outs = self.models.det.infer(x.data)
+            outs = self.models.det.infer(x)
             results = postprocess(outs, x.info, conf_thres=self.confidence,
                                   iou_thres=self.iou,
                                   class_names=self.class_names)

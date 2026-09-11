@@ -58,7 +58,9 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import operator
 import os
+import threading
 from ctypes import (
     Structure,
     c_char,
@@ -77,6 +79,7 @@ RK_FORMAT_YCbCr_420_SP = 0xE << 8     # 0xe00  NV12 (Y plane + interleaved CbCr)
 
 # --- IM_STATUS (im2d_api/im2d_type.h). SUCCESS == 1. ------------------------- #
 IM_STATUS_SUCCESS = 1
+IM_SYNC = 1 << 19
 
 
 # librga v1.10.5's `rga_buffer_t` is 96 bytes. We NEVER read/write its fields
@@ -228,13 +231,32 @@ class RgaNV12ToRGB:
         # src/dst/pat are the 96-byte rga_buffer_t passed BY VALUE; the rects are
         # the 16-byte _im_rect passed BY VALUE.
         self._improcess = getattr(lib, "improcess_t", None)
-        if self._improcess is not None:
-            self._improcess.restype = c_int
-            self._improcess.argtypes = [
-                _rga_buffer_t, _rga_buffer_t, _rga_buffer_t,
-                _im_rect, _im_rect, _im_rect, c_int,
-            ]
+        self._letterbox_process = self._improcess
+        if self._letterbox_process is None:
+            # The shipping 1.10.5_[11] library exports the C spelling below,
+            # declared with these same seven arguments in im2d_single.h.
+            # Never bind a mangled C++ overload or infer an importbuffer ABI.
+            # This additional symbol is for the new letterbox path only:
+            # enabling it must not change existing hw-roi capability/fallback.
+            self._letterbox_process = getattr(lib, "improcess", None)
+        for process in (self._improcess, self._letterbox_process):
+            if process is not None:
+                process.restype = c_int
+                process.argtypes = [
+                    _rga_buffer_t, _rga_buffer_t, _rga_buffer_t,
+                    _im_rect, _im_rect, _im_rect, c_int,
+                ]
+        self._fill = getattr(lib, "imfill_t", None)
+        if self._fill is not None:
+            # im2d_single.h: imfill_t(rga_buffer_t, im_rect, int color, int sync)
+            self._fill.restype = c_int
+            self._fill.argtypes = [_rga_buffer_t, _im_rect, c_int, c_int]
         self._lib = lib
+        # Bounded to one geometry, not a cache accumulating every source size.
+        # Hold the lock until both synchronous operations finish: two callers
+        # must never overwrite this scratch while the other is converting it.
+        self._letterbox_lock = threading.Lock()
+        self._letterbox_nv12 = None
 
     def can_crop(self) -> bool:
         """True when the librga build exports `improcess_t` (the ROI-crop path).
@@ -254,6 +276,140 @@ class RgaNV12ToRGB:
         """
 
         return self._resize is not None
+
+    def can_letterbox(self, *, dma_output: bool = False) -> bool:
+        """Whether reusable RGB letterboxing is supported by this library.
+
+        DMA output also needs hardware fill so the CPU never touches a DMA
+        mapping without the owner's cache synchronization protocol.
+        """
+        return (self._resize is not None and self._letterbox_process is not None
+                and (not dma_output or self._fill is not None))
+
+    def letterbox_nv12_to_rgb(
+        self, fd: int, width: int, height: int, y_stride: int, y_vstride: int,
+        dst_width: int, dst_height: int, dst_window, *,
+        out: Optional[np.ndarray] = None, dst_fd: Optional[int] = None,
+        dst_w_stride: Optional[int] = None, dst_h_stride: Optional[int] = None,
+        pad_value: int = 114,
+    ) -> Optional[np.ndarray]:
+        """Resize NV12 then convert directly into a caller-owned RGB canvas.
+
+        ``dst_window=(left, top, right, bottom)`` is already rounded by the
+        caller's letterbox geometry. No coordinate or color-order changes are
+        made here. As in ``resize_nv12_to_rgb``, scaling happens in NV12 before
+        converting to packed RGB. Only the model-sized NV12 scratch is cached.
+
+        Supply either a writable, C-contiguous uint8 ``out[H,W,3]`` or a
+        borrowed RGB ``dst_fd``. With neither, allocate a fresh output. DMA
+        strides are in RGB *pixels* and rows, not bytes; the owner must provide
+        at least ``dst_w_stride * dst_h_stride * 3`` backing bytes and keep the
+        fd alive throughout this call. The destination begins at fd offset zero;
+        a tensor suballocation at a nonzero byte offset requires a fallback.
+        Array output must be tightly packed.
+        DMA output returns None; array output returns the supplied/new array.
+        Every RGA operation is synchronous. There is no fd ownership transfer,
+        mapping, imported handle, or CPU read/write of the DMA destination.
+
+        Reused outputs are overwritten on the next call. Consumers retaining
+        them must copy or finish consuming them before reuse. A failure can
+        leave an incomplete output; the caller must discard it and fall back.
+        """
+        dma_output = dst_fd is not None
+        if not self.can_letterbox(dma_output=dma_output):
+            raise RuntimeError("librga reusable letterbox symbols unavailable")
+        if dma_output and out is not None:
+            raise ValueError("supply either letterbox out or dst_fd, not both")
+
+        def integer(value, name, minimum=1):
+            try:
+                result = operator.index(value)
+            except TypeError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if isinstance(value, (bool, np.bool_)) or not minimum <= result <= 0x7fffffff:
+                raise ValueError(f"invalid letterbox {name}")
+            return result
+
+        fd = integer(fd, "fd", 0)
+        width, height = integer(width, "width"), integer(height, "height")
+        y_stride = integer(y_stride, "y_stride")
+        y_vstride = integer(y_vstride, "y_vstride")
+        dst_width = integer(dst_width, "dst_width")
+        dst_height = integer(dst_height, "dst_height")
+        if y_stride < width or y_vstride < height:
+            raise ValueError("NV12 strides must cover the visible source")
+        if (width | height | y_stride | y_vstride) & 1:
+            raise ValueError("NV12 geometry and strides must be even")
+        try:
+            left, top, right, bottom = dst_window
+        except (TypeError, ValueError) as exc:
+            raise ValueError("dst_window must contain four coordinates") from exc
+        left, top, right, bottom = (
+            integer(value, "dst_window coordinate", 0)
+            for value in (left, top, right, bottom))
+        if not (left < right <= dst_width and top < bottom <= dst_height):
+            raise ValueError("dst_window must lie inside the RGB canvas")
+        small_w, small_h = right - left, bottom - top
+        if (small_w | small_h) & 1:
+            raise ValueError("NV12 resize geometry must be even")
+        pad_value = integer(pad_value, "pad_value", 0)
+        if pad_value > 255:
+            raise ValueError("pad_value must fit uint8")
+        wstride = dst_width if dst_w_stride is None else integer(dst_w_stride, "dst_w_stride")
+        hstride = dst_height if dst_h_stride is None else integer(dst_h_stride, "dst_h_stride")
+        if wstride < dst_width or hstride < dst_height:
+            raise ValueError("RGB strides must cover the visible destination")
+        if not dma_output and (wstride != dst_width or hstride != dst_height):
+            raise ValueError("array letterbox output must be tightly packed")
+        if dma_output:
+            dst_fd = integer(dst_fd, "dst_fd", 0)
+            if dst_fd == fd:
+                raise ValueError("source and destination DMA fds must differ")
+        elif out is not None:
+            if (not isinstance(out, np.ndarray)
+                    or out.shape != (dst_height, dst_width, 3)
+                    or out.dtype != np.uint8
+                    or not out.flags.c_contiguous or not out.flags.writeable):
+                raise ValueError("letterbox out must be writable contiguous uint8 [H,W,3]")
+
+        with self._letterbox_lock:
+            scratch_shape = (small_h * 3 // 2, small_w)
+            if self._letterbox_nv12 is None or self._letterbox_nv12.shape != scratch_shape:
+                self._letterbox_nv12 = np.empty(scratch_shape, dtype=np.uint8)
+            nv12 = self._letterbox_nv12
+            src = self._lib.wrapbuffer_fd_t(
+                fd, width, height, y_stride, y_vstride, RK_FORMAT_YCbCr_420_SP)
+            small = self._lib.wrapbuffer_virtualaddr_t(
+                nv12.ctypes.data_as(c_void_p), small_w, small_h,
+                small_w, small_h, RK_FORMAT_YCbCr_420_SP)
+            rc = self._resize(src, small, 0.0, 0.0, 0, 1)
+            if rc != IM_STATUS_SUCCESS:
+                raise RuntimeError("RGA imresize_t failed: IM_STATUS=%d" % rc)
+
+            if dma_output:
+                dst = self._lib.wrapbuffer_fd_t(
+                    dst_fd, dst_width, dst_height, wstride, hstride,
+                    RK_FORMAT_RGB_888)
+                # RGB888 drops the alpha byte; equal RGB components preserve
+                # the established neutral padding regardless of byte naming.
+                color = pad_value | (pad_value << 8) | (pad_value << 16)
+                rc = self._fill(dst, _im_rect(0, 0, dst_width, dst_height), color, 1)
+                if rc != IM_STATUS_SUCCESS:
+                    raise RuntimeError("RGA imfill_t failed: IM_STATUS=%d" % rc)
+            else:
+                if out is None:
+                    out = np.empty((dst_height, dst_width, 3), dtype=np.uint8)
+                out.fill(pad_value)
+                dst = self._lib.wrapbuffer_virtualaddr_t(
+                    out.ctypes.data_as(c_void_p), dst_width, dst_height,
+                    wstride, hstride, RK_FORMAT_RGB_888)
+            rc = self._letterbox_process(
+                small, dst, _rga_buffer_t(),
+                _im_rect(0, 0, small_w, small_h),
+                _im_rect(left, top, small_w, small_h), _im_rect(), IM_SYNC)
+            if rc != IM_STATUS_SUCCESS:
+                raise RuntimeError("RGA improcess letterbox failed: IM_STATUS=%d" % rc)
+        return out
 
     def convert(self, fd: int, width: int, height: int,
                 y_stride: int, y_vstride: int) -> np.ndarray:

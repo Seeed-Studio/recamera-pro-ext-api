@@ -365,6 +365,7 @@ class FallDetectionApp(App):
     # Only skeleton coordinates are consumed -- never frame.data pixels -- so the
     # frame source can letterbox on RGA into data itself (see App.model_frame).
     model_frame = "hw-direct"
+    model_dma_input = True
 
     # Fallbacks for the auto-bound config_schema keys (used when a key is missing
     # from the effective config; the manifest supplies each default).
@@ -510,7 +511,7 @@ class FallDetectionApp(App):
         for frame in self.frames():
             # -- 1. pre / infer / post ----------------------------------- #
             x = self.pre(frame)
-            outs = self.models.pose.infer(x.data)
+            outs = self.models.pose.infer(x)
             results = pose_post.postprocess(
                 outs, x.info,
                 conf_thres=self.confidence,

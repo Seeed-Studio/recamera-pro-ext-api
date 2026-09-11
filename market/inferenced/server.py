@@ -20,6 +20,9 @@ from typing import Any, Mapping, Optional, Protocol, Sequence
 import numpy as np
 
 from kit.runtime._inference_protocol import ProtocolError, recv_message, send_message
+from kit.runtime._inference_protocol import MAX_MESSAGE_BYTES, MAX_TENSORS
+from kit.runtime._inference_shared import SHARED_IO_VERSION, send_fds
+from kit.runtime.ctypes_rknn import _BoundIOUnavailable
 from kit.runtime.engine import (
     ModelSpec,
     TensorSpec,
@@ -111,7 +114,10 @@ class RknnBackend:
                     result = runtime.init_runtime(core_mask=model_spec.core_mask)
                 if result != 0:
                     raise RuntimeError(f"init_runtime failed with status {result!r}")
-            except BaseException:
+            except BaseException as load_error:
+                if getattr(runtime, "native_cleanup_failed", False):
+                    token.retain_fail_closed(f"model initialization cleanup failed: {load_error}")
+                    raise
                 try:
                     released = runtime.release()
                     if released not in (None, 0):
@@ -141,6 +147,48 @@ class RknnBackend:
             except BaseException as exc:
                 token.retain_fail_closed(f"RKNN context teardown failed: {exc}")
                 raise
+
+    def shared_io_size(self, handle):
+        return (int(handle.shared_io_size_bytes)
+                if getattr(handle, "io_mode", None) == "bound" else 0)
+
+    def open_shared_io(self, handle):
+        with self.coordinator.hold() as token:
+            input_buffer = None
+            try:
+                input_buffer = handle.allocate_input_buffer()
+                outputs = handle.allocate_output_buffers()
+            except BaseException as allocation_error:
+                if getattr(handle, "native_cleanup_failed", False):
+                    token.retain_fail_closed(f"shared IO allocation rollback failed: {allocation_error}")
+                    raise
+                try:
+                    if input_buffer is not None:
+                        handle.release_input_buffer(input_buffer)
+                except BaseException as exc:
+                    token.retain_fail_closed(f"shared IO allocation rollback failed: {exc}")
+                    raise
+                raise
+            return input_buffer, outputs
+
+    def close_shared_io(self, handle, channel):
+        with self.coordinator.hold() as token:
+            try:
+                handle.release_input_buffer(channel.input)
+                handle.release_output_buffers(channel.outputs)
+            except BaseException as exc:
+                token.retain_fail_closed(f"shared IO teardown failed: {exc}")
+                raise
+
+    def infer_shared_io(self, handle, channel):
+        started = time.monotonic()
+        with self.coordinator.hold():
+            admitted = time.monotonic()
+            handle.infer_dma_buffers(channel.input, channel.outputs)
+        return {
+            "driver_wait": (admitted - started) * 1000.0,
+            "runtime": (time.monotonic() - admitted) * 1000.0,
+        }
 
 
 class FakeBackend:
@@ -190,6 +238,29 @@ class _Model:
 
 
 @dataclass
+class _SharedIO:
+    input: Any
+    outputs: list
+    token: str = field(default_factory=lambda: uuid.uuid4().hex)
+    sequence: int = 0
+    poisoned: bool = False
+
+    @property
+    def size(self):
+        return sum(int(item.size) + int(item.offset)
+                   for item in [self.input, *self.outputs])
+
+    def describe(self):
+        def metadata(item):
+            result = dict(item.describe())
+            result.pop("fd", None)
+            return result
+        return {"version": SHARED_IO_VERSION, "token": self.token,
+                "input": metadata(self.input),
+                "outputs": [metadata(item) for item in self.outputs]}
+
+
+@dataclass
 class _Client:
     id: str
     app_id: str
@@ -200,6 +271,7 @@ class _Client:
     gid: int
     authorization: Optional[ClientAuthorization] = None
     aliases: dict[str, str] = field(default_factory=dict)
+    shared_io: dict[str, _SharedIO] = field(default_factory=dict)
 
 
 def _error(code: str, message: str, *, retryable: bool = False, **details) -> dict:
@@ -278,7 +350,7 @@ def _open_verified_model(policy: ModelAuthorization) -> tuple[int, str]:
 
 
 class InferenceService:
-    """Own all target RKNN contexts and serve multiple application clients."""
+    """Own managed RKNN contexts and serve multiple application clients."""
 
     def __init__(
         self,
@@ -525,6 +597,8 @@ class InferenceService:
                         "memory_budget_mb": self.memory_budget_mb,
                         "max_clients": self.max_clients,
                         "authorized": authorization is not None,
+                        "shared_io": (SHARED_IO_VERSION if callable(getattr(
+                            self.backend, "open_shared_io", None)) else None),
                     },
                 },
             )
@@ -550,7 +624,10 @@ class InferenceService:
                 except EOFError:
                     break
                 response, outputs = self._dispatch(client, request, tensors)
+                fds = response.pop("_send_fds", ())
                 send_message(conn, response, outputs)
+                if fds:
+                    send_fds(conn, fds)
         except (EOFError, BrokenPipeError, ConnectionResetError):
             pass
         except ProtocolError as exc:
@@ -613,6 +690,31 @@ class InferenceService:
                 if tensors:
                     raise ValueError("load does not accept tensors")
                 payload = self._load(client, request)
+            elif op == "open_shared_io":
+                if tensors:
+                    raise ValueError("open_shared_io does not accept tensors")
+                payload = self._open_shared_io(client, request)
+            elif op == "infer_shared":
+                if tensors:
+                    raise ValueError("infer_shared does not accept tensor payloads")
+                alias = str(request.get("alias") or "")
+                channel = client.shared_io.get(alias)
+                if (channel is None or channel.poisoned
+                        or request.get("token") != channel.token
+                        or type(request.get("sequence")) is not int
+                        or request["sequence"] != channel.sequence + 1):
+                    raise ValueError("invalid shared IO ownership or sequence")
+                channel.sequence = request["sequence"]
+                try:
+                    payload = self._infer(client, request, [channel.input], shared=channel)
+                except BaseException:
+                    # A deadline may expire while RKNN is still accessing this
+                    # allocation. Never authorize its reuse after an error.
+                    channel.poisoned = True
+                    self.scheduler.cancel_client(client.id)
+                    raise
+                payload.pop("outputs")
+                payload.update(token=channel.token, sequence=channel.sequence)
             elif op == "infer":
                 payload = self._infer(client, request, tensors)
                 outputs = payload.pop("outputs")
@@ -689,7 +791,8 @@ class InferenceService:
         with self._driver_lock:
             with self._lock:
                 model = self._models.get(key)
-                used_mb = sum(item.memory_mb for item in self._models.values())
+                used_mb = (sum(item.memory_mb for item in self._models.values())
+                           + self._shared_bytes() / (1024 * 1024))
                 if model is None and used_mb + memory_mb > self.memory_budget_mb:
                     raise MemoryError(
                         f"model needs {memory_mb} MiB; {used_mb}/{self.memory_budget_mb} MiB reserved"
@@ -710,6 +813,7 @@ class InferenceService:
                     for model_key in instance_keys
                     if model_key in self._models
                 )
+                app_reserved_mb += self._shared_bytes(client) / (1024 * 1024)
                 if (
                     key not in instance_keys
                     and app_reserved_mb + memory_mb
@@ -757,8 +861,77 @@ class InferenceService:
             "shared_references": len(model.aliases),
         }
 
+    def _shared_bytes(self, client=None):
+        def same_instance(other):
+            return (client is None or
+                    (other.app_id, other.instance_id, other.generation) ==
+                    (client.app_id, client.instance_id, client.generation))
+        return sum(channel.size for other in self._clients.values()
+                   if same_instance(other) for channel in other.shared_io.values())
+
+    def _check_shared_budget(self, client, size):
+        if not 0 < size <= MAX_MESSAGE_BYTES:
+            raise MemoryError("shared IO allocation exceeds transport policy")
+        mib = 1024 * 1024
+        total = sum(model.memory_mb * mib for model in self._models.values())
+        if total + self._shared_bytes() + size > self.memory_budget_mb * mib:
+            raise MemoryError("shared IO exceeds service memory budget")
+        identity = (client.app_id, client.instance_id, client.generation)
+        keys = {key for other in self._clients.values()
+                if (other.app_id, other.instance_id, other.generation) == identity
+                for key in other.aliases.values()}
+        reserved = sum(self._models[key].memory_mb * mib for key in keys
+                       if key in self._models)
+        if reserved + self._shared_bytes(client) + size > client.authorization.memory_limit_mb * mib:
+            raise MemoryError("shared IO exceeds application memory budget")
+
+    def _open_shared_io(self, client, request):
+        alias = str(request.get("alias") or "")
+        if request.get("version") != SHARED_IO_VERSION:
+            raise ValueError("unsupported shared IO version")
+        with self._driver_lock:
+            self.authorizer.validate(client.authorization)
+            with self._lock:
+                model = self._models.get(client.aliases.get(alias))
+                if model is None:
+                    raise KeyError("model alias is not loaded")
+                if alias in client.shared_io:
+                    raise ValueError("shared IO is already open for this alias")
+                size_fn = getattr(self.backend, "shared_io_size", None)
+                estimate = size_fn(model.handle) if callable(size_fn) else 0
+                if not estimate:
+                    return {"shared_io": None, "reason": "model_unsupported"}
+                try:
+                    self._check_shared_budget(client, estimate)
+                except MemoryError:
+                    # This optimization must not make an otherwise admitted
+                    # application fail to start under a small memory budget.
+                    return {"shared_io": None, "reason": "memory_budget"}
+            try:
+                input_buffer, outputs = self.backend.open_shared_io(model.handle)
+            except (MemoryError, _BoundIOUnavailable):
+                if getattr(model.handle, "native_cleanup_failed", False):
+                    raise
+                return {"shared_io": None, "reason": "allocation_unavailable"}
+            channel = _SharedIO(input_buffer, outputs)
+            try:
+                if not 2 <= 1 + len(outputs) <= MAX_TENSORS:
+                    raise MemoryError("too many shared IO buffers")
+                with self._lock:
+                    self._check_shared_budget(client, channel.size)
+                    client.shared_io[alias] = channel
+            except MemoryError:
+                self.backend.close_shared_io(model.handle, channel)
+                return {"shared_io": None, "reason": "memory_budget"}
+            except BaseException:
+                self.backend.close_shared_io(model.handle, channel)
+                raise
+            return {"shared_io": channel.describe(),
+                    "_send_fds": [item.fd for item in [input_buffer, *outputs]]}
+
     def _infer(
-        self, client: _Client, request: Mapping[str, Any], tensors: list[np.ndarray]
+        self, client: _Client, request: Mapping[str, Any], tensors: list[np.ndarray],
+        *, shared=None,
     ) -> dict:
         alias = str(request.get("alias") or "")
         timeout_ms = request.get("timeout_ms", 30000)
@@ -778,15 +951,18 @@ class InferenceService:
             for index, (tensor, contract) in enumerate(zip(tensors, model.inputs)):
                 expected_shape = tuple(int(value) for value in contract["shape"])
                 expected_dtype = np.dtype(str(contract["dtype"]))
-                if tensor.shape != expected_shape or tensor.dtype != expected_dtype:
+                if tuple(tensor.shape) != expected_shape or np.dtype(tensor.dtype) != expected_dtype:
                     raise ValueError(
                         f"tensor {index} has shape/dtype {tensor.shape}/{tensor.dtype}; "
                         f"authorized contract is {expected_shape}/{expected_dtype}"
                     )
         deadline = time.monotonic() + timeout_ms / 1000.0
+        queued_at = time.monotonic()
+        timings = {}
 
         def execute():
             started = time.monotonic()
+            timings["queue"] = (started - queued_at) * 1000.0
             try:
                 if client.authorization is None:
                     raise AuthorizationError("inference authorization is missing")
@@ -800,7 +976,15 @@ class InferenceService:
                     with self._lock:
                         if self._models.get(model.key) is not model:
                             raise RuntimeError("model was unloaded before inference")
-                    outputs = self.backend.infer(model.handle, tensors)
+                        if shared is not None and (
+                            client.shared_io.get(alias) is not shared or shared.poisoned
+                        ):
+                            raise RuntimeError("shared IO was closed before inference")
+                    if shared is None:
+                        outputs = self.backend.infer(model.handle, tensors)
+                    else:
+                        timings.update(self.backend.infer_shared_io(model.handle, shared) or {})
+                        outputs = []
                     model.next_allowed = (
                         time.monotonic() + 1.0 / model.max_fps if model.max_fps > 0 else 0.0
                     )
@@ -826,7 +1010,8 @@ class InferenceService:
         )
         self.scheduler.submit(job)
         outputs = job.result(timeout=timeout_ms / 1000.0 + 1.0)
-        return {"outputs": outputs, "model_key": model.key, "latency_ms": model.last_ms}
+        return {"outputs": outputs, "model_key": model.key,
+                "latency_ms": model.last_ms, "timings_ms": timings}
 
     def _unload(self, client: _Client, alias: str) -> dict:
         if not alias:
@@ -836,6 +1021,14 @@ class InferenceService:
             with self._lock:
                 key = client.aliases.get(alias)
                 model = self._models.get(key) if key else None
+                channel = client.shared_io.get(alias)
+                if channel is not None:
+                    channel.poisoned = True
+            if channel is not None and model is not None:
+                self.backend.close_shared_io(model.handle, channel)
+                with self._lock:
+                    client.shared_io.pop(alias, None)
+            with self._lock:
                 if model is None or owner not in model.aliases:
                     client.aliases.pop(alias, None)
                     return {"alias": alias, "released": False}
@@ -902,6 +1095,7 @@ class InferenceService:
                 "models": models,
                 "memory_budget_mb": self.memory_budget_mb,
                 "memory_reserved_mb": sum(item.memory_mb for item in self._models.values()),
+                "shared_io_reserved_bytes": self._shared_bytes(),
             }
 
     def __enter__(self) -> "InferenceService":

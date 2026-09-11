@@ -386,3 +386,15 @@ struct frame_hdr {
 **闭源/可改边界**：扩展 API 对**方案商闭源**——他们只拿到 socket 契约 + `librecamera_ext.so` + 文档，拿不到固件源码。对 **Seeed 自己源码可改**——端点层、核心库、dispatch 均在固件树内，Seeed 可迭代实现，只要不破坏已冻结的线格式与 C ABI（由 §6 兼容性工程守住）。
 
 `video.c:656` 内建推理与 `rc_result_in.c` 外部注入调用**同一** `rc_result_dispatch()`，是这条边界的具体体现：官方先吃自己的狗粮，外部注入沿用已验证的分发链。
+
+## 9. 托管多应用推理与 DMA 数据通路
+
+当前 manifest-v2 的 scheduled 应用由 `appmgr` 授权后连接 `inferenced.sock`，
+与上文 legacy `inference-control.sock` 单 owner 直连路径区分。模型上下文由
+推理服务缓存，内置 IPC 与服务仍通过共同的 driver coordinator 串行提交 RKNN；
+IPC 的前后处理不占用该全局锁，实例锁继续保护完整模型生命周期。
+
+可选 `rknn-dma-v1` 使用每个连接/alias 独立的常驻输入输出 DMA 缓存。
+socket 保留身份验证、请求和完成通知；未协商能力时继续使用原 tensor-v1 数据传输。
+字段、内存预算、超时回收和 RGA 兼容规则见
+[共享推理 IO 契约](../guide/shared-inference-io.md)。
