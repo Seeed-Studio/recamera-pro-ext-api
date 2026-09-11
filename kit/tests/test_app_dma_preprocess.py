@@ -411,15 +411,21 @@ def test_mapped_array_can_outlive_lease_but_explicit_release_invalidates_it(pipe
     pytest.param(True, "hw-direct", ["socket"], False, id="socket-copy-transport"),
     pytest.param(True, "hw-direct", [None], False, id="old-model-without-transport"),
     pytest.param(True, "cpu", ["rknn-dma-v1"], False, id="cpu-model-frame"),
-    pytest.param(True, "hw", ["rknn-dma-v1"], False, id="separate-hardware-model-frame"),
-    pytest.param(True, "hw-roi", ["rknn-dma-v1"], False, id="hardware-roi-frame"),
+    pytest.param(True, "hw", ["rknn-dma-v1"], True, id="separate-hardware-model-frame"),
+    pytest.param("default", "hw", ["rknn-dma-v1"], False, id="old-hw-app-default"),
+    pytest.param(False, "hw", ["rknn-dma-v1"], False, id="hw-explicit-opt-out"),
+    pytest.param(True, "hw", ["tensor-v1"], False, id="hw-legacy-transport"),
+    pytest.param(True, "hw-roi", ["rknn-dma-v1"], True, id="hardware-roi-frame"),
+    pytest.param("default", "hw-roi", ["rknn-dma-v1"], False, id="old-roi-app-default"),
+    pytest.param(False, "hw-roi", ["rknn-dma-v1"], False, id="roi-explicit-opt-out"),
+    pytest.param(True, "hw-roi", ["tensor-v1"], False, id="roi-legacy-transport"),
     pytest.param(True, "hw-direct", [], False, id="no-primary-model"),
     pytest.param(True, "hw-direct", [None, "rknn-dma-v1"], False,
                  id="dma-secondary-cannot-enable-primary"),
     pytest.param(True, "hw-direct", ["rknn-dma-v1", None], True,
                  id="dma-primary-with-legacy-secondary"),
 ])
-def test_start_requires_explicit_opt_in_direct_mode_and_primary_dma_transport(
+def test_start_requires_explicit_opt_in_hardware_mode_and_primary_dma_transport(
         monkeypatch, opt_in, mode, transports, expected):
     class StartupApp(App):
         id = "dma-startup-test"

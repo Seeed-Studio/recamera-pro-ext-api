@@ -109,6 +109,7 @@ class CrayfishFightApp(App):
     # self.crop_roi_hw. NOT "hw-direct" (no cropper; frame.data is the
     # letterbox) -- see the module docstring.
     model_frame = "hw-roi"
+    model_dma_input = True  # detector DMA input and ROIs share this frame lease
     class_names = CRAYFISH_CLASSES
 
     # Fallbacks for the auto-bound config_schema keys (the manifest supplies
@@ -245,7 +246,7 @@ class CrayfishFightApp(App):
 
             # -- 1. detect ------------------------------------------------ #
             x = self.pre(frame)
-            outs = self.models[DET_ID].infer(x.data)
+            outs = self.models[DET_ID].infer(x)
             results = detect_post(outs, x.info, conf_thres=self.conf,
                                   iou_thres=self.iou,
                                   class_names=self.class_names)

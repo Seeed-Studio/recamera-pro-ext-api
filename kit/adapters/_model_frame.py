@@ -46,6 +46,18 @@ class DeferredModelImage:
                 return False
             return self._prepare(descriptor)
 
+    def use_lease(self, call, *args):
+        """Read the original camera frame, serialized with expiry and RGA.
+
+        A materialized RGB copy can outlive this lease, but never grants more
+        time to crop the original borrowed NV12 buffer.
+        """
+        with self._lock:
+            if self._closed or not self._active:
+                raise BufferReleasedError(
+                    "camera frame lease has ended", operation="frame.crop")
+            return call(*args)
+
     def expire(self):
         with self._lock:
             self._active = False

@@ -311,6 +311,68 @@ class TestLoopContract(_Base):
         _sink, _app = self.run_app()
         assert set(self.emb[-1].input_shapes) == {(112, 112, 3)}
 
+    def test_deferred_detector_reaches_model_handle_without_materializing_model_pixels(self, monkeypatch):
+        from kit.adapters._model_frame import DeferredModelImage
+        from kit.runtime.preprocess import letterbox
+        import align
+
+        self.enroll(alice=0)
+        prepared = []
+        originals = {}
+        aligned = []
+        source_options = []
+        real_align = align.align_face
+
+        def checked_align(rgb, landmarks, *args, **kwargs):
+            assert id(rgb) in originals
+            assert rgb.shape == (FRAME_H, FRAME_W, 3)
+            np.testing.assert_array_equal(rgb, originals[id(rgb)])
+            aligned.append(rgb)
+            return real_align(rgb, landmarks, *args, **kwargs)
+
+        monkeypatch.setattr(align, "align_face", checked_align)
+
+        def deferred_frames():
+            detector = self.det[-1]
+
+            def infer_prepared(prepare, fallback):
+                target = {"frame": len(prepared)}
+                assert prepare(target)
+                prepared.append(target)
+                # Simulate the existing detector's outputs after DMA inference.
+                return detector.infer(np.zeros((DET_SIZE, DET_SIZE, 3), np.uint8))
+
+            detector.infer_prepared = infer_prepared
+            for index, frame in enumerate(_frames()):
+                if index <= N_GREY:  # placeholders and discarded warm-up frame
+                    yield frame
+                    continue
+                originals[id(frame.data)] = frame.data.copy()
+                _, frame.model_info = letterbox(frame.data, DET_SIZE)
+
+                def materialize():
+                    pytest.fail("the detector input must reach infer_prepared without reading .data")
+
+                image = DeferredModelImage(materialize, lambda target: True)
+                frame._deferred_model_image = image
+                try:
+                    yield frame
+                finally:
+                    image.expire()
+
+        def source(*args, **kwargs):
+            source_options.append(kwargs)
+            return _FakeSource(*args, frames_fn=deferred_frames, **kwargs)
+
+        monkeypatch.setattr(kit_app, "open_frame_source", source)
+        sink, app = self.run_app(embed_interval=1)
+        assert app.model_frame == "hw" and app.model_dma_input is True
+        assert source_options[0]["hw_letterbox"] is True
+        assert source_options[0]["direct_preprocess"] is False
+        assert len(prepared) == N_EMITTED
+        assert len(aligned) == N_EMITTED
+        assert len(sink.payloads) == N_EMITTED
+
     def test_cmd_server_is_not_bound_when_the_port_is_disabled(self):
         _sink, app = self.run_app(cmd_port=0)
         assert app._server is None          # finish() tore it down
@@ -443,6 +505,74 @@ class TestLiveness(_Base):
         face = sink.payloads[-1][0]["faces"][0]
         assert face["live"] is None
         assert face["liveness"] is None
+
+    @pytest.mark.parametrize("interval, expected_calls", [(1, N_EMITTED), (2, 2)])
+    def test_multiple_faces_share_depth_without_changing_sampling_cadence(self, interval, expected_calls):
+        other_big = dict(BIG, col=14)
+        self.faces_fn = lambda k: [(BIG, 0.9), (other_big, 0.8)]
+        _sink, app = self.run_app(
+            liveness_enabled=True, liveness_depth_enabled=True,
+            liveness_depth_min_face_px=64, liveness_prime=False,
+            liveness_min_samples=100, embed_interval=interval)
+        assert self.depth[-1].calls == expected_calls
+        # Both independently scheduled texture heads still run for BOTH faces.
+        assert [model.calls for model in self.live] == [2 * expected_calls] * 2
+        depth_results = [state.lv.depth for state in app._states.values()]
+        assert len(depth_results) == 2
+        assert all(value["score"] == 0.0 for value in depth_results)
+        assert depth_results[0]["box"] != depth_results[1]["box"]
+
+    def test_depth_size_gate_still_applies_to_each_face(self):
+        # The smaller face can enter liveness but does not pass the depth gate.
+        _sink, app = self.run_app(
+            min_face_px=16, liveness_enabled=True, liveness_depth_enabled=True,
+            liveness_depth_min_face_px=64, liveness_min_samples=100,
+            liveness_prime=False, embed_interval=1)
+        assert self.depth[-1].calls == N_EMITTED
+        assert sum(state.lv.depth is not None for state in app._states.values()) == 1
+        assert [model.calls for model in self.live] == [2 * N_EMITTED] * 2
+
+    def test_no_eligible_face_does_not_run_depth(self):
+        self.run_app(liveness_enabled=True, liveness_depth_enabled=True,
+                     liveness_depth_min_face_px=150, embed_interval=1)
+        assert self.depth[-1].calls == 0
+
+    def test_depth_failure_retries_for_next_face_in_same_frame(self, monkeypatch):
+        other_big = dict(BIG, col=14)
+        self.faces_fn = lambda k: [(BIG, 0.9), (other_big, 0.8)]
+        original_infer = _FakeDepth.infer
+
+        def fail_first(model, value):
+            if model.calls == 0:
+                model.calls += 1
+                raise RuntimeError("temporary depth failure")
+            return original_infer(model, value)
+
+        monkeypatch.setattr(_FakeDepth, "infer", fail_first)
+        sink, app = self.run_app(
+            liveness_enabled=True, liveness_depth_enabled=True,
+            liveness_depth_min_face_px=64, liveness_min_samples=100,
+            liveness_prime=False, embed_interval=1)
+        assert self.depth[-1].calls == N_EMITTED + 1
+        first_faces = sink.payloads[0][0]["faces"]
+        assert "depth" not in first_faces[0]["liveness"]
+        assert first_faces[1]["liveness"]["depth"]["score"] == 0.0
+        assert all(state.lv.depth is not None for state in app._states.values())
+
+    def test_depth_public_function_remains_replaceable_with_two_argument_callback(self, monkeypatch):
+        import depth_liveness
+        calls = []
+
+        def replacement(frame, box):
+            calls.append(tuple(box))
+            return {"score": 0.75}
+
+        monkeypatch.setattr(depth_liveness, "depth_flatness", replacement)
+        self.run_app(liveness_enabled=True, liveness_depth_enabled=True,
+                     liveness_depth_min_face_px=64, liveness_min_samples=100,
+                     liveness_prime=False, embed_interval=1)
+        assert len(calls) == N_EMITTED
+        assert self.depth[-1].calls == 0
 
     def test_enabled_runs_BOTH_texture_heads_on_80x80_bgr_crops(self):
         """★The ensemble is two crops, not one★ -- 2.7x and 4.0x of the same

@@ -157,6 +157,7 @@ class FaceRecognitionApp(App):
     name = "Face Recognition"
     owns_loop = True
     model_frame = "hw"          # alignment needs ORIGINAL pixels; see module doc
+    model_dma_input = True      # only the separate detector image may use DMA
     input_size = DET_SIZE
     class_names = ("face",)
 
@@ -695,7 +696,7 @@ class FaceRecognitionApp(App):
             with st_trace.stage("pre"):
                 x = self.pre(frame)
             with st_trace.stage("detect"):
-                dets = self._detect(x.data, x.info)
+                dets = self._detect(x, x.info)
             faces = dets[: max(1, int(self.max_faces))]
 
             with st_trace.stage("track"):
@@ -712,73 +713,76 @@ class FaceRecognitionApp(App):
             fw = float(frame.w or 1)
             fh = float(frame.h or 1)
 
-            for i, d in enumerate(faces):
-                x1, y1, x2, y2 = d["box"]
-                tr = by_det.get(i)
-                tid = tr.track_id if tr is not None else None
-                gated = tr is None or min(x2 - x1, y2 - y1) < float(self.min_face_px)
+            # Several eligible faces share this frame's depth map; each keeps
+            # its own sampling cadence, ROI score and liveness state.
+            with depth_liveness.reuse_frame_depth(rgb):
+                for i, d in enumerate(faces):
+                    x1, y1, x2, y2 = d["box"]
+                    tr = by_det.get(i)
+                    tid = tr.track_id if tr is not None else None
+                    gated = tr is None or min(x2 - x1, y2 - y1) < float(self.min_face_px)
 
-                st = self._states.get(tid) if tid is not None else None
-                if tid is not None and st is None:
-                    st = self._states.setdefault(tid, TrackState())
+                    st = self._states.get(tid) if tid is not None else None
+                    if tid is not None and st is None:
+                        st = self._states.setdefault(tid, TrackState())
 
-                if not gated and st is not None:
-                    if st.t_new is None:
-                        st.t_new = stagetrace.now()
-                        stagetrace.event("new", tid=tid, i=self._frame_idx)
-                    if self.liveness_enabled or self._capture is not None:
-                        with st_trace.stage("liveness"):
-                            self._sample_liveness(frame, d, st, tid)
-                        if st.live is True and st.t_live is None:
-                            st.t_live = stagetrace.now()
-                            stagetrace.event("live", tid=tid, i=self._frame_idx,
-                                             since_new_ms=round(
-                                                 (st.t_live - st.t_new) * 1000.0, 1))
-                    if self._embed_due(st):
-                        with st_trace.stage("embed"):
-                            self._embed_track(st, rgb, d)
+                    if not gated and st is not None:
+                        if st.t_new is None:
+                            st.t_new = stagetrace.now()
+                            stagetrace.event("new", tid=tid, i=self._frame_idx)
+                        if self.liveness_enabled or self._capture is not None:
+                            with st_trace.stage("liveness"):
+                                self._sample_liveness(frame, d, st, tid)
+                            if st.live is True and st.t_live is None:
+                                st.t_live = stagetrace.now()
+                                stagetrace.event("live", tid=tid, i=self._frame_idx,
+                                                 since_new_ms=round(
+                                                     (st.t_live - st.t_new) * 1000.0, 1))
+                        if self._embed_due(st):
+                            with st_trace.stage("embed"):
+                                self._embed_track(st, rgb, d)
 
-                if st is not None and not gated:
-                    name, score, stable = st.verdict(self.min_track_frames)
-                    st.name, st.score = name, score
-                    if stable and st.t_stable is None:
-                        st.t_stable = stagetrace.now()
-                        stagetrace.event("stable", tid=tid, i=self._frame_idx,
-                                         n=st.samples, since_new_ms=round(
-                                             (st.t_stable - (st.t_new or st.t_stable))
-                                             * 1000.0, 1))
-                    # ★Pitfall: identity leakage while pending★ a track whose
-                    # liveness has not settled must not publish a name -- the
-                    # UI would show it, an MQTT consumer would act on it, and
-                    # the verdict that arrives 300 ms later cannot un-open a
-                    # door. Withheld, not renamed: `reason` says why.
-                    if self.liveness_enabled and st.live is not True:
-                        name, score = None, 0.0
-                        if st.reason is None:
-                            st.reason = st.lv.decision
-                else:
-                    name, score, stable = None, 0.0, False
+                    if st is not None and not gated:
+                        name, score, stable = st.verdict(self.min_track_frames)
+                        st.name, st.score = name, score
+                        if stable and st.t_stable is None:
+                            st.t_stable = stagetrace.now()
+                            stagetrace.event("stable", tid=tid, i=self._frame_idx,
+                                             n=st.samples, since_new_ms=round(
+                                                 (st.t_stable - (st.t_new or st.t_stable))
+                                                 * 1000.0, 1))
+                        # ★Pitfall: identity leakage while pending★ a track whose
+                        # liveness has not settled must not publish a name -- the
+                        # UI would show it, an MQTT consumer would act on it, and
+                        # the verdict that arrives 300 ms later cannot un-open a
+                        # door. Withheld, not renamed: `reason` says why.
+                        if self.liveness_enabled and st.live is not True:
+                            name, score = None, 0.0
+                            if st.reason is None:
+                                st.reason = st.lv.decision
+                    else:
+                        name, score, stable = None, 0.0, False
 
-                results.append({
-                    "box": [float(x1), float(y1), float(x2), float(y2)],
-                    "label": name or UNKNOWN,
-                    "score": float(score),
-                    "cls": 0,
-                })
-                face_rows.append({
-                    "track_id": tid,
-                    "bbox": [float(x1) / fw, float(y1) / fh,
-                             float(x2) / fw, float(y2) / fh],
-                    "det_score": float(d["score"]),
-                    "name": name,
-                    "score": float(score),
-                    "live": (st.live if st is not None else None),
-                    "liveness_score": (st.liveness_score if st is not None else None),
-                    "stable": bool(stable),
-                    "gated": bool(gated),
-                    "reason": (st.reason if st is not None else None),
-                    "liveness": (st.liveness if st is not None else None),
-                })
+                    results.append({
+                        "box": [float(x1), float(y1), float(x2), float(y2)],
+                        "label": name or UNKNOWN,
+                        "score": float(score),
+                        "cls": 0,
+                    })
+                    face_rows.append({
+                        "track_id": tid,
+                        "bbox": [float(x1) / fw, float(y1) / fh,
+                                 float(x2) / fw, float(y2) / fh],
+                        "det_score": float(d["score"]),
+                        "name": name,
+                        "score": float(score),
+                        "live": (st.live if st is not None else None),
+                        "liveness_score": (st.liveness_score if st is not None else None),
+                        "stable": bool(stable),
+                        "gated": bool(gated),
+                        "reason": (st.reason if st is not None else None),
+                        "liveness": (st.liveness if st is not None else None),
+                    })
 
             extra = {"model_tag": MODEL_TAG, "faces": face_rows,
                      "enrolled": self.user_count()}

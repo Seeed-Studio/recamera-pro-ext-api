@@ -45,7 +45,11 @@ terms that are present, so a None costs nothing and changes no verdict.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Dict, Optional, Sequence, Tuple
+import weakref
 
 import numpy as np
 
@@ -66,6 +70,37 @@ DEFAULT_SHRINK = 0.75
 # Model handle installed by the app when a depth model is configured. Kept as a
 # module global so the interface stays a plain function for the fusion code.
 _MODEL = None
+
+
+@dataclass
+class _FrameDepth:
+    frame: weakref.ReferenceType
+    model: object = None
+    depth: Optional[np.ndarray] = None
+
+
+_FRAME_DEPTH: ContextVar[Optional[_FrameDepth]] = ContextVar(
+    "face_recognition_frame_depth", default=None)
+
+
+@contextmanager
+def reuse_frame_depth(frame_rgb: np.ndarray):
+    """Reuse successful depth inference only inside this frame's face loop.
+
+    Keep the public two-argument ``depth_flatness`` seam unchanged. The scope
+    holds a weak frame identity, not camera pixels; a different frame/model
+    and calls outside this context always run their own inference. ContextVar
+    also keeps unrelated threads from observing the app loop's cache.
+    """
+    cache = _FrameDepth(weakref.ref(frame_rgb))
+    del frame_rgb  # the suspended context-manager generator must not own it
+    token = _FRAME_DEPTH.set(cache)
+    try:
+        yield
+    finally:
+        _FRAME_DEPTH.reset(token)
+        cache.depth = None
+        cache.model = None
 
 
 def set_model(model) -> None:
@@ -216,16 +251,12 @@ def planarity_from_depth(depth: np.ndarray,
     return out
 
 
-def depth_flatness(frame_rgb: np.ndarray,
-                   bbox_xyxy: Sequence[float]) -> Optional[Dict[str, float]]:
-    """Return ``{'planarity', 'relief', 'score', ...}`` for the face box, or None.
+def infer_frame_depth(frame_rgb: np.ndarray) -> Optional[np.ndarray]:
+    """Generate the whole-frame depth map, without selecting a face ROI.
 
-    Runs the installed depth model over the whole frame and scores the face box
-    with `planarity_from_depth`. The model handle must expose the kit's
+    The model handle must expose the kit's
     ``RknnModel`` shape: ``infer(uint8 NHWC) -> [ndarray]`` with a single depth
     output, and ``input_size`` (int) or an inferrable square input.
-
-    None means "no depth evidence" — no model installed, or a degenerate box.
     """
     if _MODEL is None:
         return None
@@ -234,11 +265,6 @@ def depth_flatness(frame_rgb: np.ndarray,
     if frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError(f"frame_rgb must be HxWx3, got {frame.shape}")
     h, w = frame.shape[:2]
-
-    x0, y0, x1, y1 = (float(v) for v in bbox_xyxy)
-    bw, bh = x1 - x0, y1 - y0
-    if bw <= 0 or bh <= 0:
-        return None
 
     size = int(getattr(_MODEL, "input_size", 0) or 0)
     if size <= 0:
@@ -257,5 +283,41 @@ def depth_flatness(frame_rgb: np.ndarray,
     resized = frame[ys][:, xs]
 
     out = _MODEL.infer(resized[None].astype(np.uint8))
-    depth = np.squeeze(np.asarray(out[0] if isinstance(out, (list, tuple)) else out))
-    return planarity_from_depth(depth, (x0, y0, bw, bh), image_size=(w, h))
+    return np.squeeze(np.asarray(out[0] if isinstance(out, (list, tuple)) else out))
+
+
+def depth_flatness(frame_rgb: np.ndarray,
+                   bbox_xyxy: Sequence[float]) -> Optional[Dict[str, float]]:
+    """Return depth evidence for one face, preserving the existing API.
+
+    ``reuse_frame_depth`` lets the app share a successfully scored whole-frame
+    map across faces. Each face still gets its own unchanged ROI score. Without
+    that explicit scope this function retains its one-inference-per-call
+    behaviour, including None for missing models or degenerate boxes.
+    """
+    if _MODEL is None:
+        return None
+    frame = np.asarray(frame_rgb)
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError(f"frame_rgb must be HxWx3, got {frame.shape}")
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = (float(v) for v in bbox_xyxy)
+    bw, bh = x1 - x0, y1 - y0
+    if bw <= 0 or bh <= 0:
+        return None
+
+    cache = _FRAME_DEPTH.get()
+    matches_frame = cache is not None and cache.frame() is frame
+    model = _MODEL
+    depth = cache.depth if matches_frame and cache.model is model else None
+    if depth is None:
+        depth = infer_frame_depth(frame)
+        if depth is None:
+            return None
+    result = planarity_from_depth(depth, (x0, y0, bw, bh), image_size=(w, h))
+    # Cache only after both inference and scoring succeed. A native/output
+    # failure must leave subsequent faces free to retry the existing path.
+    if matches_frame and _MODEL is model:
+        cache.model = model
+        cache.depth = depth
+    return result

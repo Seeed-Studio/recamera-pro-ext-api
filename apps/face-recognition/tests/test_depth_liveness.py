@@ -6,6 +6,8 @@ geometry so the assertions do not depend on any model.
 """
 import numpy as np
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+import weakref
 
 import depth_liveness as dl
 
@@ -144,3 +146,131 @@ def test_depth_flatness_with_fake_model():
         assert res["score"] > 0.0
     finally:
         dl.set_model(None)
+
+
+class CountingDepthModel:
+    input_size = SIZE
+
+    def __init__(self):
+        self.calls = 0
+        self.inputs = []
+        self.failures = 0
+        self.invalid_outputs = 0
+        self.output_refs = []
+
+    def infer(self, x):
+        self.calls += 1
+        self.inputs.append(x.copy())
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("temporary depth inference failure")
+        if self.invalid_outputs:
+            self.invalid_outputs -= 1
+            return [np.zeros(3)]
+        output = synthetic_sphere()
+        self.output_refs.append(weakref.ref(output))
+        return [output[None]]
+
+
+@pytest.fixture
+def counted_depth(monkeypatch):
+    model = CountingDepthModel()
+    monkeypatch.setattr(dl, "_MODEL", model)
+    return model
+
+
+def _textured_frame():
+    yy, xx = np.mgrid[:480, :640]
+    return np.stack((xx % 256, yy % 256, (xx + yy) % 256), axis=-1).astype(np.uint8)
+
+
+def test_scope_reuses_one_depth_map_with_unchanged_pixels_and_distinct_roi_scores(counted_depth):
+    frame = _textured_frame()
+    boxes = ((80, 60, 240, 240), (320, 160, 560, 420))
+    expected = [dl.depth_flatness(frame, box) for box in boxes]
+    with dl.reuse_frame_depth(frame):
+        actual = [dl.depth_flatness(frame, box) for box in boxes]
+        assert counted_depth.calls == 3  # two legacy calls, one shared inference
+    assert actual == expected
+    assert actual[0]["box"] != actual[1]["box"]
+    ys = np.linspace(0, 479, SIZE).astype(np.int32)
+    xs = np.linspace(0, 639, SIZE).astype(np.int32)
+    expected_input = frame[ys][:, xs][None].astype(np.uint8)
+    for value in counted_depth.inputs:
+        np.testing.assert_array_equal(value, expected_input)
+    # The scope releases the successful map without waiting for another frame.
+    assert all(ref() is None for ref in counted_depth.output_refs)
+
+
+def test_each_frame_scope_runs_again_even_if_camera_reuses_the_same_array(counted_depth):
+    frame = _textured_frame()
+    for _ in range(2):
+        with dl.reuse_frame_depth(frame):
+            dl.depth_flatness(frame, (80, 60, 240, 240))
+            dl.depth_flatness(frame, (320, 160, 560, 420))
+        frame[:] = 0
+    assert counted_depth.calls == 2
+    assert np.any(counted_depth.inputs[0])
+    assert not np.any(counted_depth.inputs[1])
+
+
+def test_different_frame_or_model_never_uses_the_scoped_map(counted_depth, monkeypatch):
+    frame = _textured_frame()
+    other = frame.copy()
+    replacement = CountingDepthModel()
+    with dl.reuse_frame_depth(frame):
+        dl.depth_flatness(frame, (80, 60, 240, 240))
+        dl.depth_flatness(other, (80, 60, 240, 240))
+        dl.depth_flatness(other, (80, 60, 240, 240))
+        assert counted_depth.calls == 3
+        monkeypatch.setattr(dl, "_MODEL", replacement)
+        dl.depth_flatness(frame, (80, 60, 240, 240))
+        dl.depth_flatness(frame, (80, 60, 240, 240))
+        assert replacement.calls == 1
+
+
+@pytest.mark.parametrize("failure", ["failures", "invalid_outputs"])
+def test_failed_inference_or_invalid_output_does_not_block_same_frame_retry(counted_depth, failure):
+    frame = _textured_frame()
+    setattr(counted_depth, failure, 1)
+    with dl.reuse_frame_depth(frame):
+        with pytest.raises((RuntimeError, ValueError)):
+            dl.depth_flatness(frame, (80, 60, 240, 240))
+        assert dl.depth_flatness(frame, (320, 160, 560, 420)) is not None
+        dl.depth_flatness(frame, (80, 60, 240, 240))
+    assert counted_depth.calls == 2
+
+
+def test_missing_model_and_invalid_box_still_skip_inference(counted_depth, monkeypatch):
+    frame = _textured_frame()
+    with dl.reuse_frame_depth(frame):
+        assert dl.depth_flatness(frame, (1, 2, 1, 3)) is None
+        assert counted_depth.calls == 0
+        monkeypatch.setattr(dl, "_MODEL", None)
+        assert dl.depth_flatness(frame, (80, 60, 240, 240)) is None
+        monkeypatch.setattr(dl, "_MODEL", counted_depth)
+        assert dl.depth_flatness(frame, (80, 60, 240, 240)) is not None
+    assert counted_depth.calls == 1
+
+
+def test_scope_does_not_retain_the_frame(counted_depth):
+    frame = _textured_frame()
+    ref = weakref.ref(frame)
+    with dl.reuse_frame_depth(frame):
+        dl.depth_flatness(frame, (80, 60, 240, 240))
+        del frame
+        assert ref() is None
+
+
+def test_scope_is_reset_on_exception_and_does_not_leak_to_other_threads(counted_depth):
+    frame = _textured_frame()
+    with pytest.raises(RuntimeError, match="leave loop"):
+        with dl.reuse_frame_depth(frame):
+            dl.depth_flatness(frame, (80, 60, 240, 240))
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                for _ in range(2):
+                    executor.submit(dl.depth_flatness, frame, (80, 60, 240, 240)).result()
+            assert counted_depth.calls == 3
+            raise RuntimeError("leave loop")
+    dl.depth_flatness(frame, (80, 60, 240, 240))
+    assert counted_depth.calls == 4

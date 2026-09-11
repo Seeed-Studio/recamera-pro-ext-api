@@ -160,7 +160,15 @@ class Frame:
     def copy(self) -> "Frame":
         """Return an owned frame safe to retain after the source advances."""
 
+        deferred = getattr(self, "_deferred_model_image", None)
+        # In hw mode the owned RGB buffer is the full camera image, while the
+        # model input still borrows the camera lease. Preserve both images and
+        # the model transform before returning a frame safe to retain.
         copied_model_data = self.model_data
+        if deferred is not None and self.buffer._backend is not deferred:
+            copied_model_data = deferred.map()
+        # Direct/ROI model pixels already live in buffer: its copy remains the
+        # sole image so editing copied.data still changes that model's input.
         if isinstance(copied_model_data, np.ndarray):
             copied_model_data = np.array(copied_model_data, copy=True, order="C")
         return Frame(
@@ -182,6 +190,9 @@ class Frame:
         """Release/invalidate the underlying buffer; safe to call repeatedly."""
 
         self.roi_cropper = None
+        deferred = getattr(self, "_deferred_model_image", None)
+        if deferred is not None:
+            deferred.release()
         self.buffer.release()
 
     def __enter__(self) -> "Frame":

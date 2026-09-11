@@ -45,7 +45,7 @@ CPU 访问通过 DMA-BUF START/END 同步，native 侧继续执行 RKNN 输入�
 
 ## RGA 前处理
 
-应用显式设置 `model_dma_input = True` 且使用 `hw-direct`，在主模型成功协商 DMA IO、
+应用显式设置 `model_dma_input = True` 且使用 `hw-direct`、`hw-roi` 或 `hw`，在主模型成功协商 DMA IO、
 RGA ABI 与操作均支持时启用延迟前处理。未声明的新旧应用保留原有提前生成 RGB 的行为。
 
 ```python
@@ -58,17 +58,45 @@ results = postprocess(outputs, x.info)
 ```
 
 `infer(x)` 与已有支持 PreparedInput 的旧 Kit 兼容。传 `x.data` 仍正常工作，但要求
-生成普通数组。YOLO、retail、fall、fitness、depth 示例采用前一种写法。
+生成普通数组。模型调用和下游 NumPy 输出格式不变。
 
 RGA 保留原 NV12 缩放、RGB 转换的两阶段顺序、居中补边和灰度 114，只复用一个 NV12
 中间缓存并直接写入私有模型输入。目标非零 offset、形状/stride 不兼容、操作缺失或
-RGA 执行失败时走原数组路径。`hw-roi`、原图消费者和 CPU-only 的帧源行为保持不变。
+RGA 执行失败时走原数组路径。
 
-读取 `frame.data`/`x.data` 会生成独立的模型尺寸数组；原位编辑或替换 `x.data` 均会被
-后续推理使用。未物化的延迟帧不能保留到源迭代之外；保留图像请在当前迭代内调用
-`frame.copy()`。相机 FD 始终留在应用进程，推进或关闭源会等同步 RGA 读取结束后才
+- `hw-direct`：模型图仍是 `frame.data`，只适用于不需要原图的应用。
+- `hw-roi`：主模型可以直写 DMA，相机 ROI 裁剪仍使用当前帧的 NV12 租约，沿用原来的
+  裁剪尺寸、补边和坐标映射。主模型推理完成不会提前释放 ROI 的相机租约。
+- `hw`：保留独立、完整尺寸的 RGB `frame.data`，只延迟主模型图。读取原图供仿射对齐、
+  透视裁剪等操作使用，不会使主模型图提前物化。
+- 如果旧 ROI 操作不可用，`hw-roi` 仍按原规则退到 `hw`，从原图做 CPU 裁剪；支持的新
+  letterbox 操作仍可给主模型直写 DMA。不会从模型缩略图错误裁剪 ROI。
+
+读取 `x.data`（以及 `hw-direct`/`hw-roi` 下的 `frame.data`）会生成独立的模型尺寸数组；
+原位编辑或替换 `x.data` 均会被后续推理使用。未物化的模型图不能保留到源迭代之外；
+保留图像请在当前迭代内调用 `frame.copy()`：`hw` 同时复制原图和模型图，
+`hw-direct`/`hw-roi` 复制的是模型图。复制不会保留或延长相机 ROI 租约。
+相机 FD 始终留在应用进程，推进或关闭源会等同步 RGA 读取结束后才
 释放相机租约。延迟 RGA 计入 `pre` 和 `loop`，从 `infer` 扣除，避免重复计时。
 旧的提前前处理仍发生在 loop 计时之外，因此性能比较还需看墙钟 FPS。
+
+## 示例应用的优化范围
+
+| 应用 | 图像模式和适配 |
+| --- | --- |
+| yolo-detector、retail-vision、fall-detection、fitness-trainer、depth-estimation | 已启用 `hw-direct` + `model_dma_input`，主模型使用 `infer(x)` |
+| face-analysis、crayfish-fight | 启用 `hw-roi` + `model_dma_input`，保留多级 ROI 与时序图像的原有处理 |
+| face-recognition | 启用 `hw` + `model_dma_input`，保留原图人脸对齐；同帧的多脸深度评分复用成功的整帧深度结果 |
+| facemesh-reader | 保留 CPU 原图裁剪、边缘复制与 PIL 插值，兼容图像模型自动使用共享 IO |
+| ppocr-reader | 保留原图透视变换、识别缩放补边与长行分窗，检测和识别模型自动协商共享 IO |
+| voice-transcribe | 浮点音频特征不满足当前静态 UINT8 图像绑定条件，保持原推理路径 |
+| qrcode-reader | 无 NPU 模型，保持原尺寸 CPU 解码 |
+
+应用必须重新打包安装才能获得新增的显式模式配置；系统 Kit 与推理服务也需更新。
+旧应用无需改调用即可在兼容模型上自动协商共享 IO。人脸识别的深度复用仅在当前
+循环内生效，各人脸采样条件、评分和融合逻辑不变；失败不缓存，下一帧重新推理。
+不能用 RGA 正方形裁剪代替 OCR 透视变换或人脸仿射对齐，也不能为提速改变训练时的
+插值、补边、颜色或归一化契约。这里列出的是代码路径的优化，不代表板端测速结果。
 
 ## IPC 锁范围与验证
 

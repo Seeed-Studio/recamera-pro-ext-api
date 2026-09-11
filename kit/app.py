@@ -611,7 +611,9 @@ class App:
     # geometry, never an error.  For "hw-roi", a librga without ``improcess_t``
     # degrades to "hw" (full-res data + numpy ROI crop), still correct.
     model_frame: str = "cpu"
-    # Opt in only when the application consumes each frame inside its loop.
+    # Opt in for hardware modes only when each frame is consumed in its loop.
+    # hw retains full-resolution RGB independently of the model input.
+    # ROI crops retain the same camera lease as the deferred detector input.
     # Historical apps retain eager, independent RGB frame storage by default.
     model_dma_input: bool = False
 
@@ -1083,7 +1085,7 @@ class App:
                 hw_letterbox=(mode == "hw"),
                 hw_roi=(mode == "hw-roi"),
                 deferred_preprocess=(self.model_dma_input is True
-                    and mode == "hw-direct" and len(self.models) > 0
+                    and mode in ("hw", "hw-direct", "hw-roi") and len(self.models) > 0
                     and getattr(self.models[0]._impl, "io_transport", None) == "rknn-dma-v1"),
             )
         else:

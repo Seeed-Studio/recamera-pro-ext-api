@@ -156,9 +156,6 @@ class OfficialFrameSource(FrameSource):
         self.fps_divisor = int(fps_divisor)
         self.input_size = int(input_size)
         self.direct_preprocess = bool(direct_preprocess and self.input_size > 0)
-        # Only Kit explicitly enables this after negotiating private DMA IO.
-        # Direct SDK/adapter callers retain the original eager array contract.
-        self.deferred_preprocess = bool(deferred_preprocess and self.direct_preprocess)
         # ROI mode: like `direct` for the model image (RGA letterbox IS `data`,
         # NO full-resolution RGB convert), but the source ALSO keeps the NV12
         # dma-buf reachable so a cascade app can crop per-object ROIs from it on
@@ -174,6 +171,10 @@ class OfficialFrameSource(FrameSource):
         self.hw_letterbox = bool(hw_letterbox and self.input_size > 0
                                  and not self.direct_preprocess
                                  and not self.hw_roi)
+        # Only Kit explicitly enables this after negotiating private DMA IO.
+        # Direct SDK/adapter callers retain the original eager array contract.
+        self.deferred_preprocess = bool(deferred_preprocess and (
+            self.direct_preprocess or self.hw_roi or self.hw_letterbox))
         self.timeout_ms = int(timeout_ms)
         self.prefer_rga = bool(prefer_rga)
         self.lib_path = lib_path
@@ -259,10 +260,12 @@ class OfficialFrameSource(FrameSource):
         return np.ascontiguousarray(padded), info
 
     def _deferred_frame(self, frame):
-        if not getattr(self, "deferred_preprocess", False) or not self.direct_preprocess:
+        if not getattr(self, "deferred_preprocess", False):
             return None
         if not self._rga_decided:
             self._decide_backend(frame)
+        if not (self.direct_preprocess or self.hw_roi or self.hw_letterbox):
+            return None
         can_letterbox = getattr(self._rga, "can_letterbox", None)
         if not callable(can_letterbox) or not can_letterbox(dma_output=True):
             return None
@@ -274,7 +277,25 @@ class OfficialFrameSource(FrameSource):
         from kit.buffer import ImageBuffer
         from ._model_frame import DeferredModelImage
 
+        # hw (including a hw-roi capability downgrade) must retain the full
+        # camera image for numpy ROI crops. Convert it once, without running
+        # the model letterbox that the deferred path is meant to replace.
+        full_rgb = self._convert_full_rgb(frame) if self.hw_letterbox else None
+
         def materialize():
+            if full_rgb is not None:
+                if self._rga is not None:
+                    try:
+                        return self._rga_letterbox(frame)[0]
+                    except Exception as exc:
+                        self.hw_letterbox = False
+                        self.deferred_preprocess = False
+                        self._log("RGA model letterbox disabled (%s); using RGB tensor path" % exc)
+                from kit.runtime.preprocess import letterbox
+                # Frame.data is application-owned and may already be edited.
+                # The old hw model image was independent: on this rare RGA
+                # fallback reread the camera instead of letterboxing edits.
+                return letterbox(self._convert_full_rgb(frame), (net_h, net_w))[0]
             rgb, model_data, model_info = self._convert(frame)
             if model_data is not None:
                 return model_data
@@ -290,7 +311,7 @@ class OfficialFrameSource(FrameSource):
                     or target.get("offset", 0) != 0
                     or strides[3] != 1 or strides[2] != 3 or strides[1] % 3
                     or target.get("size", 0) < strides[1] * net_h
-                    or not self.deferred_preprocess):
+                    or not self.deferred_preprocess or self._rga is None):
                 return False
             off, stride, vstride = frame.planes[0]
             if off != 0:
@@ -311,14 +332,21 @@ class OfficialFrameSource(FrameSource):
                 return False
 
         image = DeferredModelImage(materialize, prepare)
+        buffer = (ImageBuffer.from_numpy(full_rgb, format="RGB")
+                  if full_rgb is not None else ImageBuffer.from_backend(
+                      image, width=net_w, height=net_h, format="RGB",
+                      planes=[(0, net_w * 3, net_h)], memory="backend"))
         result = Frame(
-            buffer=ImageBuffer.from_backend(
-                image, width=net_w, height=net_h, format="RGB",
-                planes=[(0, net_w * 3, net_h)], memory="backend"),
+            buffer=buffer,
             w=int(frame.width), h=int(frame.height), fmt="RGB",
             pts_us=int(frame.pts_us), model_info=info,
         )
         result._deferred_model_image = image
+        if self.hw_roi:
+            # Keep this cropper even if a later DMA/materialization failure
+            # disables a source optimization. Frame.data is still model-sized;
+            # dropping it would make App.crop_roi_hw crop the wrong pixels.
+            result.roi_cropper = self._make_cropper(frame, lease=image)
         return result
 
     def _convert(self, frame):
@@ -369,6 +397,10 @@ class OfficialFrameSource(FrameSource):
                 self._log("RGA %s preprocess failed (%s); latching to full RGB"
                           % (mode, e))
 
+        return self._convert_full_rgb(frame), model_data, model_info
+
+    def _convert_full_rgb(self, frame):
+        """The shared full-resolution conversion, without a model letterbox."""
         if self._rga is not None:
             try:
                 off0, stride0, vstride0 = frame.planes[0]
@@ -378,7 +410,7 @@ class OfficialFrameSource(FrameSource):
                 return self._rga.convert(
                     fd=frame.fd, width=int(frame.width), height=int(frame.height),
                     y_stride=int(stride0), y_vstride=int(vstride0),
-                ), model_data, model_info
+                )
             except Exception as e:
                 self._rga = None  # latch OFF -- never retry RGA this run
                 self._log("RGA convert failed (%s); latching to OpenCV" % e)
@@ -386,7 +418,7 @@ class OfficialFrameSource(FrameSource):
         # OpenCV fallback: SDK cv2 NV12->BGR (a copy), then BGR->RGB via numpy
         # (no cv2 import needed in this module -- keeps the adapter cv2-free).
         bgr = frame.to_bgr()
-        return np.ascontiguousarray(bgr[:, :, ::-1]), model_data, model_info
+        return np.ascontiguousarray(bgr[:, :, ::-1])
 
     def _log(self, msg: str) -> None:
         if self.verbose:
@@ -438,9 +470,9 @@ class OfficialFrameSource(FrameSource):
         return buf.copy(), roi_map
 
     # -- FrameSource ABC ---------------------------------------------------- #
-    def _make_cropper(self, ext_frame):
+    def _make_cropper(self, ext_frame, lease=None):
         """Bind a `_FrameRoiCropper` to THIS borrowed frame (valid this step)."""
-        return _FrameRoiCropper(self, ext_frame)
+        return _FrameRoiCropper(self, ext_frame, lease=lease)
 
     def frames(self) -> Iterator[Frame]:
         # Lazy import: recamera_ext (+ librecamera_ext.so.1) only exists on the
@@ -585,11 +617,12 @@ class _FrameRoiCropper:
     freely on any geometry/ABI problem.
     """
 
-    __slots__ = ("_src", "_frame")
+    __slots__ = ("_src", "_frame", "_lease")
 
-    def __init__(self, source: "OfficialFrameSource", ext_frame):
+    def __init__(self, source: "OfficialFrameSource", ext_frame, lease=None):
         self._src = source
         self._frame = ext_frame
+        self._lease = lease
 
     def crop_square(self, box, out_size: int, pad: float = 0.25):
         """Crop a padded square ROI -> ``(roi_uint8_HWC_RGB, roi_map)``.
@@ -597,6 +630,9 @@ class _FrameRoiCropper:
         Mirrors `kit.pipeline.crop_square_roi`'s signature and `roi_map`
         contract, backed by RGA reading the dma-buf directly.
         """
+        if self._lease is not None:
+            return self._lease.use_lease(
+                self._src._crop_roi, self._frame, box, out_size, pad)
         return self._src._crop_roi(self._frame, box, out_size, pad)
 
 

@@ -160,7 +160,7 @@ class App(ABC):
 `fps` 继续表示窗口内完成的应用循环帧数除以墙钟时间，并非消息接收速率；
 应用循环内部 `continue` 跳过推理的帧仍沿用原有计数行为。
 CPU-only 应用即使 `infer=0`，也会有完整的 `loop` 耗时。
-协商 DMA IO 后，`hw-direct` 的延迟 RGA 前处理发生在循环体内，计入 `pre` 与 `loop`，
+显式启用并协商 DMA IO 后，硬件模式的延迟 RGA 前处理发生在循环体内，计入 `pre` 与 `loop`，
 不重复计入 `infer`。访问 `x.data` 仍会得到可修改的独立数组；直接传 `infer(x)`
 可省掉这次图像物化。详见[共享推理 IO](./shared-inference-io.md)。
 `needs_frames=False` 的音频应用不生成这组帧循环指标；语音应查看其转写事件中的

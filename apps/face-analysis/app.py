@@ -130,6 +130,7 @@ class FaceAnalysisApp(App):
     # self.crop_roi_hw -- see the module docstring. Must NOT be "hw-direct"
     # (no cropper) or "cpu" (pays the full-res convert this path removes).
     model_frame = "hw-roi"
+    model_dma_input = True  # defer only detector input; keep camera ROI crops
 
     # Fallbacks for the auto-bound config_schema keys (used when a key is
     # missing from the effective config; the manifest supplies each default).
@@ -246,7 +247,7 @@ class FaceAnalysisApp(App):
         for frame in self.frames():
             # -- 1. pre / infer / stage-1 post --------------------------- #
             x = self.pre(frame)
-            outs = self.models.det.infer(x.data)
+            outs = self.models.det.infer(x)
             results = face_post.postprocess(outs, x.info,
                                             conf_thres=self.confidence,
                                             iou_thres=self.iou)
