@@ -1232,6 +1232,8 @@ def uninstall(app_id: str, purge_config: bool = False) -> None:
     Idempotent: missing dirs are skipped, so uninstalling something already gone
     (or an app that never grew a venv) is a no-op rather than an error.
     """
+    if app_id in manifest_contract.RESERVED_APP_IDS:
+        raise InstallError("a firmware system application cannot be uninstalled")
     if not paths.valid_app_id(app_id):
         raise InstallError(f"invalid app id {app_id!r}")
     dest = paths.app_dir(app_id)

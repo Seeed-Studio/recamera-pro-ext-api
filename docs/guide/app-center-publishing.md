@@ -650,6 +650,33 @@ Web-native manifest v2 主流程：
 | GET | `/api/app-center/v1/resources` | 查询系统/应用资源视图 |
 | GET | `/api/app-center/v1/events` | SSE 状态更新流 |
 
+`GET /api/app-center/v1/apps` 同时返回固件提供的系统应用 `builtin`。此条目由
+appmgr 生成，使用 `system:true`、`type:"builtin"`、`version:"firmware"` 标识，
+不能从普通应用包安装、覆盖或卸载；旧 `/api/appMgr/list` 仍只列安装包。
+该系统应用沿用既有结果/录像身份 `{kind:"builtin", id:"builtin"}`，运行在
+rkipc 内，`pid`、`instance` 和 `runtime.pid` 均为 `null`，不能给它分配一个独立
+进程的内存、日志或实例。`source` 给出结果身份，`capabilities` 声明
+`model-management`、`inference-configuration`、`system-results`。
+
+`builtin_inference` 包含 `available`、`enabled`、`state`、`model`、`fps`、
+`actual_fps`、`external_hold`、`reason`。`enabled` 是保存的启用意图；`running`
+仅在读取到真实引擎 `sStatus:"running"` 时成立。读取失败返回 `status:"unknown"`
+及 `available:false`，不会隐藏其他应用或假报停止。状态读单次 HTTP 超时 1 秒，
+仅访问 loopback（允许一次 HTTP 回退/重定向），有独立的 2 秒缓存；不持生命周期锁。
+启停/配置写入会使缓存失效，外部 CGI 修改最迟在缓存过期后可见。
+新固件明确报告 `bExternalHold:true` 且已启用的引擎停妥时，卡片状态为
+`waiting_resource`；旧固件缺少此字段时 `external_hold:null`，不会从停止状态猜测资源归属。
+
+`actions:{start,stop,restart,configure,uninstall}` 是系统卡片的操作显示提示。
+引擎未知、切换中或已有生命周期任务时禁用启停/重启，配置入口仍可访问；
+`uninstall` 始终为 false。启停/重启继续使用
+`POST /api/app-center/v1/apps/builtin/{start,stop,restart}`，返回与普通应用相同的
+HTTP `202` 和 `{operation:...}` 回执。重启保留停妥屏障；所有动作均保留 broker
+external hold，不停掉其他 scheduled/CPU 应用，也不会把 CGI 响应当作 NPU 租约。
+更改阈值仅写 `/model/info` 不会加载新值，因此启用时使用显式
+`/model/inference-restart`；模型/FPS 真正变化由 `/model/inference` 完成一次重载。
+配置写入不覆盖启用意图，关闭状态的阈值修改不会启动引擎。
+
 `policy` 使用 `{manifest, upload, signature}` 嵌套 envelope；其中
 `upload.max_package_bytes`、`max_signature_bytes` 和 `filename_pattern` 直接来自设备当前
 运行时门禁，前端不应复制编译期常量。`signature.owner_keys` 同样报告 Owner 密钥管理能力、

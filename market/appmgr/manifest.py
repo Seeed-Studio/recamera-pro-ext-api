@@ -27,6 +27,7 @@ RELEASE_LOCK_VERSION = 1
 RELEASE_LOCK_PATH = "release.lock.json"
 BOM_PATH = "files.sha256"
 RESERVED_PACKAGE_PATHS = frozenset((RELEASE_LOCK_PATH, BOM_PATH))
+RESERVED_APP_IDS = frozenset(("builtin",))
 MAX_ICON_BYTES = 1024 * 1024
 ICON_MEDIA_EXTENSIONS = {
     "image/png": (".png",),
@@ -239,6 +240,8 @@ def _validate_common(manifest: dict) -> None:
     app_id = manifest.get("id")
     if not isinstance(app_id, str) or not _APP_ID_RE.fullmatch(app_id):
         _fail("id", "must match [a-z0-9-]{1,64}")
+    if app_id in RESERVED_APP_IDS:
+        _fail("id", "is reserved for a firmware system application")
 
     version = _string(manifest.get("version"), "version", max_len=64)
     if any(ch in version for ch in ("/", "\\")) or any(ord(ch) < 0x20 for ch in version):

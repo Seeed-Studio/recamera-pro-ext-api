@@ -1186,12 +1186,35 @@ _BUILTIN_TTL = float(os.environ.get("APPMGR_BUILTIN_TTL", "2.0"))
 # atomic under the GIL, so a concurrent reader can never observe a half-updated
 # entry (it sees either the old tuple or the new one).
 _builtin_probe = None
+_builtin_status_probe = None
+_builtin_status_generation = 0
+_builtin_status_lock = threading.Lock()
 
 
 def _builtin_invalidate() -> None:
     """Force the next builtin status consumer to re-read /model/inference."""
-    global _builtin_probe
+    global _builtin_probe, _builtin_status_probe, _builtin_status_generation
     _builtin_probe = None
+    with _builtin_status_lock:
+        _builtin_status_probe = None
+        _builtin_status_generation += 1
+
+
+def _builtin_status() -> dict:
+    """Short-lived engine snapshot for the system card, not a lease barrier."""
+    global _builtin_status_probe
+    with _builtin_status_lock:
+        hit = _builtin_status_probe
+        generation = _builtin_status_generation
+        if hit is not None and time.monotonic() - hit[0] < _BUILTIN_TTL:
+            return dict(hit[1])
+    result = builtin.inference_status()
+    with _builtin_status_lock:
+        # A concurrent lifecycle/config write invalidates a read started before
+        # it. Never let that old read repopulate the cache after the mutation.
+        if generation == _builtin_status_generation:
+            _builtin_status_probe = (time.monotonic(), dict(result))
+    return result
 
 
 def _builtin_running() -> bool:
@@ -1715,6 +1738,8 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     Uninstalling an unknown app is a hard ValueError (not a crash); the running /
     active handling is idempotent so double-uninstall is safe.
     """
+    if app_id == builtin.BUILTIN_ID:
+        raise ValueError("the system builtin application cannot be uninstalled")
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2242,10 +2267,11 @@ def do_set_config(app_id: str, incoming: dict, *,
                   _busy_timeout: float = 0.0) -> dict:
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
-            res = builtin.set_config(incoming)   # driver dispatches per-item bind
-        # A builtin config write can flip iEnable (and always restarts the
-        # pipeline), so the cached liveness must not survive it.
-        _builtin_invalidate()
+            try:
+                res = builtin.set_config(incoming)
+            finally:
+                # A write may have reached firmware even if its response failed.
+                _builtin_invalidate()
         _audit("config", id="builtin", keys=sorted((res.get("config") or {}).keys()),
                applied=res.get("applied"), restarted=res.get("restarted"))
         return res
@@ -2674,11 +2700,55 @@ def _v1_status(app: dict) -> str:
     return "stopped"
 
 
+def _builtin_app_view(operations) -> dict:
+    """System-owned v1 app, without inventing a supervised process/instance."""
+    detail = _builtin_status()
+    observed = detail["state"]
+    status = "failed" if observed == "error" else observed
+    if (detail["enabled"] and detail["external_hold"] is True
+            and observed == "stopped"):
+        status = "waiting_resource"
+    operation = operations.active_for(builtin.BUILTIN_ID)
+    if operation:
+        status = "stopping" if operation["type"] == "stop" else "starting"
+    available = detail["available"]
+    enabled = detail["enabled"]
+    running = observed == "running" and available
+    mutable = available and not operation and observed not in ("starting", "stopping")
+    reason = detail.get("reason")
+    descriptor = builtin.manifest()
+    return {
+        "id": builtin.BUILTIN_ID, "type": "builtin", "system": True,
+        "installed": True, "name": descriptor["name"], "name_zh": descriptor["name_zh"],
+        "version": descriptor["version"], "manifest": descriptor,
+        "description": descriptor["description"], "description_zh": descriptor["description_zh"],
+        "source": {"kind": "builtin", "id": builtin.BUILTIN_ID},
+        "status": status, "running": running, "pid": None, "instance": None,
+        "actions": {
+            "start": bool(mutable and not enabled and observed in ("stopped", "error")),
+            "stop": bool(mutable and (enabled or running)),
+            "restart": bool(mutable and enabled),
+            "configure": True, "uninstall": False,
+        },
+        "capabilities": ["model-management", "inference-configuration", "system-results"],
+        "builtin_inference": detail,
+        "runtime": {
+            "status": status,
+            "desired_state": ("running" if enabled else "stopped") if available else None,
+            "observed_state": observed, "pid": None, "reason": reason,
+        },
+        "reason": reason, "error": reason if status in ("failed", "unknown") else None,
+        "resource_conflicts": ([{"resource": "npu.direct", "owners": [],
+                                 "message": reason}]
+                               if status == "waiting_resource" else []),
+    }
+
+
 def do_v1_apps() -> dict:
     """Stable list envelope consumed by the Web App Center."""
     listing = do_list()
     operations = _operation_manager()
-    items = []
+    items = [_builtin_app_view(operations)]
     for raw in listing.get("apps") or []:
         app_id = raw.get("id")
         item = dict(raw)
@@ -2727,7 +2797,8 @@ def do_v1_apps() -> dict:
     return {
         "apps": items,
         "active_app": listing.get("active_app"),
-        "running_apps": listing.get("running_apps") or [],
+        "running_apps": ([builtin.BUILTIN_ID] if items[0]["running"] else [])
+                        + list(listing.get("running_apps") or []),
         "revision": listing.get("state_revision", 0),
     }
 
@@ -3253,6 +3324,8 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
 
 def do_v1_delete(app_id: str) -> dict:
+    if app_id == builtin.BUILTIN_ID:
+        raise ValueError("the system builtin application cannot be uninstalled")
     _require_installed(app_id)
 
     def delete_job():

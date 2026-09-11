@@ -68,6 +68,16 @@ def minimal_manifest(**updates):
     return value
 
 
+def test_builtin_identity_is_reserved_in_runtime_and_published_schema():
+    candidate = minimal_manifest(id="builtin")
+    with pytest.raises(contract.ManifestValidationError, match="reserved"):
+        contract.validate_manifest(candidate)
+    schema_path = os.path.join(os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as stream:
+        schema = json.load(stream)
+    assert list(Draft202012Validator(schema).iter_errors(candidate))
+
+
 def records_for(value, extra=None):
     raw_manifest = contract.canonical_json(value)
     payload = {

@@ -4,9 +4,9 @@ builtin.py -- system adapter for the firmware's built-in inference pipeline.
 The firmware's built-in detection pipeline is NOT an appmgr-supervised process: it runs
 inside the shipped firmware (rkipc + entry.cgi). This module drives it through
 the endpoints the firmware already exposes over nginx + entry.cgi.  Dedicated
-system surfaces can activate/configure it and consume its recording/results,
-but it is intentionally absent from App Center application lists: it is neither
-an installed package nor an appmgr-supervised application process.
+system surfaces and the v1 App Center system card can activate/configure it and
+consume its recording/results. It is neither an installable package nor an
+appmgr-supervised application process; legacy package lists remain unchanged.
 
 Endpoints (localhost 443, self-signed, no JWT -- mirrors kit/adapters/cgi_control.py):
   * GET/POST /cgi-bin/entry.cgi/model/inference
@@ -20,9 +20,9 @@ Endpoints (localhost 443, self-signed, no JWT -- mirrors kit/adapters/cgi_contro
 Apply semantics: the firmware snapshots every threshold/model/fps at model LOAD
 time and never re-reads per frame, so EVERY builtin config item is apply:"restart"
 (verified 2026-08-13, DESIGN §6). A /model/info write alone does NOT reload the
-model (firmware bug, DESIGN §1.2); set_config therefore always follows a
-model_info change with a /model/inference POST to force `rc_model_infer_restart`
-when inference is enabled.
+model; set_config therefore uses the explicit /model/inference-restart endpoint
+after threshold-only changes while enabled. A no-op /model/inference POST does
+not reload the model on current firmware.
 
 stdlib only (http.client) -- appmgr must not import the kit package.
 """
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import os
 import ssl
 import time
@@ -47,6 +48,7 @@ _PORT = 443
 _TIMEOUT = 10.0
 _CGI_BASE = "/cgi-bin/entry.cgi"
 _INFERENCE = "/model/inference"
+_INFERENCE_RESTART = "/model/inference-restart"
 _MODEL_INFO = "/model/info"
 _MODEL_ID = 0
 
@@ -72,13 +74,13 @@ class BuiltinError(Exception):
 # low-level HTTP to entry.cgi (localhost, no JWT)
 # --------------------------------------------------------------------------- #
 def _do_http(tls: bool, host: str, port: int, method: str, target: str,
-             body: Optional[bytes], headers: dict):
+             body: Optional[bytes], headers: dict, timeout: float = _TIMEOUT):
     """One raw request; returns (status, body_bytes, Location-or-None)."""
     if tls:
         ctx = ssl._create_unverified_context()   # self-signed loopback cert
-        conn = http.client.HTTPSConnection(host, port, timeout=_TIMEOUT, context=ctx)
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
     else:
-        conn = http.client.HTTPConnection(host, port, timeout=_TIMEOUT)
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
         conn.request(method, target, body=body, headers=headers)
         resp = conn.getresponse()
@@ -114,7 +116,8 @@ def _parse_loopback_redirect(location: str, fallback_target: str):
 _endpoint = [True, _PORT]
 
 
-def _request(method: str, path: str, body: Optional[bytes] = None) -> dict:
+def _request(method: str, path: str, body: Optional[bytes] = None, *,
+             timeout: Optional[float] = None) -> dict:
     """One HTTP request to entry.cgi -> parsed JSON dict.
 
     Raises BuiltinError on transport failure, non-2xx, non-JSON, or a JSON
@@ -125,27 +128,28 @@ def _request(method: str, path: str, body: Optional[bytes] = None) -> dict:
         headers["Content-Type"] = "application/json"
     target = _CGI_BASE + path
     tls, port = _endpoint
+    request_options = {} if timeout is None else {"timeout": timeout}
     try:
         try:
             status, raw, location = _do_http(tls, _HOST, port, method, target,
-                                             body, headers)
+                                             body, headers, **request_options)
         except (OSError, ssl.SSLError) as e:
             # TLS side unreachable (cert missing / 443 not listening / handshake
             # failure): fall back to plain :80 once, otherwise re-raise.
             if not tls:
                 raise
             status, raw, location = _do_http(False, _HOST, 80, method, target,
-                                             body, headers)
+                                             body, headers, **request_options)
             tls, port = False, 80
         # http.client never follows redirects; follow exactly one hop (loopback
         # only, so the scheme carries no trust semantics).
         if status in (301, 302, 307, 308) and location:
             tls, port, target = _parse_loopback_redirect(location, target)
             status, raw, _ = _do_http(tls, _HOST, port, method, target,
-                                      body, headers)
+                                      body, headers, **request_options)
         if 200 <= status < 300:
             _endpoint[0], _endpoint[1] = tls, port
-    except (OSError, ssl.SSLError) as e:
+    except (OSError, ssl.SSLError, http.client.HTTPException) as e:
         raise BuiltinError("entry.cgi %s %s -> transport error: %s"
                            % (method, path, e))
 
@@ -179,8 +183,52 @@ def _info_q(model: str) -> str:
 # --------------------------------------------------------------------------- #
 # inference endpoint
 # --------------------------------------------------------------------------- #
-def get_inference() -> dict:
-    return _request("GET", _inference_q())
+def get_inference(*, timeout: Optional[float] = None) -> dict:
+    if timeout is None:
+        return _request("GET", _inference_q())
+    return _request("GET", _inference_q(), timeout=timeout)
+
+
+def inference_status() -> dict:
+    """Observe the firmware engine, independently of its persisted enable bit.
+
+    The list's read timeout is deliberately shorter than mutation/barrier calls.
+    Old firmware does not report the external lease hold; absence is unknown,
+    never evidence that the broker is blocking the engine.
+    """
+    def number(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    result = {"available": False, "enabled": None, "state": "unknown",
+              "model": None, "fps": None, "actual_fps": None,
+              "external_hold": None, "reason": None}
+    try:
+        data = get_inference(timeout=1.0)
+        enabled = data.get("iEnable")
+        if enabled not in (0, 1) or isinstance(enabled, str):
+            raise BuiltinError("inference status has no valid iEnable")
+        engine_state = data.get("sStatus")
+        if engine_state not in ("starting", "running", "stopping", "stopped", "error"):
+            raise BuiltinError("inference engine state is unavailable")
+        hold = data.get("bExternalHold")
+        hold = hold if isinstance(hold, bool) else None
+        result.update({
+            "available": True, "enabled": bool(enabled), "state": engine_state,
+            "model": data.get("sModel") if isinstance(data.get("sModel"), str) else None,
+            "fps": number(data.get("iFPS")), "actual_fps": number(data.get("iActualFPS")),
+            "external_hold": hold,
+        })
+        if enabled and hold and engine_state == "stopped":
+            result["reason"] = "external_npu_hold"
+        elif enabled and engine_state == "stopped":
+            result["reason"] = "enabled_but_stopped"
+        elif engine_state == "error":
+            result["reason"] = "inference_error"
+    except BuiltinError as exc:
+        result["reason"] = str(exc)
+    return result
 
 
 def set_inference(enable: Optional[bool] = None, model: Optional[str] = None,
@@ -214,6 +262,11 @@ def current_model() -> str:
 def start() -> dict:
     """Enable built-in inference, keeping the firmware's persisted model/fps."""
     return set_inference(enable=True)
+
+
+def restart_inference() -> dict:
+    """Reload the configured engine without changing enable or broker hold."""
+    return _request("POST", "%s?id=%d" % (_INFERENCE_RESTART, _MODEL_ID))
 
 
 def _stop_state(data: dict) -> tuple:
@@ -362,15 +415,15 @@ def set_model_metrics(model: str, updates: Dict[str, Any]) -> dict:
 def manifest() -> dict:
     """Describe builtin config and system-source presentation metadata.
 
-    This is not an installable application manifest and is never returned as an
-    App Center list item.  ``type: builtin`` preserves the existing internal
+    This is not an installable application manifest. ``type: builtin`` preserves
+    the existing internal
     config/recording compatibility contract; every config item carries a
     bind{endpoint,field} + apply:"restart" (DESIGN §1.2, verified §6).
     """
     return {
         "id": BUILTIN_ID,
-        "name": "Built-in Detection",
-        "name_zh": "系统内置检测",
+        "name": "AI Model Inference",
+        "name_zh": "AI模型推理",
         "type": "builtin",
         "scene": "system",
         "scene_zh": "系统",
@@ -488,8 +541,9 @@ def get_config() -> dict:
 def set_config(incoming: dict) -> dict:
     """Validate + apply a config change by dispatching each item to its bound
     endpoint. Every builtin item is apply:"restart"; a model_info change does not
-    reload the model on its own, so when inference is enabled we always follow
-    with a /model/inference POST to force a reload (DESIGN §1.2)."""
+    reload the model on its own. Threshold-only changes use the explicit restart
+    endpoint, since the inference endpoint deliberately ignores no-op writes.
+    Neither endpoint releases the NPU broker's external hold."""
     man = manifest()
     clean, errors = appconfig.validate_config(man, incoming)
     if errors:
@@ -511,24 +565,34 @@ def set_config(incoming: dict) -> dict:
         elif ep == "model_info":
             metric_updates[field] = val
 
-    running = is_running()
+    # Read once and fail before any write if the current intent is unavailable.
+    # is_running() is a legacy best-effort rollback hint and must not be used to
+    # infer a disabled state here after a transport failure.
+    current = get_inference()
+    if current.get("iEnable") not in (0, 1):
+        raise BuiltinError("inference status has no valid iEnable")
+    enabled = bool(current["iEnable"])
     # Target model: an incoming model change wins, else the currently loaded one.
-    target_model = inf_updates.get("sModel") or current_model()
+    target_model = inf_updates.get("sModel") or current.get("sModel")
+    if not target_model:
+        raise BuiltinError("inference status has no configured model")
+    changed_inference = {key: value for key, value in inf_updates.items()
+                         if value != current.get(key)}
 
     # 1) metrics: read-modify-write /model/info for the target model.
     if metric_updates:
         set_model_metrics(target_model, metric_updates)
 
-    # 2) inference model/fps + forced reload. POST /model/inference whenever there
-    #    is an inference-field change OR a metrics change that needs a reload while
-    #    enabled. Preserve the current iEnable so we never silently start/stop.
-    need_inf_post = bool(inf_updates) or (bool(metric_updates) and running)
-    if need_inf_post:
+    # A changed model/fps already reloads in firmware. Do not double-reload or
+    # write iEnable back from our snapshot (another system client may change it).
+    if changed_inference:
         set_inference(
-            enable=running,
-            model=inf_updates.get("sModel"),
-            fps=inf_updates.get("iFPS"),
+            model=changed_inference.get("sModel"),
+            fps=changed_inference.get("iFPS"),
         )
+    elif metric_updates and enabled:
+        restart_inference()
 
     return {"id": BUILTIN_ID, "saved": True, "applied": "restart",
-            "restarted": bool(need_inf_post and running), "config": clean}
+            "restarted": bool((changed_inference or metric_updates) and enabled),
+            "config": clean}

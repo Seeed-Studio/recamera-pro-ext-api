@@ -30,6 +30,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 _BASE = os.path.realpath(tempfile.mkdtemp(prefix="appmgr-cache."))
 _APPS = os.path.join(_BASE, "apps")
@@ -308,7 +309,7 @@ class BuiltinLivenessCacheTests(_Pinned):
 
 
 class ApplicationListScopeTests(_Pinned):
-    def test_legacy_and_web_lists_exclude_builtin_without_driver_probe(self):
+    def test_legacy_excludes_builtin_and_web_uses_only_system_descriptor(self):
         self._write_manifest(_manifest("1.0.0"))
         builtin_dir = paths.app_dir("builtin")
         os.makedirs(builtin_dir, exist_ok=True)
@@ -321,11 +322,17 @@ class ApplicationListScopeTests(_Pinned):
 
         builtin.is_running = unexpected_probe
         legacy = server.do_list()
-        web = server.do_v1_apps()
+        with patch.object(builtin, "inference_status", return_value={
+                "available": True, "enabled": False, "state": "stopped",
+                "external_hold": None, "model": "detector.rknn", "fps": 20,
+                "actual_fps": 0, "reason": None}) as probe:
+            web = server.do_v1_apps()
+        probe.assert_called_once_with()
         self.assertEqual([item["id"] for item in legacy["apps"]], [APP])
-        self.assertEqual([item["id"] for item in web["apps"]], [APP])
+        self.assertEqual([item["id"] for item in web["apps"]], ["builtin", APP])
         self.assertNotIn("builtin", {item["id"] for item in legacy["apps"]})
-        self.assertNotIn("builtin", {item["id"] for item in web["apps"]})
+        self.assertTrue(web["apps"][0]["system"])
+        self.assertEqual(web["apps"][0]["name"], "AI Model Inference")
 
 
 # --------------------------------------------------------------------------- #

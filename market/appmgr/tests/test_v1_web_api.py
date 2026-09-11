@@ -1674,7 +1674,10 @@ def test_sse_event_endpoint_emits_json_invalidation(layout):
         thread.join(timeout=2)
 
 
-def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
+def test_web_api_does_not_claim_sensecraft_v1_namespace(layout, monkeypatch):
+    monkeypatch.setattr(server.builtin, "get_inference", lambda **kw: {
+        "iEnable": 0, "sStatus": "stopped", "iActualFPS": 0})
+    server._builtin_invalidate()
     httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -1691,7 +1694,10 @@ def test_web_api_does_not_claim_sensecraft_v1_namespace(layout):
         assert response.status == 200
         payload = json.loads(response.read())
         assert "apps" in payload
-        assert "builtin" not in {item["id"] for item in payload["apps"]}
+        system_app = next(item for item in payload["apps"] if item["id"] == "builtin")
+        assert system_app["system"] is True
+        assert system_app["status"] == "stopped"
+        assert system_app["pid"] is None and system_app["instance"] is None
     finally:
         connection.close()
         httpd.shutdown()
@@ -1799,8 +1805,8 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
 
         builtin_source, fall_source, detector_source = payload["sources"]
         assert builtin_source == {
-            "id": "builtin", "kind": "builtin", "name": "Built-in Detection",
-            "name_zh": "系统内置检测", "version": "firmware",
+            "id": "builtin", "kind": "builtin", "name": "AI Model Inference",
+            "name_zh": "AI模型推理", "version": "firmware",
             "installed": True, "running": True, "status": "running",
             "supports_roi": True, "signals": [],
         }

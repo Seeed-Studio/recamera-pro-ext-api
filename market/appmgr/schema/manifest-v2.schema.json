@@ -27,7 +27,7 @@
   ],
   "properties": {
     "manifest_version": {"const": 2},
-    "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$"},
+    "id": {"type": "string", "pattern": "^[a-z0-9-]{1,64}$", "not": {"const": "builtin"}},
     "name": {"type": "string", "minLength": 1, "maxLength": 128},
     "version": {
       "type": "string",
