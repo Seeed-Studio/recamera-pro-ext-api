@@ -393,7 +393,7 @@ python3 sign.py             # 给 dist/*.tar.gz 逐个签，写出 <pkg>.tar.gz.
 python3 sign.py --verify    # 可选：拿公钥回验
 ```
 
-### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`paths.py:56-57`）
+### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`market/appmgr/paths.py`）
 
 - 默认 **1（开）**：direct API、future cloud、legacy/global installer 的**无签名包被拒**。
   本地 Web v1 上传是唯一产品例外：请求必须经过 nginx JWT 鉴权并通过同源 `Origin` 门禁；nginx
@@ -401,10 +401,14 @@ python3 sign.py --verify    # 可选：拿公钥回验
   `source=local-web` / `channel=app-center-v1-same-origin`。客户端 multipart/JSON 自报
   `source`/`channel` 无效，finalize 若携带这两个字段反而直接拒绝。现役 React 同时发送
   `Authorization: Bearer ...`；只要 post-auth stamp 与严格同源 Origin 成立，该头不会把请求降级为 direct。
-- 本地 Web unsigned preflight 返回 `critical` 的 `unsigned-root-code` 警告，明确提示发布者身份
-  未验证且应用代码以 root 运行；前端必须展示警告，并在 finalize 提交严格布尔值
-  `unsigned_risk_confirmed:true`。这是唯一的 unsigned 风险确认字段（权限确认仍独立）；旧客户端
-  多发 `developer_mode` 布尔字段可兼容，但它不参与准入。缺少风险确认即拒绝。安装完成后保持
+- 本地 Web 上传只需应用包；预检后由用户确认安装与原始权限，finalize 不再要求额外的
+  `unsigned_risk_confirmed` 字段。运行中升级、强制重装仍按 `install_context` 单独确认。
+  preflight 的 `critical` / `unsigned-root-code` 警告及 `unsigned_confirmation`、policy 中的
+  `requires_explicit_confirmation` 保留为旧 Web 界面的兼容元数据；旧页面依赖这些字段才能
+  显示安装入口，新页面不必展示或解析这组签名提示。它们不代表后端仍要求额外风险确认，
+  也不会把真实的 `signature.status:unsigned` 改成 `verified`。旧客户端多发
+  `unsigned_risk_confirmed` 或布尔 `developer_mode` 仍可兼容，但都不参与本地上传准入。
+  请求指纹保留旧风险位，已提交请求的幂等重试须保持原请求字段一致。安装完成后保持
   **stopped**，即使它升级的是正在运行的应用也不会自动重启；用户须另行显式 Start。
 - **签名错误/伪造的包在所有通道永远拒绝**，不会降级成 unsigned。无 `Origin` 的 API/Bearer、
   未带服务端可信 route stamp 的直连以及未来 cloud/legacy 通道均不获得本地 Web 豁免。
@@ -430,7 +434,7 @@ python3 sign.py --verify    # 可选：拿公钥回验
   1. **由 Seeed 侧签发**（把包交给持私钥方签名）—— 需 Seeed 配合，流程未在本仓库定义；
   2. **自管设备群**：把自己的公钥安全放进持久化 owner trust store，用自己的私钥签；vendor
      公钥保持不变且继续受信；
-  3. **设备本地开发/测试**：从已登录的同源 Web 应用中心上传，阅读 root 风险警告并二次确认；
+  3. **设备本地开发/测试**：从已登录的同源 Web 应用中心上传，确认安装与应用权限；
      包只会被安装为 stopped。不要为了这个流程关闭全局强制签名。
 
 > 结论：**签名基础设施已就绪，但"第三方开发者证书 / 上架签发"这一环是半成品，需 Seeed 侧配合才能形成
@@ -635,7 +639,7 @@ Web-native manifest v2 主流程：
 | DELETE | `/api/app-center/v1/trust/owners/<64hex>` | 按 SHA-256 SPKI digest 删除 Owner 公钥；Vendor 指纹不可删除 |
 | POST | `/api/app-center/v1/uploads` | 受 JWT+同源边界保护的流式 multipart 上传并 preflight；返回服务端 `source/channel`、`upload_id`、manifest、权限、签名、警告、start-time admission 说明和 `release_id` |
 | DELETE | `/api/app-center/v1/uploads/<upload_id>` | 幂等取消未进入安装阶段的暂存上传；安装已排队/进行中返回 `409` |
-| POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限；unsigned 还必须显式确认 `unsigned_risk_confirmed:true`，提交异步安装 |
+| POST | `/api/app-center/v1/apps` | 原样确认 preflight 权限及所需升级/重装确认，提交异步安装；本地 Web unsigned 无需额外风险位 |
 | GET | `/api/app-center/v1/apps` | 列出多应用状态 |
 | POST | `/api/app-center/v1/apps/<id>/{start,stop,restart}` | 提交异步生命周期操作 |
 | GET/PUT | `/api/app-center/v1/apps/<id>/config` | 读取或更新单应用配置 |
@@ -650,10 +654,12 @@ Web-native manifest v2 主流程：
 `upload.max_package_bytes`、`max_signature_bytes` 和 `filename_pattern` 直接来自设备当前
 运行时门禁，前端不应复制编译期常量。`signature.owner_keys` 同样报告 Owner 密钥管理能力、
 PEM/P-256 格式、密钥数量/字节上限，以及必须显式确认的约束。
-`signature.local_web_unsigned` 明确给出本地例外的服务端 source/channel、确认字段、警告 code
-和 `auto_start:false`；它不等于全局 developer mode，也不能用于 direct/cloud 请求。
+`signature.local_web_unsigned` 给出本地例外的服务端 source/channel 和 `auto_start:false`；
+其确认字段、`requires_explicit_confirmation` 和警告 code 为旧 Web 界面保留，不是额外准入条件。
+它不等于全局 developer mode，也不能用于 direct/cloud 请求。
 
-Unsigned preflight 的关键契约如下（字段由服务端产生）：
+Unsigned preflight 的关键契约如下（字段由服务端产生；`warnings` 和 `unsigned_confirmation`
+保留旧结构以兼容已打开的旧页面，新前端无需展示或提交对应风险位）：
 
 ```json
 {
@@ -679,6 +685,11 @@ Unsigned preflight 的关键契约如下（字段由服务端产生）：
   }
 }
 ```
+
+本地 Web 新安装请求只需 `upload_id`、`permissions_confirmed:true`、未经改写的 `permissions`；
+若 `install_context.confirmation_required` 要求升级或重装确认，再带相应严格布尔字段。
+审计事件 `v1_local_web_unsigned_install` 记录这一来源的安装授权，并以
+`legacy_risk_confirmed` 记录旧风险位，避免把新版请求误记成用户做过额外风险确认。
 
 上传/preflight/install 仍静态验证 manifest 的资源声明是否合法，但不会查询或占用当前 live
 reservation，也不会探测依赖是否在线。实际资源冲突、内存/存储/温度余量和依赖可用性统一在

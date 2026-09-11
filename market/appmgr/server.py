@@ -2584,6 +2584,9 @@ def do_v1_policy() -> dict:
                 "allowed": True,
                 "source": V1_LOCAL_UPLOAD_SOURCE,
                 "channel": V1_LOCAL_UPLOAD_CHANNEL,
+                # Legacy UI metadata: older clients require these fields to
+                # offer installation. Finalize no longer requires a separate
+                # unsigned-risk bit; permission/upgrade confirmations remain.
                 "requires_explicit_confirmation": True,
                 "confirmation_field": UNSIGNED_CONFIRMATION_FIELD,
                 "auto_start": False,
@@ -2883,6 +2886,9 @@ def _preflight_v1_upload_record(upload: dict) -> dict:
             "severity": "critical",
             "message": UNSIGNED_WARNING_MESSAGE,
         }] if unsigned else [])
+        # Preserve the warning and confirmation envelope for already-open old
+        # Web clients. These describe their legacy UI, not an extra admission
+        # gate. New clients confirm installation/permissions without this bit.
         unsigned_confirmation = {
             "required": bool(unsigned),
             "fields": ([UNSIGNED_CONFIRMATION_FIELD]
@@ -2988,6 +2994,8 @@ def _v1_finalize_fingerprint(body: dict) -> str:
     payload = {
         "permissions": body.get("permissions"),
         "permissions_confirmed": body.get("permissions_confirmed") is True,
+        # Retain the legacy bit so persisted operation fingerprints and exact
+        # retries from older clients keep their original identity.
         UNSIGNED_CONFIRMATION_FIELD: (
             body.get(UNSIGNED_CONFIRMATION_FIELD) is True),
         "running_upgrade_confirmed": (
@@ -3010,9 +3018,9 @@ def do_v1_install(body: dict) -> dict:
     upload_id = body.get("upload_id")
     if not isinstance(upload_id, str) or not upload_id:
         raise ValueError("missing/invalid 'upload_id'")
-    # Tolerate the old Web client's boolean field during rollout, but it is no
-    # longer a policy gate. Local unsigned install has one explicit risk
-    # confirmation, independent of the legacy global developer-mode switch.
+    # Tolerate old Web clients during rollout. Neither developer_mode nor the
+    # legacy unsigned-risk bit is an admission gate. The trusted upload route,
+    # permission approval and required upgrade/reinstall confirmations are.
     if "developer_mode" in body and not isinstance(body["developer_mode"], bool):
         raise ValueError("'developer_mode' must be a boolean")
     for confirmation_field in (
@@ -3099,9 +3107,6 @@ def do_v1_install(body: dict) -> dict:
                 raise ValueError(
                     "unsigned package is allowed only from the authenticated "
                     "same-origin local Web upload route")
-            if body.get(UNSIGNED_CONFIRMATION_FIELD) is not True:
-                raise ValueError(
-                    "unsigned package risk must be explicitly confirmed")
             allow_unsigned = True
         else:
             raise ValueError("package signature is invalid")
@@ -3109,11 +3114,13 @@ def do_v1_install(body: dict) -> dict:
         app_id = manifest.get("id")
         if allow_unsigned:
             _audit(
-                "v1_unsigned_risk_confirmed",
+                "v1_local_web_unsigned_install",
                 upload_id=upload_id,
                 id=app_id,
                 source=upload_source,
                 channel=upload_channel,
+                legacy_risk_confirmed=(
+                    body.get(UNSIGNED_CONFIRMATION_FIELD) is True),
             )
         appuploads.update(upload_id, status="install_queued")
 

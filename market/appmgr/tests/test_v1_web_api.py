@@ -678,7 +678,7 @@ def test_rejected_preflight_removes_uploaded_bytes(layout, monkeypatch):
     assert os.listdir(paths.uploads_dir()) == []
 
 
-def test_unsigned_preflight_is_local_only_deferred_and_risk_confirmed(
+def test_unsigned_preflight_is_local_only_and_install_requires_permissions(
         layout, monkeypatch):
     permissions = {
         "sdk": [],
@@ -736,6 +736,7 @@ def test_unsigned_preflight_is_local_only_deferred_and_risk_confirmed(
         server.do_v1_upload(io.BytesIO(body), len(body), content_type)
     assert allow_unsigned_calls == [False, False]
     assert os.listdir(paths.uploads_dir()) == []
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
 
     # Live resource state must not be consulted by package preflight.
     monkeypatch.setattr(
@@ -778,10 +779,12 @@ def test_unsigned_preflight_is_local_only_deferred_and_risk_confirmed(
         "upload_id": uploaded["upload_id"],
         "permissions_confirmed": True,
         "permissions": permissions,
-        "developer_mode": True,
     }
-    with pytest.raises(ValueError, match="risk must be explicitly confirmed"):
-        server.do_v1_install(base_finalize)
+    for approval in (None, False, "true"):
+        with pytest.raises(ValueError, match="permissions must be explicitly confirmed"):
+            server.do_v1_install({**base_finalize, "permissions_confirmed": approval})
+    with pytest.raises(ValueError, match="permissions do not match"):
+        server.do_v1_install({**base_finalize, "permissions": {}})
     with pytest.raises(ValueError, match="server-assigned"):
         server.do_v1_install({
             **base_finalize,
@@ -789,6 +792,31 @@ def test_unsigned_preflight_is_local_only_deferred_and_risk_confirmed(
             "source": server.V1_LOCAL_UPLOAD_SOURCE,
             "channel": server.V1_LOCAL_UPLOAD_CHANNEL,
         })
+
+    # A record from any other provenance still cannot use this exception, even
+    # if its preflight claims that the unsigned package is installable.
+    for source, channel in ((server.V1_DIRECT_UPLOAD_SOURCE, server.V1_DIRECT_UPLOAD_CHANNEL),
+                            ("app-store", "app-center-v1-store")):
+        uploads.update(uploaded["upload_id"], source=source, channel=channel,
+                       preflight={**preflight, "source": source, "channel": channel})
+        with pytest.raises(ValueError, match="authenticated same-origin local Web"):
+            server.do_v1_install(base_finalize)
+    uploads.update(uploaded["upload_id"], source=server.V1_LOCAL_UPLOAD_SOURCE,
+                   channel=server.V1_LOCAL_UPLOAD_CHANNEL, preflight=preflight)
+
+    installs = []
+
+    def install(*args, **kwargs):
+        installs.append(kwargs)
+        return {"id": "unsigned-demo", "installed": True}
+
+    monkeypatch.setattr(server, "do_install", install)
+    queued = server.do_v1_install(base_finalize)["operation"]
+    assert _wait_operation(queued["id"])["status"] == "succeeded"
+    assert len(installs) == 1
+    assert installs[0]["allow_unsigned"] is True
+    assert installs[0]["_enforce_v1_confirmations"] is True
+    assert installs[0]["expected_preflight"] == preflight
 
 
 def test_bad_signature_is_rejected_even_on_local_unsigned_route(
@@ -2376,7 +2404,9 @@ def test_http_v1_same_origin_without_trusted_edge_stamp_is_signed_only(
         thread.join(timeout=2)
 
 
-def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
+@pytest.mark.parametrize("legacy_risk", [None, True, False],
+                         ids=["new-client", "legacy-confirmed", "legacy-false"])
+def test_http_v1_upload_finalize_and_operations(layout, monkeypatch, legacy_risk):
     audits = []
     monkeypatch.setattr(
         server, "_audit",
@@ -2399,7 +2429,8 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
         "config_schema": {"groups": []},
         "python": {"wheels": []},
     }
-    monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", True)
+    monkeypatch.setattr(paths, "REQUIRE_SIGNATURE", True)
+    monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", False)
 
     def inspect(package, signature=None, *, allow_unsigned=False):
         assert allow_unsigned is True
@@ -2477,12 +2508,14 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
                 "checked when the application starts"),
         }
 
-        request = json.dumps({
+        request_body = {
             "upload_id": uploaded["upload_id"],
             "permissions_confirmed": True,
             "permissions": permissions,
-            "unsigned_risk_confirmed": True,
-        })
+        }
+        if legacy_risk is not None:
+            request_body["unsigned_risk_confirmed"] = legacy_risk
+        request = json.dumps(request_body)
         finalize_headers = dict(browser_headers)
         finalize_headers["Content-Type"] = "application/json"
         connection.request("POST", "/api/app-center/v1/apps", body=request,
@@ -2507,14 +2540,27 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch):
         assert installs[0][3]["release_id"] == "demo-1"
         assert installs[0][4] == paths.V1_OPERATION_BUSY_TIMEOUT_SEC
         assert installs[0][5:] == (False, False, True)
-        confirmation = next(
+        authorization = next(
             fields for action, fields in audits
-            if action == "v1_unsigned_risk_confirmed")
-        assert confirmation["id"] == "demo"
-        assert confirmation["source"] == server.V1_LOCAL_UPLOAD_SOURCE
-        assert confirmation["channel"] == server.V1_LOCAL_UPLOAD_CHANNEL
+            if action == "v1_local_web_unsigned_install")
+        assert authorization["id"] == "demo"
+        assert authorization["source"] == server.V1_LOCAL_UPLOAD_SOURCE
+        assert authorization["channel"] == server.V1_LOCAL_UPLOAD_CHANNEL
+        assert authorization["legacy_risk_confirmed"] is (legacy_risk is True)
+        assert not any(action == "v1_unsigned_risk_confirmed" for action, _ in audits)
         assert not os.path.exists(os.path.join(
             paths.uploads_dir(), uploaded["upload_id"]))
+
+        # Exact retries remain valid after upload cleanup; retaining the legacy
+        # bit in the fingerprint keeps old persisted operations compatible.
+        connection.request("POST", "/api/app-center/v1/apps", body=request,
+                           headers=finalize_headers)
+        response = connection.getresponse()
+        replay = json.loads(response.read())
+        assert response.status == 202
+        assert replay["idempotent_replay"] is True
+        assert replay["operation"]["id"] == queued["operation"]["id"]
+        assert len(installs) == 1
     finally:
         connection.close()
         httpd.shutdown()
