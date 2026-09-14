@@ -44,6 +44,26 @@ typedef enum _TaskType {
   TASK_TYPE__TASK_TYPE_KEYPOINTS = 4
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(TASK_TYPE)
 } TaskType;
+/*
+ * Whether a result is a per-frame observation or a discrete event. An event is
+ * an edge-like declaration from the source's own post-processing: applications
+ * whose data does not fit the builtin result formats decide internally whether
+ * recording is warranted and, if so, emit an event. A recording rule consumes
+ * frames through its filters and debounce; an event bypasses those filters and
+ * debounce, subject to the recording enable switch and schedule gate.
+ * The builtin pipeline only produces FRAME.
+ */
+typedef enum _InferenceDelivery {
+  /*
+   * per-frame observation, drives rule debounce
+   */
+  INFERENCE_DELIVERY__INFERENCE_DELIVERY_FRAME = 0,
+  /*
+   * discrete event; replaces the model_id sentinel
+   */
+  INFERENCE_DELIVERY__INFERENCE_DELIVERY_EVENT = 1
+    PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(INFERENCE_DELIVERY)
+} InferenceDelivery;
 
 /* --- messages --- */
 
@@ -121,8 +141,8 @@ struct  InferenceClassificationEntry
   int32_t class_id;
   char *class_name;
   /*
-   * Optional: source ROI box when the classification is region-scoped
-   * (e.g. per-face attributes). Absent for whole-frame classification.
+   * Present only when the classification is region-scoped (e.g. per-face
+   * attributes); consumers check has_box(). Unset means whole-frame.
    */
   InferenceBox *box;
 };
@@ -293,17 +313,27 @@ struct  InferenceResult
    */
   int64_t timestamp_ms;
   /*
-   * Identifier for the model that produced the result
+   * Identifier for the model that produced the result;
+   * event delivery uses the delivery field, never a special model identifier
    */
   int32_t model_id;
   /*
-   * result source; "builtin" reserved for on-device inference
+   * Canonical source identity (builtin is the on-device
+   * pipeline); asserted by the producing ingress and never
+   * honored verbatim from a peer: a receiving ingress
+   * overwrites it with the peercred-derived identity
    */
   char *source_id;
   /*
-   * frame PTS (CLOCK_MONOTONIC us), 0 = no frame
+   * Frame PTS (CLOCK_MONOTONIC us), 0 = no frame
    */
   uint64_t pts_us;
+  /*
+   * FRAME is the default for builtin and existing result producers.
+   * EVENT carries no data oneof; the source has already decided to record.
+   * The unpublished model_id sentinel is not supported.
+   */
+  InferenceDelivery delivery;
   InferenceResult__DataCase data_case;
   union {
     InferenceDetectionResult *detection;
@@ -315,7 +345,7 @@ struct  InferenceResult
 };
 #define INFERENCE_RESULT__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&inference_result__descriptor) \
-    , TASK_TYPE__TASK_TYPE_CLASSIFICATION, 0, 0, (char *)protobuf_c_empty_string, 0, INFERENCE_RESULT__DATA__NOT_SET, {0} }
+    , TASK_TYPE__TASK_TYPE_CLASSIFICATION, 0, 0, (char *)protobuf_c_empty_string, 0, INFERENCE_DELIVERY__INFERENCE_DELIVERY_FRAME, INFERENCE_RESULT__DATA__NOT_SET, {0} }
 
 
 /* InferenceBox methods */
@@ -635,6 +665,7 @@ typedef void (*InferenceResult_Closure)
 /* --- descriptors --- */
 
 extern const ProtobufCEnumDescriptor    task_type__descriptor;
+extern const ProtobufCEnumDescriptor    inference_delivery__descriptor;
 extern const ProtobufCMessageDescriptor inference_box__descriptor;
 extern const ProtobufCMessageDescriptor inference_point__descriptor;
 extern const ProtobufCMessageDescriptor inference_detection_entry__descriptor;

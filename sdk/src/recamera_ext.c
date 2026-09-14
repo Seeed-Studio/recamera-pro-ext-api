@@ -20,7 +20,7 @@
 #define RC_EXT_OSD_MAX_BOXES 64u
 
 // RecordSink calls run on appmgr's ordered recording worker. Keep every
-// record@1 socket operation finite so lifecycle invalidation and close cannot
+// record-delivery@1 socket operation finite so lifecycle invalidation and close cannot
 // be held indefinitely by a stalled or backpressured server. This does not
 // alter the historical blocking behaviour of ResultSink or OsdSink.
 #ifndef RC_EXT_RECORD_IO_TIMEOUT_MS
@@ -124,8 +124,9 @@ static int rc_send_record_result_fd(int fd, const char *source_id,
 
 static int rc_send_record_event_fd(int fd, const char *source_id,
 				   InferenceResult *res) {
+	res->delivery = INFERENCE_DELIVERY__INFERENCE_DELIVERY_EVENT;
 	return rc_send_record_result_mode(
-	    fd, source_id, res, RC_EXT_RECORD_EVENT_MODEL_ID, 0);
+	    fd, source_id, res, 0, 0);
 }
 
 static int rc_send_record_reset_fd(int fd, const char *source_id,
@@ -372,8 +373,15 @@ int rc_ext_record_send_events(rc_ext_record_t *h, const char *app_id,
 		return -RC_EXT_EINTERNAL;
 	if (!rc_record_app_id_valid(app_id))
 		return -RC_EXT_EFORMAT;
-	return send_classification_fd(h->fd, app_id, pts_us, items, n,
-	                              rc_send_record_event_fd);
+	/* Keep the public tuple ABI; an explicit non-empty call is one request.
+	 * Event labels/scores/ROIs are not Vigil rule inputs. */
+	if (n && !items)
+		return -RC_EXT_EINTERNAL;
+	if (!n)
+		return 0;
+	InferenceResult result = INFERENCE_RESULT__INIT;
+	result.pts_us = pts_us;
+	return rc_send_record_event_fd(h->fd, app_id, &result);
 }
 
 int rc_ext_result_send_segmentation(rc_ext_result_t *h, uint64_t pts_us,
@@ -622,7 +630,8 @@ int rc_ext_record_reset(rc_ext_record_t *h, const char *app_id) {
 		return -RC_EXT_EFORMAT;
 
 	InferenceResult result = INFERENCE_RESULT__INIT;
-	/* record@1 reserves DATA__NOT_SET for ordered source invalidation. */
+	/* FRAME + no payload is queue-clear control on this private socket only.
+	 * EVENT also has no payload, but is never a reset. */
 	int ret = rc_send_record_reset_fd(h->fd, app_id, &result);
 	if (ret != 0 && h->fd >= 0) {
 		/* The request may have reached the server even when its ACK did not.

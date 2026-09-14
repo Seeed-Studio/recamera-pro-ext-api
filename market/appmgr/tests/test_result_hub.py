@@ -1665,7 +1665,7 @@ def test_ingress_queue_classifies_and_prioritizes_edges(tmp_path):
         hub.stop()
 
 
-def test_ingress_prioritizes_manifest_authorized_state_event(tmp_path):
+def test_ingress_prioritizes_explicit_recording_request(tmp_path):
     hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / "system.sock"),
                     formatter=NoopFormatter(), ingress_queue=8)
     hub._ingress_thread = threading.current_thread()
@@ -1691,9 +1691,8 @@ def test_ingress_prioritizes_manifest_authorized_state_event(tmp_path):
         for index in range(8):
             assert hub.submit_app(_app_payload(
                 seq=index, results=[{"kind": "frame"}]), identity)
-        assert hub.submit_app(_app_payload(
-            seq=9, events=[{"kind": "qrcode", "text": "same-code"}]),
-            identity)
+        assert hub.submit_app({"type": "recording_request", "seq": 9,
+                               "event_kind": "qrcode"}, identity)
         assert len(hub._ingress) == 8
         assert hub._ingress[-1][3] == "edge"
         assert sum(item[3] == "data" for item in hub._ingress) == 7

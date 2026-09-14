@@ -1780,6 +1780,7 @@ class _ObserverWorker:
     def __init__(self, callback: Callable[[dict], None], max_queue: int):
         self.callback = callback
         owner = getattr(callback, "__self__", None)
+        self.accepts_recording_requests = bool(getattr(owner, "accepts_recording_requests", False))
         invalidator = getattr(callback, "invalidate_source", None)
         if not callable(invalidator) and owner is not None:
             invalidator = getattr(owner, "invalidate_source", None)
@@ -2296,14 +2297,12 @@ class ResultHub:
     @staticmethod
     def _ingress_delivery(payload: dict,
                           record_event_kinds=frozenset()) -> str:
+        if payload.get("type") == "recording_request":
+            return ("edge" if payload.get("event_kind") in record_event_kinds
+                    else "data")
         events = payload.get("events")
         if isinstance(events, list) and events:
-            return ("edge" if any(
-                is_edge_event(event) or (
-                    isinstance(event, dict)
-                    and _event_kind(event) in record_event_kinds)
-                for event in events)
-                    else "state")
+            return "edge" if any(is_edge_event(event) for event in events) else "state"
         return ("state" if str(payload.get("type") or "").lower() == "event"
                 else "data")
 
@@ -2859,6 +2858,8 @@ class ResultHub:
             self._stale_app_rejected += 1
             return []
         fallback = self._next_source_seq(str(identity.get("app_id") or "app"))
+        if payload.get("type") == "recording_request":
+            return self._publish_recording_request(payload, identity, fallback)
         render, geometry, stream_contract = self._trusted_app_contract(identity)
         envelopes = normalize_app_payload(
             payload, identity, fallback_seq=fallback,
@@ -2867,6 +2868,39 @@ class ResultHub:
         batch = self._make_format_batch(envelopes, payload)
         self._received_app += 1
         return [value for value in envelopes if self._publish(value, batch)]
+
+    def _publish_recording_request(self, payload, identity, fallback):
+        """Private control route: no WS, history, formatting, MQTT or OSD."""
+        app_id = str(identity.get("app_id") or "")
+        expected = (str(identity.get("instance_id") or ""),
+                    _as_int(identity.get("generation"), -1))
+        event_kind = payload.get("event_kind")
+        if not isinstance(event_kind, str):
+            return []
+        with self._publish_fence:
+            with self._state_lock:
+                cached = self._app_record_event_cache.get(app_id)
+                if (self._app_generations.get(app_id) != expected
+                        or cached is None or cached[:2] != expected
+                        or event_kind not in cached[2]):
+                    self._rejected += 1
+                    return []
+                observers = list(self._observers.values())
+            seq = _as_int(payload.get("seq"), fallback)
+            envelope = {
+                "type": "recording_request",
+                "id": f"{app_id}:{expected[0]}:{expected[1]}:{seq}:recording",
+                "source": {"kind": "app", "id": app_id, "app_id": app_id,
+                           "instance": expected[0], "generation": expected[1]},
+                "time": {"pts_us": _pts_us(payload)},
+                "event_kind": event_kind,
+            }
+            for observer in observers:
+                # Control commands only reach observers that explicitly
+                # opt in; generic notification observers cannot see them.
+                if observer.accepts_recording_requests:
+                    observer.offer(envelope)
+            return [envelope]
 
     def publish_system(self, payload: dict, identity: dict) -> List[dict]:
         fallback = self._next_source_seq("builtin")

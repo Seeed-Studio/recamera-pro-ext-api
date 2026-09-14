@@ -74,21 +74,13 @@ Python:items 元素用 `(score, class_id, label)` 无框,或 `(score, class_id, 
 每条消息都携带稳定的 manifest app id；id 必须匹配 `[a-z0-9-]{1,64}`，且不能是
 保留值 `builtin`。
 
-该入口支持 detection、classification、event、tracking、keypoints，明确不支持
-segmentation。event 在 wire 上复用 classification oneof，但由公共常量
-`RC_EXT_RECORD_EVENT_MODEL_ID == INT32_MIN` 与普通 frame classification 的
-`model_id=0` 严格区分。服务端只把结果送入 source-aware Vigil 录像规则，不更新 OSD，
-也不进入通知或公共结果流。`reset(app_id)` 与数据使用同一条有序 SEQPACKET
-连接，供应用停止或升级时清除该来源的 debounce 状态；reset 只有收到服务端
-`HelloAck(error=0)` 后才成功返回。连接异常关闭时服务端还会对该连接观察过的所有
-来源执行 fail-safe reset。任何 reset 错误都会使当前 handle 失效，调用方应关闭并
-新建 `RecordSink`，避免延迟到达的旧 ACK 被误认为下一次 reset 的确认。
+录像客户端只接受 `record-delivery@1` capability。FRAME 的 C/Python 调用保持不变；`send_events` 非空调用编码一个 `delivery=EVENT`、无 oneof 载荷的请求，空调用不发送。保留原 tuple 参数外形，label/score/ROI 不再作为录像过滤条件；未发布 model_id sentinel 已删除。事件由应用先完成条件/冷却判断，普通展示事件不自动录制。reset 的 FRAME/no-oneof 控制仅用于私有 record 连接，ACK 仅确认待处理队列清理，不清防抖或取消活动录像。
 
 `RecordSink` 的 connect/Hello/ACK 与每次 send/reset 都使用同一个固定的 1 秒
 socket-I/O 上限（open 的三个阶段共享 1 秒预算）。超时按现有 `EINTERNAL` /
 Python `InternalError` 返回；reset 的发送和 ACK 也共享一秒预算，避免异常服务端或
 背压无限阻塞 appmgr 的录制桥工作线程；
-普通 `ResultSink` 仍发布到 OSD + notify/公共结果流，但从 1.5.0 起不再进入
+普通 `ResultSink` 仍发布到 OSD + notify/公共结果流，并把规范身份下的兼容 FRAME 交给
 Vigil；`OsdSink` 仍为 OSD-only。二者的 wire/ABI 与调用方式不变。
 
 ```python
@@ -109,7 +101,7 @@ with RecordSink() as sink:
 ```
 
 它不是普通应用入口：服务端与 OSD-only sink 一样，要求 SO_PEERCRED PID 精确
-匹配受保护的 appmgr 身份。普通应用仍只使用 `ResultSink`。
+匹配受保护的 appmgr 身份。普通应用通过 Kit `request_recording` 请求录制，展示/帧调用继续使用原结果入口。
 
 ## 帧代理
 `FrameSource` / `rc_ext_frame_*` 连 `/run/recamera/frame.sock`。

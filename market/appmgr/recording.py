@@ -23,13 +23,13 @@ _APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 MAX_RECORD_ITEMS = 64
 DEFAULT_QUEUE_SIZE = 128
 RESET_WAIT_SECONDS = 2.0
-# All managed applications share record@1's 60/s connection budget. Keep a
+# All managed applications share record-delivery@1's 60/s connection budget. Keep a
 # small margin for timer precision; lifecycle resets are separately exempt.
 DATA_INTERVAL_SECONDS = 1.0 / 50.0
 
 
 class _ResetToken:
-    """Completion token for a receiver-confirmed lifecycle reset."""
+    """Completion token for a receiver-confirmed queue clear."""
 
     __slots__ = ("event", "ok", "_lock")
 
@@ -200,10 +200,14 @@ def source_view(app: dict) -> Optional[dict]:
             "running" if (app or {}).get("running") else "stopped"),
         "supports_roi": compiled["supports_roi"],
         "signals": compiled["signals"],
+        "frame_capable": bool(compiled["detection_classes"] or compiled["classification_classes"]),
+        "event_capable": bool(compiled["event_kinds"]),
+        "event_configuration": "app",
     }
 
 
 class RecordingTriggerBridge:
+    accepts_recording_requests = True
     """Bounded, generation-aware Result Hub observer for recording triggers."""
 
     def __init__(self, *, sink_factory: Optional[Callable[[], Any]] = None,
@@ -394,45 +398,11 @@ class RecordingTriggerBridge:
         return False
 
     def observer_priority(self, envelope: Any) -> bool:
-        """Tell Result Hub which state-style events are recording edges.
-
-        Result Hub already protects globally classified edge events.  Some
-        recording contracts intentionally treat a canonical state event (for
-        example a newly decoded QR value) as one-shot.  This in-memory check
-        lets only manifest-authorized event kinds receive observer-queue
-        priority; unrelated per-frame metrics remain replaceable.
-        """
-        if not isinstance(envelope, dict) or envelope.get("type") != "event":
-            return False
-        source = envelope.get("source")
-        if not isinstance(source, dict) or source.get("kind") != "app":
-            return False
-        source_id = str(source.get("app_id") or source.get("id") or "")
-        with self._condition:
-            capability = self._capabilities.get(source_id)
-            allowed = (capability.get("event_kinds", frozenset())
-                       if capability is not None
-                       and capability.get("identity") == _identity(source)
-                       else frozenset())
-        events = envelope.get("events")
-        if not isinstance(events, list):
-            return False
-        return any(
-            isinstance(item, dict)
-            and str(item.get("kind") or item.get("type") or "").lower() in allowed
-            for item in events
-        )
+        return (isinstance(envelope, dict)
+                and envelope.get("type") == "recording_request"
+                and self.observer_accepts(envelope))
 
     def observer_accepts(self, envelope: Any) -> bool:
-        """Reject records that cannot affect this recording observer.
-
-        Result Hub also serves WebSocket, replay, and visualization consumers,
-        so its canonical stream legitimately contains status, metrics, and
-        events outside a recording manifest. Keeping those records out of this
-        observer's bounded queue prevents an unrelated app/event kind from
-        evicting an authorized frame or one-shot event before :meth:`observe`
-        gets a chance to apply its final capability check.
-        """
         if not isinstance(envelope, dict):
             return False
         source = envelope.get("source")
@@ -444,24 +414,15 @@ class RecordingTriggerBridge:
             if (self._closing or capability is None
                     or capability.get("identity") != _identity(source)):
                 return False
-            message_type = envelope.get("type")
-            if message_type == "frame":
+            if envelope.get("type") == "frame":
                 return bool(capability.get("detection_classes")
                             or capability.get("classification_classes"))
-            allowed = (capability.get("event_kinds", frozenset())
-                       if message_type == "event" else frozenset())
-        events = envelope.get("events")
-        if not isinstance(events, list) or not allowed:
-            return False
-        return any(
-            isinstance(item, dict)
-            and str(item.get("kind") or item.get("type") or "").lower() in allowed
-            for item in events
-        )
+            return (envelope.get("type") == "recording_request"
+                    and envelope.get("event_kind") in capability["event_kinds"])
 
     def observe(self, envelope: Any) -> None:
         if not isinstance(envelope, dict) or envelope.get("type") not in (
-                "frame", "event"):
+                "frame", "recording_request"):
             return
         source = envelope.get("source")
         if not isinstance(source, dict) or source.get("kind") != "app":
@@ -521,18 +482,13 @@ class RecordingTriggerBridge:
                 payload.append((_score(raw.get("score", raw.get("confidence"))),
                                 label,
                                 _class_id(raw.get("cls", raw.get("class_id")))))
-        elif kind == "event" and capability["event_kinds"]:
-            action_kind = "events"
-            events = envelope.get("events")
-            events = events if isinstance(events, list) else []
-            for raw in events[:MAX_RECORD_ITEMS]:
-                if not isinstance(raw, dict):
-                    continue
-                event_kind = str(raw.get("kind") or raw.get("type") or "").lower()
-                if event_kind not in capability["event_kinds"]:
-                    continue
-                payload.append((_score(raw.get("score", raw.get("confidence")), 1.0),
-                                event_kind, 0))
+        elif kind == "recording_request" and capability["event_kinds"]:
+            event_kind = envelope.get("event_kind")
+            if event_kind in capability["event_kinds"]:
+                action_kind = "events"
+                # Preserve RecordSink's public tuple API. Native converts this
+                # explicit request to one payload-free delivery=EVENT.
+                payload.append((1.0, event_kind, 0))
         # Empty FRAME snapshots are meaningful: they clear/deassert frame-rule
         # debounce. EVENT is a one-shot occurrence and an envelope containing
         # no authorized kind must have no recording-side effect at all.
@@ -701,7 +657,7 @@ class RecordingTriggerBridge:
                 "duplicates": self._duplicates,
                 "send_errors": self._send_errors,
                 "data_rate_limit": 50,
-                # record@1 is a one-way data protocol. These are submitted
+                # record-delivery@1 is a one-way data protocol. These are submitted
                 # datagrams, not receiver ACKs; native probe.record_events
                 # separately reports delivery, expiry, overflow and revocation.
                 "delivery_confirmation": "native_probe",

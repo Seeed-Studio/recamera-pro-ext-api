@@ -196,7 +196,8 @@ class ResultGateway:
                 obj["generation"] = int(identity["generation"])
                 obj.setdefault("type", "results")
                 obj["gateway_ts"] = time.time()
-                self._ws.publish_envelope(obj)
+                if obj.get("type") != "recording_request":
+                    self._ws.publish_envelope(obj)
                 self._received += 1
                 # The hook receives only the already-authenticated identity and
                 # sanitized legacy object.  ResultHub.submit_app is a bounded

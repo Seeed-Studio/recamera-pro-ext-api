@@ -28,7 +28,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 扩展 API 能做什么：
 
 - **拿帧（帧代理）**：从摄像头零拷贝取到 NV12 帧，喂给你自己的模型/算法。
-- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到编码视频，并分发到 WS/MQTT/HTTP/UART；保留无 `dSource` 旧规则的录像行为，但不能伪造显式 APP 来源。
+- **回注结果（结果注入）**：把你算出的检测框送回固件，叠加到编码视频，并分发到 WS/MQTT/HTTP/UART；兼容 FRAME 录像规则，入口按 peercred 覆盖 source_id。
 - **应用触发录像**：托管应用在 manifest v2 声明 `record_trigger`，由 appmgr 将获准的结果送入受保护的 Vigil 录制入口。
 - **音频**：从预留的 ALSA PCM 通道取麦克风原始音频。
 - **GPIO 触发**：用推理结果驱动引脚（继电器/LED/告警）。
@@ -66,7 +66,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 
 > **帧代理 vs 结果注入 vs 应用触发录像 vs notify 的选择**：
 > - 要拿摄像头画面自己推理 → **帧代理**（§3）。
-> - 要让你的结果出现在视频叠加 + 推送 → **结果注入**（§4，`result-in.sock`）；保留无 `dSource` 旧规则录像兼容。
+> - 要让你的结果出现在视频叠加 + 推送 → **结果注入**（§4，`result-in.sock`）；保留FRAME 录像规则。
 > - 要让已安装的托管应用按 AI 结果启动录像 → 在 manifest 声明 **`record_trigger`**；应用不能直接访问内部录制 socket。
 > - 只要把结果推给外部消费者、不需要叠加/录像 → **notify**（`result-push.md`）。
 
@@ -292,13 +292,10 @@ with FrameSource(FrameConfig(fps_divisor=2)) as src:
 1. **OSD 叠加**：`osd_manager_draw_infer()` 画进 RTSP/预览叠加层，按 `source_id` 哈希分配颜色；
 2. **推送**：`rc_notify_send_inference()` 转发 WS（本机 `127.0.0.1:8123` / 外部 `/ws/inference/results`）/ MQTT / HTTP / UART。
 
-3. **旧规则录像**：经身份规范化和校验后进入 legacy-only Vigil，仅匹配未设置 `dSource` 的传统规则；分割不参与规则。
+3. **FRAME 录像**：入口按 peercred 覆盖 source_id，再交给 Vigil 的普通过滤与防抖；`lSourceFilter` 缺省或空集合匹配全部合法来源。分割不参与规则。应用事件录像必须显式调用 `request_recording`，不能把展示事件当成录像请求。
 
-> **安全边界**：公开 `result-in.sock` 保留传统规则的既有录像权限，但不能匹配
-> 显式 BUILTIN/APP，即使外部 peer id 与 app id 相同。规则省略 `dSource` 时
-> 编辑/保存仍省略，不静默转成内建来源。托管应用要成为显式 APP 录像来源，应在 manifest v2 声明
-> `record_trigger`，由 appmgr 过滤后桥接到仅 appmgr 可访问的
-> `record-in.sock`；应用进程不得直接连接该内部端点。
+> 规范身份由受信入口决定；Vigil 不保留来源类型或 provenance。应用录制 EVENT 绕过 FRAME 过滤器，仅受录像总开关与日程门禁。
+
 
 SDK 覆盖全部五种任务类型：`send_detections` / `send_classification` / `send_segmentation` / `send_tracking` / `send_keypoints`（C ABI 与 Python 一一对应）。每个 `send_*` 打包对应的 `InferenceResult` oneof 分支，发一条 datagram；`pts_us` 语义一致（`CLOCK_MONOTONIC` 微秒，`0` = 不关联帧）；返回 0 成功，负值 = `-rc_ext_err_t`。所有 `const char *label` 均接受 `NULL`（当 `""`）。
 
@@ -464,7 +461,7 @@ with ResultSink(source_id="my-app") as sink:
 
 > ⚠️ **坐标契约（务必遵守）：所有 box 坐标与 keypoint 点坐标均为归一化 `[0,1]`（相对画面宽高的比例），不是像素。** 设备 OSD 渲染器（`osd_infer.c`：`osd_infer_box_to_rect` / `osd_infer_norm_to_pixel`）对坐标 `clamp(0,1)` 后再乘画面宽高。**若传像素值（如 240、300），会被 clamp 到 1.0 → 框缩成右下角 1 像素 → 画面上看不见框。** 早期 header 曾误标"pixels"（v1.2.0 已更正），按像素接入的框不显示即此原因。把你的像素结果除以画面宽高转成 `[0,1]` 再注入。
 
-各任务类型注入后进入 OSD 叠加与 WS·MQTT·HTTP·UART 推送。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；除分割外还可匹配无 `dSource` 旧 Vigil 规则。OSD 画面渲染的真机端到端验证程度不同：
+各任务类型注入后进入 OSD 叠加与 WS·MQTT·HTTP·UART 推送。**注入链路（`send_*` 返回 0）与推送链路（WS 能收到）对所有任务类型一致**；除分割外还可匹配FRAME Vigil 规则。OSD 画面渲染的真机端到端验证程度不同：
 
 | 任务类型 | 注入 + WS 推送 | OSD 画面渲染 | 端到端真机验证 |
 |---|---|---|---|
@@ -497,7 +494,7 @@ with ResultSink(source_id="my-app") as sink:
 
 ### 4.7 结果去向 vs notify 的区别
 
-`result-in.sock`（本 API）= OSD + 推送 + 无 `dSource` 旧规则录像兼容；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API；托管应用要成为显式 APP 录像来源则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
+`result-in.sock`（本 API）= OSD + 推送 + FRAME 录像规则；`/var/tmp/notify`（[result-push.md](./result-push.md)）= **只推送、不叠加、不录像**、0666 无鉴权的 legacy 通道。要框出现在画面里就用本 API；托管应用要成为受信应用录像来源则声明 [`record_trigger`](./app-package-v2.md#managed-recording-triggers)。
 
 ### 4.8 观测面 probe（`rc_ext_probe_*` / `ProbeSource`，v1.2.0）
 
@@ -623,7 +620,7 @@ message HelloAck {
 - **协商规则**：服务端在客户端 `[version_min, version_max]` 与自身支持集合的**交集**内取最大值；交集为空 → `error = EVERSION` 并关闭连接（不是 `min(client, server)`）。
 - **认证模式**：v1 `auth_mode = "peercred"`（用 `SO_PEERCRED` 取连接 pid/uid/gid 做身份）。将来 app token 作为**新增模式**并行提供，peercred 模式保留，老客户端不断。
 - **按 limits 自适应，不要硬编码**：并发数、速率、池深都在 `Capability.limits` 里返回，可能随固件变化。例如结果注入按 `limits["max_msg_rate"]` 控发送速率、帧代理按 `max_outstanding` 控持帧数。Python 侧 `src.pool_depth` / `src.max_outstanding` 即来自握手回填。
-- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `osd@1` / `record@1` /
+- **v1 baseline 承诺**：能力 `frame@1` / `result@1` / `osd@1` / `record-delivery@1` /
   `probe@1` / `inference-control@1` 一经发布不可移除。socket inode 存在仍不代表兼容，
   客户端必须完成 Hello/HelloAck。
 
@@ -673,7 +670,7 @@ Python 侧这些码经 `RuntimeError` 抛出（消息含 `err=` / `rc=`）；帧
 | 能力 | 里程碑 | 状态 |
 |---|---|---|
 | 结果注入（OSD+推送+旧规则录像） | M1 | client/server 源码已恢复并可交叉构建；历史补丁固件已验证，当前整合版待真机回归 |
-| 托管应用触发录像（manifest + appmgr + source-aware Vigil） | M1.5 | host/交叉构建与自动化测试通过，待目标板端到端回归 |
+| 托管应用触发录像（manifest + appmgr + FRAME/EVENT Vigil） | M1.5 | host/交叉构建与自动化测试通过，待目标板端到端回归 |
 | 帧代理（零拷贝取帧 + C ABI） | M2 | client/server 源码已恢复；runtime video restart 屏障与 host 生命周期测试通过，待真机回归 |
 | 音频 PCM / notify / 前端挂载 / rkipc 文档化 | M0 | 现成可用 |
 | 观测面（`probe.sock`：preproc/npu.raw/postproc/metrics 采样） | M3 | client/server 源码已恢复并可构建；历史补丁固件已验证，当前整合版待真机压力测试 |

@@ -1809,6 +1809,7 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
             "name_zh": "AI模型推理", "version": "firmware",
             "installed": True, "running": True, "status": "running",
             "supports_roi": True, "signals": [],
+            "frame_capable": True, "event_capable": False,
         }
         assert fall_source["installed"] is True
         assert fall_source["running"] is False
@@ -2611,3 +2612,29 @@ def test_preflight_binding_rejects_manifest_release_or_signer_changes():
                             "key_fingerprint": "sha256:owner"}
     with pytest.raises(server.installer.InstallError, match="signer identity"):
         server._assert_v1_preflight_binding(expected, changed)
+
+
+def test_recording_migration_acknowledge_requires_explicit_confirmation(layout, monkeypatch):
+    import threading
+    from appmgr import server
+    calls = []
+    view = {'status': 'acknowledged', 'requires_review': False, 'reason_codes': []}
+    monkeypatch.setattr(server.recording_migration, 'acknowledge_migration',
+                        lambda: calls.append('acknowledge') or dict(view))
+    httpd = server._AppHTTPServer(('127.0.0.1', 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        path = '/api/app-center/v1/recording/migration/acknowledge'
+        for body in ({}, {'acknowledge': False}, {'acknowledge': 1},
+                     {'acknowledge': True, 'enable': True}):
+            assert _json_request(httpd, 'POST', path, body)[0] == 400
+        assert calls == []
+        status, payload = _json_request(httpd, 'POST', path, {'acknowledge': True})
+        assert status == 200
+        assert payload == {'migration': view}
+        assert calls == ['acknowledge']
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)

@@ -1470,7 +1470,7 @@ const ProtobufCMessageDescriptor inference_keypoints_result__descriptor =
   (ProtobufCMessageInit) inference_keypoints_result__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor inference_result__field_descriptors[10] =
+static const ProtobufCFieldDescriptor inference_result__field_descriptors[11] =
 {
   {
     "task_type",
@@ -1528,6 +1528,18 @@ static const ProtobufCFieldDescriptor inference_result__field_descriptors[10] =
     0,   /* quantifier_offset */
     offsetof(InferenceResult, pts_us),
     NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "delivery",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_ENUM,
+    0,   /* quantifier_offset */
+    offsetof(InferenceResult, delivery),
+    &inference_delivery__descriptor,
     NULL,
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
@@ -1594,22 +1606,23 @@ static const ProtobufCFieldDescriptor inference_result__field_descriptors[10] =
   },
 };
 static const unsigned inference_result__field_indices_by_name[] = {
-  6,   /* field[6] = classification */
-  5,   /* field[5] = detection */
-  9,   /* field[9] = keypoints */
+  7,   /* field[7] = classification */
+  5,   /* field[5] = delivery */
+  6,   /* field[6] = detection */
+  10,   /* field[10] = keypoints */
   2,   /* field[2] = model_id */
   4,   /* field[4] = pts_us */
-  7,   /* field[7] = segmentation */
+  8,   /* field[8] = segmentation */
   3,   /* field[3] = source_id */
   0,   /* field[0] = task_type */
   1,   /* field[1] = timestamp_ms */
-  8,   /* field[8] = tracking */
+  9,   /* field[9] = tracking */
 };
 static const ProtobufCIntRange inference_result__number_ranges[2 + 1] =
 {
   { 1, 0 },
-  { 10, 5 },
-  { 0, 10 }
+  { 10, 6 },
+  { 0, 11 }
 };
 const ProtobufCMessageDescriptor inference_result__descriptor =
 {
@@ -1619,7 +1632,7 @@ const ProtobufCMessageDescriptor inference_result__descriptor =
   "InferenceResult",
   "",
   sizeof(InferenceResult),
-  10,
+  11,
   inference_result__field_descriptors,
   inference_result__field_indices_by_name,
   2,  inference_result__number_ranges,
@@ -1658,5 +1671,33 @@ const ProtobufCEnumDescriptor task_type__descriptor =
   task_type__enum_values_by_name,
   1,
   task_type__value_ranges,
+  NULL,NULL,NULL,NULL   /* reserved[1234] */
+};
+static const ProtobufCEnumValue inference_delivery__enum_values_by_number[2] =
+{
+  { "INFERENCE_DELIVERY_FRAME", "INFERENCE_DELIVERY__INFERENCE_DELIVERY_FRAME", 0 },
+  { "INFERENCE_DELIVERY_EVENT", "INFERENCE_DELIVERY__INFERENCE_DELIVERY_EVENT", 1 },
+};
+static const ProtobufCIntRange inference_delivery__value_ranges[] = {
+{0, 0},{0, 2}
+};
+static const ProtobufCEnumValueIndex inference_delivery__enum_values_by_name[2] =
+{
+  { "INFERENCE_DELIVERY_EVENT", 1 },
+  { "INFERENCE_DELIVERY_FRAME", 0 },
+};
+const ProtobufCEnumDescriptor inference_delivery__descriptor =
+{
+  PROTOBUF_C__ENUM_DESCRIPTOR_MAGIC,
+  "InferenceDelivery",
+  "InferenceDelivery",
+  "InferenceDelivery",
+  "",
+  2,
+  inference_delivery__enum_values_by_number,
+  2,
+  inference_delivery__enum_values_by_name,
+  1,
+  inference_delivery__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };

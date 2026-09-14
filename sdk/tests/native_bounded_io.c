@@ -1,4 +1,4 @@
-// Host runtime tests for the internal record@1 bounded socket helpers.
+// Host runtime tests for the internal record-delivery@1 bounded socket helpers.
 // A local AF_UNIX server covers Hello/HelloAck without privileged endpoints;
 // a saturated socketpair proves backpressure cannot block forever.
 #ifndef _GNU_SOURCE
@@ -297,6 +297,6 @@ int main(void) {
 	CHECK(test_send_timeout() == 0);
 	CHECK(test_request_ack() == 0);
 	CHECK(rmdir(directory) == 0);
-	printf("PASS bounded record@1 connect, Hello/ACK and backpressure send\n");
+	printf("PASS bounded record-delivery@1 connect, Hello/ACK and backpressure send\n");
 	return 0;
 }

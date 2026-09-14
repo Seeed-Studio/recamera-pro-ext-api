@@ -49,6 +49,7 @@ def _envelope(message_type, *, generation=1, results=None, events=None,
         "stream": {"width": 200, "height": 100,
                    "coordinate_space": "pixel_xyxy"},
         "results": list(results or []), "events": list(events or []),
+        "event_kind": (events or [{}])[0].get("kind"),
     }
 
 
@@ -155,7 +156,7 @@ def test_hub_preserves_empty_detection_frames_alongside_business_events():
         assert bridge.close()
 
 
-def test_event_signal_uses_one_shot_delivery_and_generation_fence_resets_state():
+def test_explicit_request_uses_one_shot_delivery_and_generation_queue_clear():
     recording = _module()
     sink = _Sink()
     bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
@@ -165,10 +166,10 @@ def test_event_signal_uses_one_shot_delivery_and_generation_fence_resets_state()
         bridge.invalidate_source(
             "demo-app", identity=_identity(), capability=_capability(signal))
         bridge.observe(_envelope(
-            "event", events=[{"kind": "fall", "event_id": "fall-1"}]))
-        # Exact duplicate ids cannot increment Vigil debounce twice.
+            "recording_request", events=[{"kind": "fall", "event_id": "fall-1"}]))
+        # Exact duplicate requests cannot submit twice.
         bridge.observe(_envelope(
-            "event", events=[{"kind": "fall", "event_id": "fall-1"}]))
+            "recording_request", events=[{"kind": "fall", "event_id": "fall-1"}]))
         calls = _wait_for(
             sink, lambda values: any(
                 value[0] == "events" for value in values))
@@ -179,7 +180,7 @@ def test_event_signal_uses_one_shot_delivery_and_generation_fence_resets_state()
         bridge.invalidate_source("demo-app", identity=_identity(2),
                                  capability=_capability(signal))
         bridge.observe(_envelope(
-            "event", generation=1, message_id="stale",
+            "recording_request", generation=1, message_id="stale",
             events=[{"kind": "fall"}]))
         _wait_for(sink, lambda values: sum(
             value[0] == "reset" for value in values) >= 2)
@@ -233,7 +234,8 @@ def test_source_view_hides_apps_without_signed_recording_declaration():
         "id": "demo-app", "kind": "app", "name": "Demo", "name_zh": None,
         "version": "1.0.0", "installed": True, "running": False,
         "status": "stopped", "supports_roi": False,
-        "signals": [signal],
+        "signals": [signal], "frame_capable": False, "event_capable": True,
+        "event_configuration": "app",
     }
 
 
@@ -371,7 +373,7 @@ def test_edge_survives_frame_pressure_and_is_dispatched_first():
         assert entered.wait(2)
         bridge.observe(_envelope("frame", results=[box], message_id="frame-1"))
         bridge.observe(_envelope(
-            "event", events=[{"kind": "fall", "event_id": "fall-1"}],
+            "recording_request", events=[{"kind": "fall", "event_id": "fall-1"}],
             message_id="edge-1"))
         for index in range(2, 12):
             bridge.observe(_envelope(
@@ -410,7 +412,7 @@ def test_budget_wait_preserves_empty_boundary_and_prioritizes_events(monkeypatch
         _wait_for(sink, lambda values: any(value[0] == "detections" for value in values))
         bridge.observe(_envelope("frame", results=[], message_id="empty"))
         bridge.observe(_envelope("frame", results=[box], message_id="positive-2"))
-        bridge.observe(_envelope("event", events=[{"kind": "fall"}], message_id="edge"))
+        bridge.observe(_envelope("recording_request", events=[{"kind": "fall"}], message_id="edge"))
         calls = _wait_for(sink, lambda values: sum(
             value[0] == "detections" for value in values) == 3)
         data = [value for value in calls if value[0] in ("detections", "events")]
@@ -474,13 +476,13 @@ def test_cross_source_lifecycle_reset_precedes_queued_events():
         assert bridge.wait_invalidation(other, timeout=2)
 
         bridge.observe(_envelope(
-            "event", events=[{"kind": "fall"}], message_id="edge-1"))
+            "recording_request", events=[{"kind": "fall"}], message_id="edge-1"))
         assert entered.wait(2)
         second = _envelope(
-            "event", events=[{"kind": "fall"}], message_id="edge-2")
+            "recording_request", events=[{"kind": "fall"}], message_id="edge-2")
         second["time"]["pts_us"] = 2000
         third = _envelope(
-            "event", events=[{"kind": "fall"}], message_id="edge-3")
+            "recording_request", events=[{"kind": "fall"}], message_id="edge-3")
         third["time"]["pts_us"] = 3000
         bridge.observe(second)
         bridge.observe(third)
@@ -512,12 +514,12 @@ def test_recording_observer_filters_unrelated_records_before_its_queue():
     assert bridge.wait_invalidation(token, timeout=2)
 
     assert bridge.observer_accepts(_envelope(
-        "event", events=[{"kind": "fall"}], message_id="authorized")) is True
+        "recording_request", events=[{"kind": "fall"}], message_id="authorized")) is True
     assert bridge.observer_accepts(_envelope(
-        "event", events=[{"kind": "metrics"}], message_id="unrelated")) is False
+        "recording_request", events=[{"kind": "metrics"}], message_id="unrelated")) is False
     assert bridge.observer_accepts(_envelope("frame", results=[])) is False
     unrelated = _envelope(
-        "event", events=[{"kind": "metrics"}], message_id="unrelated")
+        "recording_request", events=[{"kind": "metrics"}], message_id="unrelated")
     bridge.observe(unrelated)
     with bridge._condition:
         assert not any(item[0] == "events" for item in bridge._queue)
@@ -547,8 +549,8 @@ def test_result_hub_capability_refresh_drives_recording_bridge(tmp_path):
         assert hub.refresh_app_manifest(
             identity, _manifest_with_trigger(signal))
         assert hub.publish_app({
-            "type": "results", "seq": 1, "pts": 1.25,
-            "events": [{"kind": "fall", "event_id": "fall-1"}],
+            "type": "recording_request", "seq": 1, "pts": 1.25,
+            "event_kind": "fall",
         }, identity)
         calls = _wait_for(
             sink, lambda values: any(value[0] == "events" for value in values))
@@ -561,3 +563,46 @@ def test_result_hub_capability_refresh_drives_recording_bridge(tmp_path):
     finally:
         hub.remove_observer(registration)
         assert bridge.close()
+
+
+def test_display_event_is_never_an_explicit_recording_request():
+    recording = _module()
+    bridge = recording.RecordingTriggerBridge(sink_factory=_Sink)
+    signal = {'id': 'fall', 'type': 'event', 'event_kind': 'fall', 'supports_roi': False}
+    bridge.invalidate_source('demo-app', identity=_identity(), capability=_capability(signal))
+    display = _envelope('event', events=[{'kind': 'fall'}])
+    assert not bridge.observer_accepts(display)
+    assert not bridge.observer_priority(display)
+    bridge.observe(display)
+    assert not any(action[0] == 'events' for action in bridge._queue)
+
+
+def test_private_request_route_stamps_identity_checks_permissions_and_does_not_replay(tmp_path):
+    from appmgr.result_hub import ResultHub
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    hub = ResultHub(ws_port=0, system_uds_path=str(tmp_path / 'system.sock'))
+    hub.add_observer(bridge.observe)
+    other = []
+    hub.add_observer(other.append)
+    identity = {'app_id': 'demo-app', 'instance_id': 'demo-instance', 'generation': 1}
+    signal = {'id': 'fall', 'type': 'event', 'event_kind': 'fall', 'supports_roi': False}
+    try:
+        assert hub.refresh_app_manifest(identity, _manifest_with_trigger(signal))
+        request = {'type': 'recording_request', 'event_kind': 'fall', 'seq': 5,
+                   'pts': 1.25, 'source': {'id': 'builtin'}, 'app': 'evil-app'}
+        accepted = hub.publish_app(request, identity)
+        assert accepted[0]['source']['id'] == 'demo-app'
+        assert not hub.publish_app(dict(request, event_kind='smoke'), identity)
+        _wait_for(sink, lambda calls: any(c[0] == 'events' for c in calls))
+        assert hub.snapshot_records() == []
+        assert other == []
+        hub.publish_app(request, identity)
+        _wait_for(sink, lambda _: bridge.status()['duplicates'] == 1)
+        next_identity = dict(identity, generation=2)
+        assert hub.refresh_app_manifest(next_identity, _manifest_with_trigger(signal))
+        assert hub.publish_app(request, identity) == []
+    finally:
+        hub.stop()
+        bridge.close()

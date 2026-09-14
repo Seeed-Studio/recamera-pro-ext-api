@@ -22,7 +22,7 @@
 | socket | 客户端 | 作用 |
 |---|---|---|
 | `frame.sock` | `FrameSource` | 零拷贝拿相机原始帧（全分辨率 NV12，不预 letterbox），自己推理 |
-| `result-in.sock` | `ResultSink` | 回注 OSD / 推送，并保留无 `dSource` 旧录像规则；不能伪造显式 APP 来源 |
+| `result-in.sock` | `ResultSink` | 回注 OSD / 推送，兼容 FRAME 录像过滤；入口按 peercred 覆盖 source_id，不能伪造 builtin |
 | `probe.sock` | `ProbeSource` | 只读观测内建推理流水线各级张量/指标 |
 | `inference-control.sock` | `InferenceLease` / `ExternalNpuLease` | 停妥内建模型后授予 external RKNN 单 owner 的连接生命周期租约 |
 

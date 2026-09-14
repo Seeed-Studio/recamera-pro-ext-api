@@ -34,6 +34,7 @@ import argparse
 import inspect
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -1475,6 +1476,28 @@ class App:
             block = None
         self._render_cache = (self._config_version, block)
         return block
+
+    def request_recording(self, event_kind: str, ts: Optional[float] = None) -> bool:
+        """Request one recording after the app's own business decision.
+
+        Only the authenticated managed gateway can carry this command. The
+        installed manifest must authorize ``event_kind``. True means queued
+        locally, not that Vigil accepted or completed a recording. This never
+        publishes a display event and ordinary ``emit`` never requests recording.
+        """
+        if (not isinstance(event_kind, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,95}", event_kind)):
+            raise ValueError("invalid recording event kind")
+        rt = self._rt
+        if rt is None or not self._warmed:
+            return False
+        request = getattr(rt["sink"], "request_recording", None)
+        if not callable(request):
+            return False
+        frame = self._cur_frame
+        if ts is None:
+            ts = frame.pts if frame is not None else time.monotonic()
+        return bool(request(event_kind, float(ts)))
 
     def emit(self, events=None, ts: Optional[float] = None, *,
              results=None, geometry=None,

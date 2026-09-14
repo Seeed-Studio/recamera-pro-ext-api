@@ -112,200 +112,71 @@ cover `camera.frames`, `audio.capture`, `npu.rknn`, `rga`, `codec.decode`,
 
 ## Managed recording triggers
 
-Compatibility with pre-managed recording: existing rules **without `dSource`**
-continue to consume builtin and validated ordinary `ResultSink` FRAME results.
-Read/edit/save preserves that omission. New explicit BUILTIN/APP rules are
-strict: ordinary result-in cannot satisfy APP even if its peer-derived id equals
-the app id, because provenance is assigned internally at native ingress. The
-wire marker `sKind: "LEGACY"` is invalid; legacy is represented only by omission.
-This preserves established local ResultSink authority for old rules, not access
-to the private socket or authority to impersonate a managed application. Existing
-explicit BUILTIN rules are not automatically downgraded; restoring one to legacy
-requires an explicit user choice while retaining its filters and ROI.
+The compatibility boundary is the result format, not a source type hierarchy.
+Detection/classification observations use protobuf `delivery=FRAME` and retain
+class/confidence/ROI filtering and debounce. Rules select canonical source IDs
+with `lSourceFilter`; absent or empty means all admitted sources. Classification
+has no ROI predicate. Empty `results: []` snapshots remain meaningful.
 
-For managed FRAME snapshots, send `results: []` when the previous detection is
-no longer present, including when the same message also carries business events.
-An event-only message must omit the results snapshot (or use `type: "event"`).
-The bridge retains empty/nonempty transitions, paces data to 50 messages/s and
-prioritizes one-shot events. Native record@1 retains the existing admission
-limits and temporarily queues events (32 items / 256 KiB / 2 seconds), purged
-on source reset or disconnect. Overload is visible in probe `record_events`;
-`sent` confirms datagram submission, not rule matching or recording completion.
+Special postprocessing belongs to the application. Call
+`self.request_recording("fall", frame.pts)` only after deciding that recording
+should happen. The request is separate from `self.emit(events, ..., results=...)`:
+ordinary output, QR text, metrics and ongoing alarm states never implicitly
+request recording. Decide thresholds, direction, edges, duplicate suppression
+and cooldown inside the app. Vigil EVENT carries no result payload and uses the
+source ID as event ID. It bypasses FRAME source/class/confidence/ROI/debounce
+filters, but still respects recording enable and schedule gates.
 
-An optional `record_trigger` lets an installed managed application appear as a
-recording-rule source. It is a closed manifest v2 contract, not a capability
-that an application may claim in its result payload. The declaration requires
-an `output.contract_version` of 2 and every selectable label or event kind must
-be backed by a direct, non-derived `output.fields[].from` path. For example:
+An installed manifest v2 `record_trigger` authorizes FRAME labels and explicit
+request kinds. Its `signals` keep their existing `{id,type,classes,supports_roi}`
+or `{id,type:"event",event_kind,supports_roi:false}` shape, backed by direct
+`output.fields` declarations. The request kind is an appmgr permission check;
+it is not a payload or filter sent to Vigil. Payload claims cannot add authority.
+Appmgr derives identity from peer credentials plus the currently running instance
+and generation, and replaces claimed identities before forwarding. Only appmgr
+can use the private `record-in.sock`; ordinary applications use their managed
+gateway. Unmanaged/stdout/MQTT/OSD sinks do not send recording requests.
 
-```json
-{
-  "output": {
-    "contract_version": 2,
-    "sink": "ws",
-    "schema": "recamera.ai.result",
-    "default_channel": ["ws"],
-    "default_mode": "raw",
-    "fields": [
-      {
-        "name": "label",
-        "from": "results[].label",
-        "type": "string",
-        "description": "Detection class"
-      },
-      {
-        "name": "score",
-        "from": "results[].score",
-        "type": "number",
-        "description": "Detection confidence"
-      },
-      {
-        "name": "box",
-        "from": "results[].box",
-        "type": "bbox",
-        "coord": "normalized_xyxy",
-        "description": "Detection bounds"
-      },
-      {
-        "name": "fall_kind",
-        "from": "events[kind=fall].kind",
-        "type": "string",
-        "description": "Fall event kind"
-      }
-    ],
-    "default_mapping": []
-  },
-  "record_trigger": {
-    "version": 1,
-    "signals": [
-      {
-        "id": "people",
-        "type": "detection",
-        "classes": ["person"],
-        "supports_roi": true
-      },
-      {
-        "id": "fall",
-        "type": "event",
-        "event_kind": "fall",
-        "supports_roi": false
-      }
-    ]
-  }
-}
-```
+`request_recording` returns true only when queued locally. It does not promise
+that a clip was accepted or saved. Queueing is bounded, recording requests cannot
+be replaced by display frames, and saturation/connection failures remain visible
+in sink/bridge diagnostics. The private native contract is `record-delivery@1`;
+new SDK clients reject an old/missing capability before sending. Old Python
+FRAME calls remain valid. `RecordSink.send_events(app_id, pts_us, tuples)` retains
+its argument shape: each nonempty call becomes one payload-free EVENT; an empty
+call does nothing. Its tuple labels, scores and ROI are not recording conditions.
+The unpublished model-ID sentinel is removed, not emulated.
 
-`signals` contains 1 to 32 entries with unique stable `id` values. A
-`detection` signal needs one or more unique class labels plus direct label,
-score, and pixel or normalized box fields; it may opt into ROI. A
-`classification` signal needs direct label and score fields and cannot support
-ROI. Detection and classification signals cannot be mixed in one declaration,
-although either kind may be combined with event signals. An `event` signal has
-one lowercase `event_kind`, no `classes`, and no ROI; that kind must be declared
-by a direct `events[...]` output field. Labels and event kinds must also be
-unique across the declaration. `signal.id` identifies the configuration choice;
-the runtime match is against the declared class label or `event_kind`.
+Kit 0.3.0 adds the explicit recording API. The four updated application packages
+require `kit_api >=0.3,<1`; an older Kit must reject them during installation.
+Existing installed applications can continue using `emit` with the new Kit, but
+recording events require updating the app and enabling its new recording controls.
 
-FRAME and EVENT have deliberately different delivery semantics:
+The four event-capable examples default `recording_enabled` to false and expose
+live controls in their app configuration. `recording_cooldown_sec` defaults to 10.
+QR records newly appearing/reappearing codes, not each decoded frame. Facemesh
+records selected blink/yawn edges or a drowsiness rising edge (default only
+ drowsiness selected). Pending QR/drowsiness requests that fail local queueing
+retry at most once per second while the condition remains present. A frame PTS
+reset starts a fresh cooldown clock. Fall records confirmed fall edges. Retail records line
+crossings (or appearance/disappearance when no line is configured), filtered by
+`recording_direction`. Display output remains unchanged while recording is off.
 
-- `detection` and `classification` consume canonical `type=frame` snapshots.
-  Each accepted frame is one rule evaluation, including an empty matching set,
-  so ordinary frame-rule debounce can assert and deassert from later snapshots.
-  No evaluation occurs merely because wall-clock time passes.
-- `event` consumes a canonical `type=event` occurrence as a one-shot edge.
-  Each accepted, non-duplicate event is evaluated once and its receiver-side
-  match state is reset immediately. Events do not remain active and do not
-  accumulate debounce counts across quiet gaps. A later distinct occurrence
-  is a new edge. Result Hub still applies its normal semantic de-duplication to
-  state-style observations such as a stable QR value; changing telemetry under
-  a trigger event kind creates distinct occurrences and should be avoided.
+`GET /api/app-center/v1/recording/sources` retains source IDs/names/status/signals
+and adds `frame_capable`, `event_capable`, and `event_configuration:"app"` for apps.
+The top-level `semantics` identifies `recording-source-filter-delivery-v1`,
+`lSourceFilter`, `application_decides`, and EVENT bypass of FRAME filters.
+`migration` reports `status`, `requires_review`, and `reason_codes` only.
+`POST /api/app-center/v1/recording/migration/acknowledge` with
+`{"acknowledge":true}` marks a reviewed migration; it never enables recording.
 
-The discovery endpoint is read-only:
-
-```http
-GET /api/app-center/v1/recording/sources
-```
-
-```json
-{
-  "version": 1,
-  "sources": [
-    {
-      "id": "builtin",
-      "kind": "builtin",
-      "installed": true,
-      "running": true,
-      "status": "running",
-      "supports_roi": true,
-      "signals": []
-    },
-    {
-      "id": "example-app",
-      "kind": "app",
-      "name": "Example",
-      "name_zh": null,
-      "version": "1.0.0",
-      "installed": true,
-      "running": false,
-      "status": "stopped",
-      "supports_roi": true,
-      "signals": [
-        {
-          "id": "people",
-          "type": "detection",
-          "classes": ["person"],
-          "supports_roi": true
-        }
-      ]
-    }
-  ],
-  "status": {
-    "running": true,
-    "active_sources": [],
-    "queued": 0,
-    "sent": 0,
-    "frames": 0,
-    "events": 0,
-    "resets": 0,
-    "dropped": 0,
-    "frame_dropped": 0,
-    "event_dropped": 0,
-    "frame_coalesced": 0,
-    "duplicates": 0,
-    "send_errors": 0,
-    "last_error": ""
-  }
-}
-```
-
-The built-in pipeline is always represented by the special `builtin` source;
-its classes come from the currently selected firmware model, so its `signals`
-array is empty here. Other entries are installed managed apps whose
-`record_trigger` still validates against their installed manifest. An omitted
-or invalid declaration is hidden. A stopped or failed app remains discoverable
-for rule configuration, with `running` and `status` reporting its current
-lifecycle state. The top-level `status` is bridge diagnostics, not permission
-to widen a source's declaration.
-
-The trust boundary is the appmgr-admitted installed manifest and the exact
-authenticated app instance/generation. Result Gateway derives source identity
-from `SO_PEERCRED`; Result Hub replaces payload identity, render, coordinate,
-and stream claims with control-plane facts. The recording bridge then filters
-labels and event kinds against `record_trigger`. Payload fields cannot add a
-source, signal, class, event kind, ROI support, or route data to the private
-recording ingress. Normally the package signature authenticates the manifest;
-an explicitly confirmed local unsigned install has the documented root-code
-risk but receives no broader recording declaration than the manifest appmgr
-admitted.
-
-Lifecycle invalidation is also a recording fence. On stop, crash, deletion,
-generation replacement, or trusted capability refresh, appmgr advances the
-source epoch, discards queued old-generation observations, and queues a native
-per-source reset. It waits for that reset with a bounded acknowledgement outside
-Result Hub's publish fence; a failed sink connection is closed so the receiver
-can reset every source owned by that connection. Old instance/generation data
-cannot re-authorize itself, and a new generation never inherits the previous
-generation's debounce or event state.
+Stop, crash, deletion, generation replacement or capability changes still revoke
+appmgr authorization and discard its queued old-instance work. The ordered native
+reset uses FRAME/no payload/model_id=0 **only on the private recording socket**.
+Its bounded ACK confirms pending queue removal, not debounce reset, cancellation
+of an already consumed result, or a barrier against an active clip. ACK uncertainty
+closes the connection so a late reply cannot confirm another reset. Vigil keeps
+no app epoch/provenance framework; FRAME debounce may span a process restart.
 
 ## Offline Python dependencies
 

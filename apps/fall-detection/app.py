@@ -45,6 +45,7 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 
 from kit.app import App, run_app
+from kit.logic.recording import request_configured_recording
 from kit.runtime.postprocess import pose as pose_post
 from kit.logic.geometry import make_observation, N_KPT
 from kit.logic.temporal import FallDetector, FallConfig, FALLEN, RECOVERING
@@ -612,6 +613,7 @@ class FallDetectionApp(App):
 
             # Edge event: a fall was just confirmed for THIS identity.
             if out.fall_event:
+                request_configured_recording(self, "fall", frame.pts)
                 events.append({
                     "kind": "fall",
                     "track_id": track.track_id,

@@ -8,7 +8,7 @@
 `/var/tmp/notify` 是 notify-server 的入站 unix socket。写入一条 `InferenceResult`，它会被**分发**到 WebSocket / MQTT / HTTP / UART。
 
 - **此通道只做分发。结果不会画进 OSD 叠加、不会进录像。**
-- 要让结果出现在视频叠加中，走 `result-in.sock`；该入口还会推送结果，并保留无 `dSource` 旧录像规则的行为，但不能匹配显式 BUILTIN/APP 来源。
+- 要让结果出现在视频叠加中，走 `result-in.sock`；该入口还会推送结果，并发送身份规范化后的 FRAME 到 Vigil，按 `lSourceFilter` 和普通条件评估。
 - 托管应用要按 AI 结果启动录像，必须在 manifest v2 声明 `record_trigger`，由 appmgr 过滤并桥接到受保护的 `record-in.sock`；应用不能直接使用该内部入口。
 - 该 socket 权限 0666、无鉴权，定位为无特权 legacy 通道；后续固件会对其加全局限速，但格式与路径保持不变。
 

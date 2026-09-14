@@ -36,6 +36,7 @@ REQUIRED_FILES = (
     "tests/native_abi_layout.c",
     "tests/native_bounded_io.c",
     "tests/native_record_wire.c",
+    "tests/native_record_capability.c",
 )
 FORBIDDEN_CMAKE_DEPENDENCIES = (
     "${RKIPC_COMMON}",
@@ -96,14 +97,8 @@ def _check_source(source_root):
                 "header/ABI baseline mismatch: missing=%r unexpected=%r"
                 % (sorted(expected - declared), sorted(declared - expected))
             )
-        if not re.search(
-            r"^#define\s+RC_EXT_RECORD_EVENT_MODEL_ID\s+INT32_MIN\s*$",
-            header,
-            re.MULTILINE,
-        ):
-            errors.append(
-                "public header omits RC_EXT_RECORD_EVENT_MODEL_ID=INT32_MIN"
-            )
+        if "RC_EXT_RECORD_EVENT_MODEL_ID" in header:
+            errors.append("unpublished recording event sentinel must not be exposed")
 
     version_path = source_root / "VERSION"
     if version_path.is_file():
@@ -114,7 +109,7 @@ def _check_source(source_root):
             "frame@1",
             "result@1",
             "osd@1",
-            "record@1",
+            "record-delivery@1",
             "probe@1",
             "inference-control@1",
         ):

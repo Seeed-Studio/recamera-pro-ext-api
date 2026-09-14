@@ -241,6 +241,10 @@ class ResultSink(ABC):
 
         self.emit(payload, pts)
 
+    def request_recording(self, event_kind: str, pts: float) -> bool:
+        """Only a managed gateway implements recording; telemetry sinks do not."""
+        return False
+
     def set_frame_size(self, w: int, h: int) -> None:
         """Tell the sink the current frame's pixel dimensions.
 
@@ -545,6 +549,14 @@ class WsResultSink(ResultSink):
                 pass
 
 
+class _GatewayLine(bytes):
+    """Wire bytes with queue priority already decided before acquiring its lock."""
+    def __new__(cls, value, recording_request=False):
+        line = super().__new__(cls, value)
+        line.recording_request = bool(recording_request)
+        return line
+
+
 class GatewayResultSink(ResultSink):
     """Publish to appmgr's authenticated Unix-domain result gateway.
 
@@ -665,47 +677,78 @@ class GatewayResultSink(ResultSink):
             except OSError:
                 pass
 
-    def _offer(self, obj: dict) -> None:
+    def _offer(self, obj: dict) -> bool:
         try:
             line = (json.dumps(obj, separators=(",", ":"), default=str)
                     + "\n").encode("utf-8")
         except Exception:
             self._errors += 1
-            return
-        if len(line) > 512 * 1024:
+            return False
+        if len(line) > 512 * 1024 or self._stop.is_set():
             self._errors += 1
-            return
-        if offer_latest_wins(self._q, line):
-            self._dropped += 1
+            return False
+        line = _GatewayLine(line, obj.get("type") == "recording_request")
+        # Preserve explicit requests against latest-wins display frames. The
+        # queue stays bounded; all-request saturation rejects the new item.
+        with self._q.mutex:
+            # close() may have raced serialization before this lock.
+            if self._stop.is_set():
+                return False
+            if self._q.maxsize > 0 and len(self._q.queue) >= self._q.maxsize:
+                victim = next((i for i, value in enumerate(self._q.queue)
+                               if value is not None and not getattr(
+                                   value, "recording_request", False)), None)
+                self._dropped += 1
+                if victim is None:
+                    return False
+                del self._q.queue[victim]
+                self._q.unfinished_tasks = max(0, self._q.unfinished_tasks - 1)
+            self._q.queue.append(line)
+            self._q.unfinished_tasks += 1
+            self._q.not_empty.notify()
+        return True
+
+    def request_recording(self, event_kind: str, pts: float) -> bool:
+        self._seq += 1
+        return self._offer({"type": "recording_request", "event_kind": event_kind,
+                            "pts": pts, "seq": self._seq})
 
     def _run(self) -> None:
-        while not self._stop.is_set():
+        while True:
             try:
                 line = self._q.get(timeout=0.5)
             except queue.Empty:
+                if self._stop.is_set():
+                    return
                 continue
-            if line is None:
-                break
-            sent = False
-            for attempt in range(2):
-                try:
-                    with self._conn_lock:
-                        conn = self._conn
-                    if conn is None:
-                        conn = self._connect(
-                            retry_until=time.monotonic() + self._connect_timeout)
-                    conn.settimeout(self._send_timeout)
-                    conn.sendall(line)
-                    self._sent += 1
-                    sent = True
-                    break
-                except Exception:
-                    self._errors += 1
-                    self._disconnect()
-                    if attempt == 0 and not self._stop.is_set():
-                        continue
-            if not sent:
-                self._dropped += 1
+            try:
+                if line is None:
+                    return
+                if self._stop.is_set():
+                    self._dropped += 1
+                    continue
+                sent = False
+                for attempt in range(2):
+                    try:
+                        with self._conn_lock:
+                            conn = self._conn
+                        if conn is None:
+                            conn = self._connect(
+                                retry_until=time.monotonic() + self._connect_timeout)
+                        conn.settimeout(self._send_timeout)
+                        conn.sendall(line)
+                        self._sent += 1
+                        sent = True
+                        break
+                    except Exception:
+                        self._errors += 1
+                        self._disconnect()
+                        if attempt == 0 and not self._stop.is_set():
+                            continue
+                if not sent:
+                    self._dropped += 1
+            finally:
+                self._q.task_done()
 
     def set_frame_size(self, w: int, h: int) -> None:
         if w and h and int(w) > 0 and int(h) > 0:
@@ -742,12 +785,16 @@ class GatewayResultSink(ResultSink):
                 "backend": "appmgr-gateway"}
 
     def close(self) -> None:
+        if self._stop.is_set():
+            return
         self._stop.set()
         try:
             self._q.put_nowait(None)
         except queue.Full:
             try:
                 self._q.get_nowait()
+                self._q.task_done()
+                self._dropped += 1
                 self._q.put_nowait(None)
             except (queue.Empty, queue.Full):
                 pass
@@ -755,6 +802,15 @@ class GatewayResultSink(ResultSink):
         writer = getattr(self, "_writer", None)
         if writer is not None and writer is not threading.current_thread():
             writer.join(timeout=1.0)
+
+        if writer is None or not writer.is_alive():
+            # Idempotent shutdown also accounts for a sentinel offered after
+            # an already stopped writer, without disturbing in-flight work.
+            with self._q.mutex:
+                self._q.unfinished_tasks -= len(self._q.queue)
+                self._q.queue.clear()
+                if not self._q.unfinished_tasks:
+                    self._q.all_tasks_done.notify_all()
 
 
 class MultiSink(ResultSink):
@@ -815,6 +871,15 @@ class MultiSink(ResultSink):
             except Exception as exc:
                 failures.append((sink, exc))
         self._raise_checked("emit", failures)
+
+    def request_recording(self, event_kind: str, pts: float) -> bool:
+        # Never broadcast this control operation to ordinary output channels.
+        # One managed gateway is sufficient even in a fan-out configuration.
+        for sink in self.sinks:
+            request = getattr(sink, "request_recording", None)
+            if callable(request) and request(event_kind, pts):
+                return True
+        return False
 
     def emit_meta(self, payload: dict) -> None:
         for s in self.sinks:

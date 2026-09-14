@@ -1,4 +1,4 @@
-// Host-only record@1 client wire test. The production implementation is
+// Host-only record-delivery@1 client wire test. The production implementation is
 // included directly so its private fd builders can be exercised through a
 // socketpair without creating the privileged /run endpoint.
 #include <errno.h>
@@ -140,11 +140,12 @@ int main(void) {
 	CHECK(rc_ext_record_send_events(record, "event-app", 103, &event, 1) == 0);
 	message = receive_result(pair[1]);
 	CHECK(check_common(message, "event-app", 103,
-	                   INFERENCE_RESULT__DATA_CLASSIFICATION,
-	                   RC_EXT_RECORD_EVENT_MODEL_ID));
-	CHECK(message->classification && message->classification->n_entries == 1);
-	CHECK(strcmp(message->classification->entries[0]->class_name, "motion") == 0);
+	                   INFERENCE_RESULT__DATA__NOT_SET, 0));
+	CHECK(message->delivery == INFERENCE_DELIVERY__INFERENCE_DELIVERY_EVENT);
+	CHECK(message->data_case == INFERENCE_RESULT__DATA__NOT_SET);
 	inference_result__free_unpacked(message, NULL);
+	CHECK(rc_ext_record_send_events(record, "event-app", 104, NULL, 0) == 0);
+	CHECK(expect_no_message(pair[1]));
 
 	rc_ext_track_t track = {
 		.x1 = 0.1f, .y1 = 0.2f, .x2 = 0.8f, .y2 = 0.9f,
@@ -236,6 +237,6 @@ int main(void) {
 	CHECK(recv(pair[1], &error, sizeof(error), 0) == 0);
 	close(pair[1]);
 
-	printf("PASS record@1 client ABI, validation and protobuf wire data\n");
+	printf("PASS record-delivery@1 client ABI, validation and protobuf wire data\n");
 	return 0;
 }

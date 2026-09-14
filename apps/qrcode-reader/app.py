@@ -30,6 +30,7 @@ Run on device (no root / no NPU needed):
 import os
 
 from kit.app import App, run_app
+from kit.logic.recording import request_configured_recording
 from kit.logic.qrcode import QrDecoder
 
 # Bundled data files (the WeChat QR model dir) are resolved against the app's
@@ -68,6 +69,16 @@ class QrcodeReaderApp(App):
                 }
                 for r in codes
             ]
+            # A code remaining in view is state, not another recording event.
+            current_codes = {str(item.get("text", "")) for item in codes[:64]
+                             if item.get("text")}
+            previous_codes = getattr(self, "_recording_codes", set())
+            pending = (getattr(self, "_recording_pending_codes", set()) & current_codes)
+            pending |= current_codes - previous_codes
+            if pending and request_configured_recording(self, "qrcode", frame.pts):
+                pending.clear()
+            self._recording_pending_codes = pending
+            self._recording_codes = current_codes
             self.emit(events, frame.pts, results=codes)
 
 

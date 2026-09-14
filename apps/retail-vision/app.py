@@ -26,6 +26,7 @@ Run on device (inference requires root):
 """
 
 from kit.app import App, run_app
+from kit.logic.recording import request_configured_recording
 from kit.runtime.postprocess.detect import postprocess
 from kit import events as E
 from kit.logic.tracker import Tracker, TrackerConfig
@@ -188,6 +189,13 @@ class RetailVisionApp(App):
                     events.append({"kind": "line_cross", "track_id": tid,
                                    "dir": "out"})
                 entry, exit_ = self._entry, self._exit
+
+            direction = self.config.get("recording_direction", "both")
+            if direction in ("both", "in", "out") and any(
+                    event.get("kind") == "line_cross" and
+                    (direction == "both" or event.get("dir") == direction)
+                    for event in events):
+                request_configured_recording(self, "line_cross", frame.pts)
 
             # -- 5. rolling-window metrics snapshot ---------------------- #
             self.window.update(counts, entry, exit_, frame.pts)

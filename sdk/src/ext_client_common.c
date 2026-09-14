@@ -2,7 +2,7 @@
 // Shared client-side plumbing for the librecamera_ext receivers/sink.
 // See ext_client_common.h. The ordinary connect+Hello and recvmsg discipline
 // was extracted from frame_recv.c / probe_recv.c / recamera_ext.c without a
-// behaviour change; record@1 additionally uses the bounded helpers below.
+// behaviour change; record-delivery@1 additionally uses the bounded helpers below.
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -205,7 +205,7 @@ static ssize_t recv_packet_until(int fd, void *buffer, size_t size,
 }
 
 static int receive_hello_ack_until(int fd, uint32_t *api_version,
-				   int64_t deadline) {
+				   int64_t deadline, const char *required_capability) {
 	uint8_t buffer[RC_EXT_CLIENT_ACK_MAX];
 	ssize_t received = recv_packet_until(fd, buffer, sizeof(buffer), deadline);
 	if (received < 0)
@@ -224,6 +224,17 @@ static int receive_hello_ack_until(int fd, uint32_t *api_version,
 		result = RC_EXT_EVERSION;
 	else if (api_version)
 		*api_version = ack->api_version;
+	if (result == RC_EXT_OK && required_capability) {
+		int found = 0;
+		for (size_t i = 0; i < ack->n_capabilities; ++i) {
+			Capability *cap = ack->capabilities[i];
+			if (cap && cap->name && cap->version == 1 &&
+			    strcmp(cap->name, required_capability) == 0)
+				found = 1;
+		}
+		if (!found)
+			result = RC_EXT_EVERSION;
+	}
 	hello_ack__free_unpacked(ack, NULL);
 	return result;
 }
@@ -246,7 +257,7 @@ int rc_ext_send_packet_ack_bounded(int fd, const void *buffer, size_t size,
 		return -RC_EXT_EINTERNAL;
 	if (send_packet_until(fd, buffer, size, deadline) < 0)
 		return -RC_EXT_EINTERNAL;
-	int ack_error = receive_hello_ack_until(fd, NULL, deadline);
+	int ack_error = receive_hello_ack_until(fd, NULL, deadline, NULL);
 	return ack_error == RC_EXT_OK ? 0 : -ack_error;
 }
 
@@ -292,7 +303,9 @@ int rc_ext_connect_hello_bounded(const char *path, const char *client_name,
 		return rc_ext_set_err(err, RC_EXT_EINTERNAL);
 	}
 
-	int ack_error = receive_hello_ack_until(fd, api_version, deadline);
+	int ack_error = receive_hello_ack_until(fd, api_version, deadline,
+	    strcmp(path, "/run/recamera/record-in.sock") == 0 ?
+	        "record-delivery" : NULL);
 	if (ack_error != RC_EXT_OK) {
 		close(fd);
 		return rc_ext_set_err(err, (rc_ext_err_t)ack_error);

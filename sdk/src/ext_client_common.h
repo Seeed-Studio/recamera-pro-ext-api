@@ -55,7 +55,7 @@ RC_EXT_INTERNAL int rc_ext_set_err(int *err, rc_ext_err_t code);
 RC_EXT_INTERNAL int rc_ext_connect_hello(const char *path, const char *client_name,
                          uint32_t *api_version, int *err);
 
-// Bounded variant used by the appmgr record@1 bridge worker. Connection,
+// Bounded variant used by the appmgr record-delivery@1 bridge worker. Connection,
 // Hello send, and HelloAck receive share one monotonic timeout budget. The
 // returned socket stays non-blocking so subsequent record sends can also be
 // bounded. Transport/timeout failures map to EINTERNAL; protocol and
@@ -76,7 +76,7 @@ RC_EXT_INTERNAL int rc_ext_send_packet_bounded(
 // sharing one monotonic timeout budget across both operations. Returns 0 on a
 // successful version-1 ACK or a negative rc_ext_err_t (including EVERSION for
 // a success-shaped ACK with the wrong version, and EINTERNAL on timeout).
-// record@1 reset uses this request/ACK fence; ordinary data sends do not.
+// record-delivery@1 reset uses this request/ACK fence; ordinary data sends do not.
 RC_EXT_INTERNAL int rc_ext_send_packet_ack_bounded(
     int fd, const void *buffer, size_t size, unsigned int timeout_ms);
 

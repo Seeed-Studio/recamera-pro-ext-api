@@ -126,3 +126,21 @@ def test_server_rejects_incompatible_target_before_any_teardown_or_reservation(
     with pytest.raises(kitversion.KitIncompatible, match="old kit"):
         getattr(server, operation)(app_id)
     assert events == []
+
+
+def test_recording_app_packages_require_new_kit_but_old_apps_remain_compatible(tmp_path):
+    import json
+    from pathlib import Path
+    from appmgr import kitversion
+    import pytest
+    root = Path(__file__).resolve().parents[3]
+    old_kit = tmp_path / 'old-kit'
+    old_kit.mkdir()
+    (old_kit / '__init__.py').write_text('__version__ = "0.2.0"\n__api_version__ = "0.2.0"\n')
+    for name in ('qrcode-reader', 'facemesh-reader', 'fall-detection', 'retail-vision'):
+        manifest = json.loads((root / 'apps' / name / 'manifest.json').read_text())
+        with pytest.raises(kitversion.KitIncompatible):
+            kitversion.check(manifest, str(old_kit))
+        assert kitversion.check(manifest, str(root / 'kit')) == '0.3.0'
+        manifest['compatibility']['kit_api'] = '>=0.1,<1'
+        assert kitversion.check(manifest, str(root / 'kit')) == '0.3.0'

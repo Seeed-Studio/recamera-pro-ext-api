@@ -45,6 +45,7 @@ Run on device (inference requires root):
 """
 
 from kit.app import App, run_app
+from kit.logic.recording import request_configured_recording
 from kit import events as E
 from kit.pipeline import CascadePipeline
 from kit.runtime.postprocess import face_detect as face_post
@@ -222,6 +223,7 @@ class FacemeshReaderApp(App):
             # ★business★ edge event: blink (eyes-closed rising edge, valid face)
             if metrics.valid:
                 if metrics.eyes_closed and not self._prev_closed:
+                    request_configured_recording(self, "blink", t)
                     self._blink_count += 1
                     events.append({"kind": "blink",
                                    "blink_count": self._blink_count,
@@ -232,6 +234,7 @@ class FacemeshReaderApp(App):
 
             # ★business★ edge event: yawn onset.
             if yawn_event:
+                request_configured_recording(self, "yawn", t)
                 events.append({"kind": "yawn",
                                "yawn_count_5min": int(yawn_state.yawn_count_5min),
                                "mar": round(metrics.mar, 3)})
@@ -240,6 +243,10 @@ class FacemeshReaderApp(App):
 
             # ★business★ edge event: drowsiness alert active (Drowsy/Danger).
             if drowsy_state.alert_active:
+                pending = (getattr(self, "_recording_drowsy_pending", False)
+                           or not getattr(self, "_recording_drowsy_active", False))
+                self._recording_drowsy_pending = bool(pending and not
+                    request_configured_recording(self, "drowsiness", t))
                 events.append({
                     "kind": "drowsiness",
                     "state": drowsy_state.state,
@@ -250,6 +257,9 @@ class FacemeshReaderApp(App):
                     "perclos_pct": round(drowsy_state.perclos_pct, 1),
                 })
 
+            if not drowsy_state.alert_active:
+                self._recording_drowsy_pending = False
+            self._recording_drowsy_active = bool(drowsy_state.alert_active)
             self.emit(events, frame.pts, results=results)
 
 

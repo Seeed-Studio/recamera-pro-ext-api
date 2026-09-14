@@ -136,6 +136,15 @@ if(RECAMERA_EXT_BUILD_TESTS)
 		add_test(NAME recamera_ext.record_wire
 			COMMAND recamera_ext_record_wire)
 
+        add_executable(recamera_ext_record_capability
+            tests/native_record_capability.c generated/ext_api.pb-c.c)
+        target_include_directories(recamera_ext_record_capability PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/generated ${PROTOBUF_C_HEADER_DIR})
+        target_link_libraries(recamera_ext_record_capability PRIVATE ${PROTOBUF_C_LIBRARY})
+        target_compile_options(recamera_ext_record_capability PRIVATE -Wall -Wextra -Werror)
+        add_test(NAME recamera_ext.record_capability COMMAND recamera_ext_record_capability)
+
 		# Exercise the production non-blocking poll/deadline implementation with
 		# a local Hello server and a deliberately saturated socketpair.
 		add_executable(recamera_ext_bounded_io

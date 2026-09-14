@@ -79,7 +79,7 @@ from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
-               recording as apprecording,
+               recording as apprecording, recording_migration,
                result_hub as canonical_results,
                resources as appresources, state, supervisor,
                signing as appsigning, trust as apptrust,
@@ -144,7 +144,7 @@ def do_get_recording_sources() -> dict:
         "supports_roi": True,
         # Built-in classes follow the currently selected model and are fetched
         # from rkipc by the recording page itself.
-        "signals": [],
+        "signals": [], "frame_capable": True, "event_capable": False,
     }]
     for app in listing.get("apps") or []:
         if app.get("id") == builtin.BUILTIN_ID:
@@ -161,7 +161,12 @@ def do_get_recording_sources() -> dict:
                   "event_dropped": 0, "frame_coalesced": 0,
                   "duplicates": 0, "send_errors": 0, "last_error": "",
               })
-    return {"version": 1, "sources": sources, "status": status}
+    return {"version": 1, "sources": sources, "status": status,
+            "semantics": {"frame_source_filter": "lSourceFilter",
+                          "events": "application_decides",
+                          "events_bypass_frame_filters": True,
+                          "contract": "recording-source-filter-delivery-v1"},
+            "migration": recording_migration.migration_view()}
 
 
 def _supports_detection_stream_osd(manifest: dict) -> bool:
@@ -3723,6 +3728,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        if path == "/api/app-center/v1/recording/migration/acknowledge":
+            try:
+                body = self._body_json_v1()
+                if body != {"acknowledge": True} or body.get("acknowledge") is not True:
+                    raise ValueError("acknowledge must be true")
+                return self._send(200, {"migration": recording_migration.acknowledge_migration()})
+            except Exception as exc:
+                return self._v1_error(exc)
+
         if path == "/api/app-center/v1/store/tasks":
             try:
                 return self._send(202, _store_manager().create(self._body_json_v1()))

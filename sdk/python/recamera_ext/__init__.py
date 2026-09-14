@@ -1714,7 +1714,7 @@ class OsdSink(ResultSink):
 
 
 class RecordSink(ResultSink):
-    """Appmgr-only source-aware recording trigger sink.
+    """Appmgr-only FRAME / explicit recording request sink.
 
     One authenticated connection multiplexes managed applications. Every
     ordered datagram carries the stable manifest app id and reaches only Vigil
@@ -1862,8 +1862,9 @@ class RecordSink(ResultSink):
         """Send event-kind tuples through the distinct record event channel.
 
         Entries use the same ``(score, label[, class_id[, box]])`` shape as
-        :meth:`send_classifications`; native code marks their classification
-        oneof with ``RC_EXT_RECORD_EVENT_MODEL_ID`` on the wire.
+        :meth:`send_classifications` for caller compatibility. A non-empty call
+        produces ONE payload-free EVENT; labels/scores/ROI are not rule filters.
+        An empty call is a no-op. The caller already decided to request recording.
         """
 
         operation = "send_events"
@@ -1926,7 +1927,7 @@ class RecordSink(ResultSink):
             "send_segmentation: RecordSink does not support segmentation triggers",
             operation="send_segmentation",
             detail=(
-                "record@1 accepts detection, classification, events, tracking, "
+                "record-delivery@1 accepts detection, classification, events, tracking, "
                 "and keypoints"
             ),
         )

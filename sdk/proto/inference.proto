@@ -45,8 +45,8 @@ message InferenceClassificationEntry {
   float score = 1;
   int32 class_id = 2;
   string class_name = 3;
-  // Optional: source ROI box when the classification is region-scoped
-  // (e.g. per-face attributes). Absent for whole-frame classification.
+  // Present only when the classification is region-scoped (e.g. per-face
+  // attributes); consumers check has_box(). Unset means whole-frame.
   InferenceBox box = 4;
 }
 
@@ -112,13 +112,37 @@ message InferenceKeypointsResult {
   repeated InferenceKeypointInstance instances = 1;
 }
 
+// Whether a result is a per-frame observation or a discrete event. An event is
+// an edge-like declaration from the source's own post-processing: applications
+// whose data does not fit the builtin result formats decide internally whether
+// recording is warranted and, if so, emit an event. A recording rule consumes
+// frames through its filters and debounce; an event bypasses those filters and
+// debounce, subject to the recording enable switch and schedule gate.
+// The builtin pipeline only produces FRAME.
+enum InferenceDelivery {
+  INFERENCE_DELIVERY_FRAME = 0;  // per-frame observation, drives rule debounce
+  INFERENCE_DELIVERY_EVENT = 1;  // discrete event; replaces the model_id sentinel
+}
+
 // Top-level message corresponding to rc_result
 message InferenceResult {
   TaskType task_type = 1;
-  int64 timestamp_ms = 2;  // Timestamp in milliseconds since epoch
-  int32 model_id = 3;      // Identifier for the model that produced the result
-  string source_id = 4;  // result source; "builtin" reserved for on-device inference
-  uint64 pts_us = 5;      // frame PTS (CLOCK_MONOTONIC us), 0 = no frame
+  // Timestamp in milliseconds since epoch
+  int64 timestamp_ms = 2;
+  // Identifier for the model that produced the result;
+  // event delivery uses the delivery field, never a special model identifier
+  int32 model_id = 3;
+  // Canonical source identity (builtin is the on-device
+  // pipeline); asserted by the producing ingress and never
+  // honored verbatim from a peer: a receiving ingress
+  // overwrites it with the peercred-derived identity
+  string source_id = 4;
+  // Frame PTS (CLOCK_MONOTONIC us), 0 = no frame
+  uint64 pts_us = 5;
+  // FRAME is the default for builtin and existing result producers.
+  // EVENT carries no data oneof; the source has already decided to record.
+  // The unpublished model_id sentinel is not supported.
+  InferenceDelivery delivery = 6;
   oneof data {
     InferenceDetectionResult detection = 10;
     InferenceClassificationResult classification = 11;

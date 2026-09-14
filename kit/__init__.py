@@ -10,8 +10,8 @@ import importlib
 
 # API versions are independent of the historical sideload package numbering.
 # appmgr reads these literals without importing device-side dependencies.
-__version__ = "0.2.0"
-__api_version__ = "0.2.0"
+__version__ = "0.3.0"
+__api_version__ = "0.3.0"
 __legacy_version__ = "1.6.5"
 
 
