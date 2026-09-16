@@ -75,7 +75,8 @@ import numpy as np
 
 # --- RK_FORMAT_* (include/rga.h). VERIFY against your device's rga.h. -------- #
 RK_FORMAT_RGB_888 = 0x2 << 8          # 0x200  packed 24-bit R,G,B
-RK_FORMAT_YCbCr_420_SP = 0xE << 8     # 0xe00  NV12 (Y plane + interleaved CbCr)
+# NV12 has interleaved CbCr (UV). 0xE00 is YCrCb_420_SP / NV21 (VU).
+RK_FORMAT_YCbCr_420_SP = 0xA << 8     # 0xa00  NV12 (Y plane + interleaved CbCr)
 
 # --- IM_STATUS (im2d_api/im2d_type.h). SUCCESS == 1. ------------------------- #
 IM_STATUS_SUCCESS = 1

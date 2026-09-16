@@ -12,6 +12,10 @@ import pytest
 
 from kit.adapters import _rga
 
+# Native ABI value from rga.h, deliberately independent of the wrapper under
+# test. 0x0E00 is NV21 and must never be used for our NV12 frame/scratch buffers.
+LIBRGA_NV12 = 0x0A00
+
 
 class Function:
     def __init__(self, callback):
@@ -47,7 +51,7 @@ class Library:
         return SimpleNamespace(data=view.reshape(shape), w=w, h=h, fmt=fmt)
 
     def resize(self, src, dst, fx, fy, interpolation, sync):
-        assert src.fmt == dst.fmt == _rga.RK_FORMAT_YCbCr_420_SP
+        assert src.fmt == dst.fmt == LIBRGA_NV12
         assert (fx, fy, interpolation, sync) == (0.0, 0.0, 0, 1)
         self.calls.append(("resize", dst.w, dst.h))
         dst.data.fill(85)
@@ -59,12 +63,12 @@ class Library:
 
     def convert(self, src, dst, sfmt, dfmt, mode, sync):
         assert (sfmt, dfmt, mode, sync) == (
-            _rga.RK_FORMAT_YCbCr_420_SP, _rga.RK_FORMAT_RGB_888, 0, 1)
+            LIBRGA_NV12, _rga.RK_FORMAT_RGB_888, 0, 1)
         self.paint(dst, 0, 0, dst.w, dst.h)
         return _rga.IM_STATUS_SUCCESS
 
     def process(self, src, dst, _pat, source, dest, _prect, usage):
-        assert src.fmt == _rga.RK_FORMAT_YCbCr_420_SP
+        assert src.fmt == LIBRGA_NV12
         assert dst.fmt == _rga.RK_FORMAT_RGB_888
         assert (source.x, source.y, source.width, source.height) == (0, 0, src.w, src.h)
         assert (dest.width, dest.height) == (src.w, src.h)  # no second resize
@@ -119,7 +123,7 @@ def test_preallocated_rgb_matches_existing_two_stage_resize_and_padding(rga):
     assert result is out
     np.testing.assert_array_equal(result, expected)
     assert_pixels(result, lib.rgb)
-    assert ("fd", 7, 12, 8, 16, 8, _rga.RK_FORMAT_YCbCr_420_SP) in lib.calls
+    assert ("fd", 7, 12, 8, 16, 8, LIBRGA_NV12) in lib.calls
 
 
 def test_same_geometry_reuses_scratch_and_caller_output_without_numpy_allocation(rga, monkeypatch):
