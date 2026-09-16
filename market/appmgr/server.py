@@ -85,7 +85,7 @@ from . import (assets, builtin, config as appconfig,
                signing as appsigning, trust as apptrust,
                store_download, store_tasks,
                uploads as appuploads, visualization as appvisualization,
-               voiceruntime)
+               voiceruntime, workflow_ui)
 
 
 _coordinator_instance = None
@@ -2168,7 +2168,7 @@ def do_get_config(app_id: str) -> dict:
     if not os.path.isdir(paths.app_dir(app_id)):
         raise ValueError(f"app not installed: {app_id}")
     man = _read_manifest(app_id) or {}
-    return appconfig.get_config(man, app_id)
+    return workflow_ui.decorate_config(man, app_id, appconfig.get_config(man, app_id))
 
 
 def _apply_mode(manifest: dict, keys) -> str:
@@ -3368,6 +3368,7 @@ class _Handler(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -3538,6 +3539,18 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+        workflow_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflows(?:/(runtime))?", path)
+        if workflow_match:
+            app_id, operation = workflow_match.groups()
+            try:
+                _require_installed(app_id)
+                manifest = _read_manifest(app_id) or {}
+                payload = (workflow_ui.runtime(manifest, app_id,
+                           include_result=(parse_qs(parsed.query).get("include_result") == ["true"]))
+                           if operation else workflow_ui.workflows(manifest, app_id))
+                return self._send(200, payload)
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/health":
             # The HTTP loop starts only after our own result listeners bind.
             # IPC availability belongs to each application's dependency state.
@@ -3728,6 +3741,16 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        workflow_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflows/editor-session", path)
+        if workflow_match:
+            try:
+                if self._body_json_v1():
+                    raise ValueError("Editor session request must be an empty object")
+                app_id = workflow_match.group(1)
+                _require_installed(app_id)
+                return self._send(200, workflow_ui.editor_session(_read_manifest(app_id) or {}, app_id))
+            except Exception as exc:
+                return self._v1_error(exc)
         if path == "/api/app-center/v1/recording/migration/acknowledge":
             try:
                 body = self._body_json_v1()
