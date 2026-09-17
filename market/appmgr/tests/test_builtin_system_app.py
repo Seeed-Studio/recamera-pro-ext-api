@@ -98,10 +98,16 @@ def test_offline_builtin_does_not_hide_installed_apps_or_take_lifecycle_lock(mon
                   "observed_state": "ready"}], "running_apps": ["cpu-app"]})
     monkeypatch.setattr(server, "_operation_manager", lambda: SimpleNamespace(active_for=lambda _: None))
     monkeypatch.setattr(server, "_read_manifest", lambda _: {})
+    # The acousticslab system app is listed right after builtin; on a host
+    # without the daemon it reports stopped and never claims a running slot.
+    monkeypatch.setattr(server, "_acousticslab_status", lambda: {
+        "available": False, "running": False, "enabled": True,
+        "state": "stopped", "head": None, "uptime_s": None,
+        "inference": None, "reason": "enabled_but_stopped", "pid": None})
     monkeypatch.setattr(server, "busy_gate", lambda **kw: pytest.fail("list acquired mutation gate"))
     for _ in range(2):
         listing = server.do_v1_apps()
-        assert [item["id"] for item in listing["apps"]] == ["builtin", "cpu-app"]
+        assert [item["id"] for item in listing["apps"]] == ["builtin", "acousticslab", "cpu-app"]
         assert listing["running_apps"] == ["cpu-app"]
         assert listing["apps"][0]["status"] == "unknown"
         assert listing["apps"][0]["builtin_inference"]["available"] is False

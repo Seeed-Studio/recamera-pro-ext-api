@@ -1822,6 +1822,13 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
         },
     ]})
     monkeypatch.setattr(server, "_builtin_running", lambda: True)
+    # The firmware AcousticsLab source is listed with its live head labels.
+    monkeypatch.setattr(server, "_acousticslab_status", lambda: {
+        "available": True, "running": True, "enabled": True,
+        "state": "running", "uptime_s": 12,
+        "head": {"id": "head-1", "origin": "default", "n_classes": 2,
+                 "labels": ["Yes", "No"], "activated_at": "t"},
+        "inference": None, "reason": None, "pid": 1000})
 
     expected_bridge_status = {
         "running": True, "active_sources": ["fall-alarm", "person-detector"],
@@ -1847,10 +1854,20 @@ def test_recording_sources_http_hides_apps_without_valid_capability(
         assert payload["version"] == 1
         assert payload["status"] == expected_bridge_status
         assert [source["id"] for source in payload["sources"]] == [
-            "builtin", "fall-alarm", "person-detector",
+            "builtin", "acousticslab", "fall-alarm", "person-detector",
         ]
 
-        builtin_source, fall_source, detector_source = payload["sources"]
+        (builtin_source, al_source, fall_source,
+         detector_source) = payload["sources"]
+        assert al_source == {
+            "id": "acousticslab", "kind": "system", "name": "AcousticsLab",
+            "name_zh": "AcousticsLab 声学实验室", "version": "firmware",
+            "installed": True, "running": True, "status": "running",
+            "supports_roi": False,
+            "signals": [{"id": "classification", "type": "classification",
+                         "classes": ["Yes", "No"], "supports_roi": False}],
+            "frame_capable": True, "event_capable": False,
+        }
         assert builtin_source == {
             "id": "builtin", "kind": "builtin", "name": "AI Model Inference",
             "name_zh": "AI模型推理", "version": "firmware",

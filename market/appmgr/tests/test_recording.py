@@ -119,6 +119,116 @@ def test_bridge_projects_only_manifest_authorized_detection_classes():
     assert sink.closed
 
 
+def _system_envelope(source_id="acousticslab", results=None, message_id="m-1"):
+    return {
+        "schema": "recamera.ai.result", "schema_version": 2,
+        "type": "frame", "id": message_id,
+        # Firmware system sources carry no instance/generation identity.
+        "source": {"kind": "system", "id": source_id, "trust": "in-process"},
+        "time": {"pts_us": 4321},
+        "stream": {"id": "acousticslab", "coordinate_space": "normalized_xyxy"},
+        "results": list(results or []), "events": [],
+    }
+
+
+def test_bridge_forwards_registered_system_source_classification():
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    try:
+        bridge.register_system_source("acousticslab", {
+            "version": 1,
+            "signals": [{"id": "classification", "type": "classification",
+                         "classes": ["Yes", "No"], "supports_roi": False}],
+        })
+        bridge.observe(_system_envelope(results=[
+            {"score": .9, "cls_name": "Yes", "cls": 3},
+            {"score": .8, "cls_name": "Dog", "cls": 9},   # not authorized
+        ]))
+        calls = _wait_for(
+            sink, lambda values: any(v[0] == "classifications" for v in values))
+        sent = next(v for v in calls if v[0] == "classifications")
+        assert sent[0:2] == ("classifications", "acousticslab")
+        assert sent[2] == 4321
+        assert sent[3] == [(.9, "Yes", 3)]
+    finally:
+        bridge.close()
+
+
+def test_bridge_rejects_unregistered_or_builtin_system_sources():
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    try:
+        # Unregistered system source: no forwarding.
+        bridge.observe(_system_envelope(results=[{"score": .9,
+                                                  "cls_name": "Yes", "cls": 3}]))
+        # "builtin" can never be registered as a bridge-managed source.
+        assert bridge.register_system_source("builtin", None) is None
+        assert bridge.register_system_source("Not-An-Id", None) is None
+        time.sleep(0.1)
+        with sink.lock:
+            assert not any(call[0] == "classifications" for call in sink.calls)
+    finally:
+        bridge.close()
+
+
+def test_bridge_system_source_reregistration_resets_and_relabels():
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    try:
+        declare = {"version": 1, "signals": [
+            {"id": "classification", "type": "classification",
+             "classes": ["Yes"], "supports_roi": False}]}
+        token = bridge.register_system_source("acousticslab", declare)
+        assert bridge.wait_invalidation(token, timeout=2.0)
+        # Head swap: a new label set replaces the old one; queued state resets.
+        token = bridge.register_system_source("acousticslab", {
+            "version": 1, "signals": [
+                {"id": "classification", "type": "classification",
+                 "classes": ["Dog"], "supports_roi": False}]})
+        assert bridge.wait_invalidation(token, timeout=2.0)
+        bridge.observe(_system_envelope(results=[{"score": .95,
+                                                  "cls_name": "Yes", "cls": 3}]))
+        bridge.observe(_system_envelope(results=[{"score": .7,
+                                                  "cls_name": "Dog", "cls": 1}],
+                                        message_id="m-2"))
+        calls = _wait_for(
+            sink, lambda values: any(
+                v[0] == "classifications" and v[3] for v in values))
+        resets = [v for v in calls if v[0] == "reset"]
+        assert resets and all(v[1] == "acousticslab" for v in resets)
+        sent = [v for v in calls if v[0] == "classifications" and v[3]]
+        # Only the new label passes the new capability; the stale "Yes" frame
+        # that raced the re-registration is filtered.
+        assert sent == [("classifications", "acousticslab", 4321,
+                         [(.7, "Dog", 1)])]
+    finally:
+        bridge.close()
+
+
+def test_bridge_system_source_revocation_stops_forwarding():
+    recording = _module()
+    sink = _Sink()
+    bridge = recording.RecordingTriggerBridge(sink_factory=lambda: sink).start()
+    try:
+        token = bridge.register_system_source("acousticslab", {
+            "version": 1, "signals": [
+                {"id": "classification", "type": "classification",
+                 "classes": ["Yes"], "supports_roi": False}]})
+        assert bridge.wait_invalidation(token, timeout=2.0)
+        token = bridge.register_system_source("acousticslab", None)
+        assert bridge.wait_invalidation(token, timeout=2.0)
+        bridge.observe(_system_envelope(results=[{"score": .9,
+                                                  "cls_name": "Yes", "cls": 3}]))
+        time.sleep(0.1)
+        with sink.lock:
+            assert not any(call[0] == "classifications" for call in sink.calls)
+    finally:
+        bridge.close()
+
+
 def test_hub_preserves_empty_detection_frames_alongside_business_events():
     from appmgr.result_hub import normalize_app_payload
 

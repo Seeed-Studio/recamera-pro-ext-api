@@ -374,6 +374,46 @@ class RecordingTriggerBridge:
             self._condition.notify()
         return token
 
+    def register_system_source(self, source_id: str,
+                               record_trigger: Optional[dict]
+                               ) -> Optional[_ResetToken]:
+        """Register, replace or revoke recording authorization for a trusted
+        firmware-internal system source (e.g. the acousticslab adapter, which
+        runs inside appmgr itself).
+
+        System sources have no supervised instance/generation: the caller's
+        declaration replaces the installed-manifest capability that managed
+        apps carry, and identity is the fixed empty tuple (a system envelope
+        never carries instance/generation, so the existing identity match in
+        observe()/observer_accepts() holds unchanged). Re-registration is a
+        generation-like fence: the source epoch advances and a
+        receiver-confirmed reset clears vigil's queued state for the source.
+        """
+        source_id = str(source_id or "")
+        if (not _APP_ID_RE.fullmatch(source_id) or source_id == "builtin"):
+            return None
+        compiled = _compile_capability(record_trigger)
+        token = _ResetToken()
+        with self._condition:
+            if self._closing:
+                token.complete(False)
+                return token
+            epoch = self._epochs.get(source_id, 0) + 1
+            self._epochs[source_id] = epoch
+            self._recent_ids.pop(source_id, None)
+            self._recent_id_sets.pop(source_id, None)
+            if compiled is None:
+                self._capabilities.pop(source_id, None)
+            else:
+                self._capabilities[source_id] = {
+                    "identity": ("", -1),
+                    "epoch": epoch,
+                    **compiled,
+                }
+            self._append_locked(("reset", source_id, epoch, 0, (), token))
+            self._condition.notify()
+        return token
+
     @staticmethod
     def wait_invalidation(token, timeout: float = RESET_WAIT_SECONDS) -> bool:
         """Wait outside Result Hub's publish fence for reset acknowledgement."""
@@ -406,7 +446,11 @@ class RecordingTriggerBridge:
         if not isinstance(envelope, dict):
             return False
         source = envelope.get("source")
-        if not isinstance(source, dict) or source.get("kind") != "app":
+        # "app" sources are generation-fenced managed applications; "system"
+        # sources are firmware-internal publishers registered through
+        # register_system_source. Both are gated on the capability registry.
+        if (not isinstance(source, dict)
+                or source.get("kind") not in ("app", "system")):
             return False
         source_id = str(source.get("app_id") or source.get("id") or "")
         with self._condition:
@@ -425,7 +469,8 @@ class RecordingTriggerBridge:
                 "frame", "recording_request"):
             return
         source = envelope.get("source")
-        if not isinstance(source, dict) or source.get("kind") != "app":
+        if (not isinstance(source, dict)
+                or source.get("kind") not in ("app", "system")):
             return
         source_id = str(source.get("app_id") or source.get("id") or "")
         with self._condition:

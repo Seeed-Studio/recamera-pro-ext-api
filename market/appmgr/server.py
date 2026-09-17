@@ -76,7 +76,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from . import workflow_models
 
-from . import (assets, builtin, config as appconfig,
+from . import (acousticslab, assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
                mqtt as mqttcfg, operations as appoperations, paths,
@@ -95,6 +95,7 @@ _result_gateway_instance = None
 _result_hub_instance = None
 _visualization_bridge_instance = None
 _recording_bridge_instance = None
+_acousticslab_forwarder = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _operation_manager_lock = threading.Lock()
@@ -147,8 +148,34 @@ def do_get_recording_sources() -> dict:
         # from rkipc by the recording page itself.
         "signals": [], "frame_capable": True, "event_capable": False,
     }]
+    # The AcousticsLab system source: FRAME classifications forwarded by the
+    # in-appmgr adapter.  Classes follow the daemon's currently ACTIVE head,
+    # read live through the cached adapter snapshot; an unreachable daemon
+    # simply declares no classes instead of fabricating stale ones.
+    al_detail = _acousticslab_status()
+    al_head = al_detail.get("head")
+    al_labels = ([label for label in al_head.get("labels") or []
+                  if isinstance(label, str)]
+                 if isinstance(al_head, dict) else [])
+    al_running = al_detail.get("state") == "running"
+    al_manifest = acousticslab.manifest()
+    sources.append({
+        "id": acousticslab.AL_ID,
+        "kind": "system",
+        "name": al_manifest.get("name") or "AcousticsLab",
+        "name_zh": al_manifest.get("name_zh"),
+        "version": al_manifest.get("version"),
+        "installed": True,
+        "running": al_running,
+        "status": "running" if al_running else "stopped",
+        "supports_roi": False,
+        "signals": ([{"id": "classification", "type": "classification",
+                      "classes": al_labels, "supports_roi": False}]
+                    if al_labels else []),
+        "frame_capable": True, "event_capable": False,
+    })
     for app in listing.get("apps") or []:
-        if app.get("id") == builtin.BUILTIN_ID:
+        if app.get("id") in (builtin.BUILTIN_ID, acousticslab.AL_ID):
             continue
         source = apprecording.source_view(app)
         if source is not None:
@@ -1084,9 +1111,10 @@ def do_list() -> dict:
             # extraction) contain a dot -> never a valid app id -> not listed.
             if not os.path.isdir(d) or not paths.valid_app_id(name):
                 continue
-            if name in ("kit", builtin.BUILTIN_ID):
-                # ``kit`` is the shared runtime; ``builtin`` is the reserved
-                # system-inference identity. Neither is an installed app card.
+            if name in ("kit", builtin.BUILTIN_ID, acousticslab.AL_ID):
+                # ``kit`` is the shared runtime; ``builtin``/``acousticslab``
+                # are reserved firmware system identities. Neither is an
+                # installed app card.
                 continue
             man = _read_manifest(name)
             if man is None:
@@ -1264,6 +1292,40 @@ def _builtin_running() -> bool:
         return False
     _builtin_probe = (time.monotonic(), running)
     return running
+
+
+# AcousticsLab (acousticslabd) system-card status: same time-based cache
+# discipline as builtin -- the daemon's API socket has no inode to watch, and
+# every appmgr-initiated lifecycle write goes through _acousticslab_invalidate.
+_ACOUSTICSLAB_TTL = float(os.environ.get("APPMGR_ACOUSTICSLAB_TTL", "2.0"))
+_acousticslab_probe = None
+_acousticslab_generation = 0
+_acousticslab_lock = threading.Lock()
+
+
+def _acousticslab_invalidate() -> None:
+    """Force the next acousticslab status consumer to re-probe the daemon."""
+    global _acousticslab_probe, _acousticslab_generation
+    with _acousticslab_lock:
+        _acousticslab_probe = None
+        _acousticslab_generation += 1
+
+
+def _acousticslab_status() -> dict:
+    """Short-lived daemon snapshot for the system card, not a lifecycle proof."""
+    global _acousticslab_probe
+    with _acousticslab_lock:
+        hit = _acousticslab_probe
+        generation = _acousticslab_generation
+        if hit is not None and time.monotonic() - hit[0] < _ACOUSTICSLAB_TTL:
+            return dict(hit[1])
+    result = acousticslab.snapshot()
+    with _acousticslab_lock:
+        # A lifecycle write invalidates a read started before it; never let the
+        # old read repopulate the cache after the mutation.
+        if generation == _acousticslab_generation:
+            _acousticslab_probe = (time.monotonic(), dict(result))
+    return result
 
 
 def _npu_broker_present() -> bool:
@@ -1772,8 +1834,8 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     Uninstalling an unknown app is a hard ValueError (not a crash); the running /
     active handling is idempotent so double-uninstall is safe.
     """
-    if app_id == builtin.BUILTIN_ID:
-        raise ValueError("the system builtin application cannot be uninstalled")
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+        raise ValueError("a firmware system application cannot be uninstalled")
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -1968,6 +2030,15 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 "started": True,
                 "detail": result,
             }
+    if app_id == acousticslab.AL_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            try:
+                result = acousticslab.start()
+            finally:
+                # A lost/failed response can still change the daemon state.
+                _acousticslab_invalidate()
+            _audit("start", id=acousticslab.AL_ID, result=result)
+            return {"id": acousticslab.AL_ID, "started": True, "detail": result}
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -1996,6 +2067,14 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
 
 
 def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
+    if app_id == acousticslab.AL_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            try:
+                result = acousticslab.restart()
+            finally:
+                _acousticslab_invalidate()
+            _audit("restart", id=acousticslab.AL_ID, restarted=result.get("restarted"))
+            return {"id": acousticslab.AL_ID, **result}
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2158,6 +2237,13 @@ def do_activate(app_id: str) -> dict:
 def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
     with busy_gate(wait_timeout=_busy_timeout):
         target = app_id or state.get_active()
+        if target == acousticslab.AL_ID:
+            try:
+                res = acousticslab.stop()
+            finally:
+                _acousticslab_invalidate()
+            _audit("stop", id=acousticslab.AL_ID, result=res)
+            return {"stopped": acousticslab.AL_ID, "detail": res}
         if target == builtin.BUILTIN_ID:
             try:
                 res = builtin.stop()
@@ -2192,6 +2278,8 @@ def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
 def do_get_config(app_id: str) -> dict:
     if app_id == builtin.BUILTIN_ID:
         return builtin.get_config()          # driver-backed, app-isomorphic shape
+    if app_id == acousticslab.AL_ID:
+        raise ValueError("acousticslab is configured from its own console")
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2299,6 +2387,8 @@ def _config_delta(manifest: dict, app_id: str, clean: dict):
 
 def do_set_config(app_id: str, incoming: dict, *,
                   _busy_timeout: float = 0.0) -> dict:
+    if app_id == acousticslab.AL_ID:
+        raise ValueError("acousticslab is configured from its own console")
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2778,11 +2868,64 @@ def _builtin_app_view(operations) -> dict:
     }
 
 
+def _acousticslab_app_view(operations) -> dict:
+    """Second system-owned v1 app: the acousticslabd daemon, adapted in place.
+
+    Like builtin, it is not a supervised process/instance. Unlike builtin it is
+    NOT part of the single-active / NPU mutual-exclusion world (do_activate):
+    the daemon owns its direct RKNN lane and runs orthogonally to vision apps,
+    exactly as it already does from the OEM init script today.
+    """
+    detail = _acousticslab_status()
+    observed = detail["state"]
+    status = "failed" if observed == "error" else observed
+    operation = operations.active_for(acousticslab.AL_ID)
+    if operation:
+        status = "stopping" if operation["type"] == "stop" else "starting"
+    available = detail["available"]
+    enabled = detail["enabled"]
+    running = observed == "running"
+    # Fail closed like builtin: a wedged control plane with a live process
+    # ("unknown") offers no mutation, while a confirmed-dead daemon
+    # ("stopped") may be started even though the API is unreachable.
+    mutable = not operation and observed in ("running", "stopped")
+    reason = detail.get("reason")
+    descriptor = acousticslab.manifest()
+    forwarder = _acousticslab_forwarder
+    if forwarder is not None:
+        detail = dict(detail)
+        detail["forwarder"] = forwarder.status()
+    return {
+        "id": acousticslab.AL_ID, "type": "system", "system": True,
+        "installed": True, "name": descriptor["name"], "name_zh": descriptor["name_zh"],
+        "version": descriptor["version"], "manifest": descriptor,
+        "description": descriptor["description"], "description_zh": descriptor["description_zh"],
+        "source": {"kind": "system", "id": acousticslab.AL_ID},
+        "console": descriptor["console"],
+        "status": status, "running": running, "pid": None, "instance": None,
+        "actions": {
+            "start": bool(mutable and not running),
+            "stop": bool(mutable and (running or enabled)),
+            "restart": bool(mutable and running),
+            "configure": False, "uninstall": False,
+        },
+        "capabilities": ["system-results", "console"],
+        "acousticslab": detail,
+        "runtime": {
+            "status": status,
+            "desired_state": "running" if enabled else "stopped",
+            "observed_state": observed, "pid": None, "reason": reason,
+        },
+        "reason": reason, "error": reason if status in ("failed", "unknown") else None,
+        "resource_conflicts": [],
+    }
+
+
 def do_v1_apps() -> dict:
     """Stable list envelope consumed by the Web App Center."""
     listing = do_list()
     operations = _operation_manager()
-    items = [_builtin_app_view(operations)]
+    items = [_builtin_app_view(operations), _acousticslab_app_view(operations)]
     for raw in listing.get("apps") or []:
         app_id = raw.get("id")
         item = dict(raw)
@@ -2832,6 +2975,7 @@ def do_v1_apps() -> dict:
         "apps": items,
         "active_app": listing.get("active_app"),
         "running_apps": ([builtin.BUILTIN_ID] if items[0]["running"] else [])
+                        + ([acousticslab.AL_ID] if items[1]["running"] else [])
                         + list(listing.get("running_apps") or []),
         "revision": listing.get("state_revision", 0),
     }
@@ -3337,10 +3481,11 @@ def _require_installed(app_id: str) -> None:
 
 
 def do_v1_lifecycle(app_id: str, action: str) -> dict:
-    # ``builtin`` is a synthetic first-class app backed by rkipc/entry.cgi. It
-    # deliberately has no /userdata/local/apps/builtin directory, so only
-    # self-hosted applications participate in the installed-directory gate.
-    if app_id != builtin.BUILTIN_ID:
+    # ``builtin`` and ``acousticslab`` are synthetic first-class apps backed by
+    # firmware services. They deliberately have no /userdata/local/apps/<id>
+    # directory, so only self-hosted applications participate in the
+    # installed-directory gate.
+    if app_id not in (builtin.BUILTIN_ID, acousticslab.AL_ID):
         _require_installed(app_id)
     callbacks = {"start": do_start, "stop": do_stop, "restart": do_restart}
     callback = callbacks.get(action)
@@ -3358,8 +3503,8 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
 
 def do_v1_delete(app_id: str) -> dict:
-    if app_id == builtin.BUILTIN_ID:
-        raise ValueError("the system builtin application cannot be uninstalled")
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+        raise ValueError("a firmware system application cannot be uninstalled")
     _require_installed(app_id)
 
     def delete_job():
@@ -3373,6 +3518,16 @@ def do_v1_delete(app_id: str) -> dict:
 
 
 def do_v1_logs(app_id: str, tail: int = 200) -> dict:
+    if app_id == acousticslab.AL_ID:
+        # The daemon keeps its own daily logs under its workspace; there is no
+        # supervisor-managed app log to read.
+        try:
+            tail = int(tail)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tail must be an integer") from exc
+        tail = min(2000, max(1, tail))
+        lines = acousticslab.read_log_tail(tail=tail)
+        return {"id": app_id, "lines": lines, "text": "\n".join(lines)}
     _require_installed(app_id)
     try:
         tail = int(tail)
@@ -4588,6 +4743,19 @@ def _stop_reconciler() -> None:
     _reconcile_stop = None
 
 
+def _stop_acousticslab_forwarder() -> None:
+    """Stop the daemon result forwarder before the bridges it feeds."""
+    global _acousticslab_forwarder
+    forwarder = _acousticslab_forwarder
+    _acousticslab_forwarder = None
+    if forwarder is not None:
+        try:
+            forwarder.stop()
+        except Exception:
+            print("[appmgr] acousticslab forwarder did not stop cleanly",
+                  file=sys.stderr)
+
+
 def _stop_recording_bridge() -> bool:
     """Detach and close the recording observer without hiding a stuck worker."""
     global _recording_bridge_instance
@@ -4689,6 +4857,7 @@ def serve(host: str = None, port: int = None) -> None:
 def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
+    global _acousticslab_forwarder
     global _operation_manager_instance
     global _store_manager_instance
     global _service_stopping
@@ -4701,6 +4870,9 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     # records before creating the coordinator or inspecting desired boot state;
     # ordinary load()/GET paths remain side-effect free.
     _reconcile_startup_state()
+    # Enforce the AcousticsLab system app's persisted desired state (the OEM
+    # init script always starts the daemon first). Never blocks service startup.
+    acousticslab.reconcile()
     try:
         recovered_uploads = appuploads.recover_startup()
         if (recovered_uploads.get("removed")
@@ -4762,6 +4934,17 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
             apprecording.RecordingTriggerBridge().start())
         _result_hub_instance.add_observer(
             _recording_bridge_instance.observe)
+        # Firmware-internal AcousticsLab results: daemon broadcast -> Hub
+        # system frames (source "acousticslab", FRAME) -> bridge -> vigil.
+        # Test doubles may lack the system-publish seam; skip gracefully.
+        _al_publish = getattr(_result_hub_instance, "submit_system", None)
+        if callable(_al_publish) and _recording_bridge_instance is not None:
+            _acousticslab_forwarder = acousticslab.ResultForwarder(
+                publish=_al_publish,
+                capability_changed=lambda declaration: (
+                    _recording_bridge_instance.register_system_source(
+                        acousticslab.AL_ID, declaration)),
+            ).start()
         _result_gateway_instance = resultgateway.ResultGateway(
             uds_path=paths.RESULT_GATEWAY_SOCK,
             ws_host=paths.RESULT_GATEWAY_HOST,
@@ -4795,6 +4978,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                     _visualization_bridge_instance.observe)
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
+        _stop_acousticslab_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
@@ -4849,6 +5033,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                     _visualization_bridge_instance.observe)
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
+        _stop_acousticslab_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
