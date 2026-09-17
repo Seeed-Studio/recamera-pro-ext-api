@@ -889,3 +889,25 @@ def test_daemon_restart_stale_running_record_is_restored_without_crash_budget(ma
     assert restored["pid"] is not None
     assert restored["generation"] > first["generation"]
     assert state.get_app("restore-after-daemon")["restart_history"] == []
+
+
+def test_application_model_dependency_preserves_start_intent_without_spawning(managed):
+    coord, fake, _ = managed
+    pending = {'available': False, 'socket': 'workflow-models', 'error': 'workflow_models_preparing', 'retryable': True}
+    coord.application_dependency_probe = lambda app_id, manifest: pending
+    result = coord.start('flow', manifest=_manifest('flow'))
+    assert result['observed_state'] == 'waiting_dependency'
+    assert result['desired_state'] == 'running' and result['pid'] is None
+    assert fake.starts == []
+    coord.application_dependency_probe = lambda app_id, manifest: None
+    result = coord.start('flow', manifest=_manifest('flow'))
+    assert result['pid'] and len(fake.starts) == 1
+
+
+def test_user_stop_cancels_start_waiting_for_models(managed):
+    coord, fake, _ = managed
+    coord.application_dependency_probe = lambda app_id, manifest: {'available': False, 'socket': 'workflow-models', 'retryable': True}
+    coord.start('flow', manifest=_manifest('flow'))
+    coord.stop('flow')
+    assert state.get_app('flow')['desired_state'] == 'stopped'
+    assert fake.starts == []

@@ -965,7 +965,7 @@ def test_v1_lifecycle_waits_for_transient_busy_gate(
 
     monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
     monkeypatch.setattr(server, "_managed_launch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(paths, "V1_OPERATION_BUSY_TIMEOUT_SEC", 0.5)
+    monkeypatch.setattr(paths, "V1_LIFECYCLE_BUSY_TIMEOUT_SEC", 0.5)
     monkeypatch.setattr(paths, "V1_OPERATION_BUSY_RETRY_SEC", 0.005)
     contended = _observe_operation_worker_lock_contention(monkeypatch)
 
@@ -977,6 +977,53 @@ def test_v1_lifecycle_waits_for_transient_busy_gate(
     terminal = _wait_operation(queued["id"])
     assert terminal["status"] == "succeeded"
     assert calls == [(action, "demo")]
+
+
+def test_queued_stop_outwaits_old_five_second_background_start_budget(layout, monkeypatch):
+    os.mkdir(os.path.join(paths.APPS_DIR, "demo"))
+    calls = []
+
+    class Coordinator:
+        def stop(self, app_id, **kwargs):
+            calls.append(app_id)
+            return {"id": app_id, "stopped": True}
+
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    contended = _observe_operation_worker_lock_contention(monkeypatch)
+    with server.busy_gate():
+        queued = server.do_v1_lifecycle("demo", "stop")["operation"]
+        assert contended.wait(1)
+        # A real READY transaction can hold the gate much longer than 5s.
+        time.sleep(5.2)
+        assert server._operation_manager().active_for("demo") is not None
+        assert calls == []
+    assert _wait_operation(queued["id"])["status"] == "succeeded"
+    assert calls == ["demo"]
+
+
+def test_background_recovery_and_model_activation_yield_to_queued_stop(layout, monkeypatch):
+    os.mkdir(os.path.join(paths.APPS_DIR, "demo"))
+    calls = []
+
+    class Coordinator:
+        def stop(self, app_id, **kwargs):
+            calls.append(app_id)
+            return {"id": app_id, "stopped": True}
+
+    monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
+    monkeypatch.setattr(server.supervisor, "reap_children",
+                        lambda: pytest.fail("reconciler ran ahead of queued user operation"))
+    contended = _observe_operation_worker_lock_contention(monkeypatch)
+    with server.busy_gate():
+        queued = server.do_v1_lifecycle("demo", "stop")["operation"]
+        assert contended.wait(1)
+        assert server._operation_manager().has_pending()
+        assert server._reconcile_once() == []
+        assert server._activate_workflow_models("other-app") is False
+        assert calls == []
+    assert _wait_operation(queued["id"])["status"] == "succeeded"
+    assert calls == ["demo"]
+    assert not server._queued_mutation_pending()
 
 
 @pytest.mark.parametrize("action,expected", [
@@ -1059,7 +1106,7 @@ def test_v1_builtin_restart_waits_for_busy_gate_before_driver_calls(
     monkeypatch.setattr(
         server, "_builtin_invalidate",
         lambda: effects.append("invalidate"))
-    monkeypatch.setattr(paths, "V1_OPERATION_BUSY_TIMEOUT_SEC", 0.5)
+    monkeypatch.setattr(paths, "V1_LIFECYCLE_BUSY_TIMEOUT_SEC", 0.5)
     monkeypatch.setattr(paths, "V1_OPERATION_BUSY_RETRY_SEC", 0.005)
     contended = _observe_operation_worker_lock_contention(monkeypatch)
 
@@ -1214,7 +1261,7 @@ def test_v1_busy_wait_is_bounded_and_does_not_enter_mutation(
 
     monkeypatch.setattr(server, "_coordinator", lambda: Coordinator())
     monkeypatch.setattr(server, "_managed_launch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(paths, "V1_OPERATION_BUSY_TIMEOUT_SEC", 0.05)
+    monkeypatch.setattr(paths, "V1_LIFECYCLE_BUSY_TIMEOUT_SEC", 0.05)
     monkeypatch.setattr(paths, "V1_OPERATION_BUSY_RETRY_SEC", 0.005)
     contended = _observe_operation_worker_lock_contention(monkeypatch)
 

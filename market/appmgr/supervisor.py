@@ -74,9 +74,8 @@ BOOT_ID_PATH = os.environ.get(
 # has already forked, while the UI would already read "running/active". start()
 # therefore waits for the app to CREATE its readyfile (kit.run_app writes it once
 # App.start() has loaded models, opened the sink and bound the frame source) and
-# only then reports success. Timeout is generous -- real vision apps load an RKNN
-# model + open the camera before signalling -- but env-overridable so a test can
-# drive it low.
+# only then reports success. V2 apps declare the full startup budget in health;
+# this environment setting remains the fallback for legacy manifests.
 READY_TIMEOUT = float(os.environ.get("APPMGR_READY_TIMEOUT", "30"))
 _READY_POLL = float(os.environ.get("APPMGR_READY_POLL", "0.05"))
 # SIGKILL delivery can precede disappearance of the final helper/zombie from
@@ -834,6 +833,18 @@ def _load_manifest(app_id: str) -> dict:
         return json.load(f)
 
 
+def _startup_timeout(manifest: dict, override: Optional[float]) -> float:
+    if override is not None:
+        return override
+    if manifest.get("manifest_version") != 2:
+        return READY_TIMEOUT
+    health = manifest.get("health")
+    timeout = health.get("startup_timeout_sec") if isinstance(health, dict) else None
+    if type(timeout) is not int or timeout <= 0:
+        raise SupervisorError("invalid manifest health.startup_timeout_sec")
+    return timeout
+
+
 _NO_FRAME_STREAM = {"id": "", "kind": "none"}
 _NATIVE_MAIN_STREAM = {"id": "main", "kind": "frame.sock", "path": "/live/0"}
 _NATIVE_FRAME_SOCK = "/run/recamera/frame.sock"
@@ -1331,6 +1342,8 @@ def start(app_id: str, *, wait_ready: bool = True,
         return existing
 
     manifest = _load_manifest(app_id)
+    # Resolve before spawning so an invalid policy cannot leave a child behind.
+    timeout = _startup_timeout(manifest, ready_timeout)
     try:
         kitversion.check(manifest)
     except kitversion.KitIncompatible as exc:
@@ -1421,7 +1434,6 @@ def start(app_id: str, *, wait_ready: bool = True,
     if not wait_ready:
         return proc.pid
 
-    timeout = READY_TIMEOUT if ready_timeout is None else ready_timeout
     if _await_ready(proc, ready_path, timeout):
         return proc.pid
     # Startup failed: capture the cause, then guarantee teardown (no orphan) so

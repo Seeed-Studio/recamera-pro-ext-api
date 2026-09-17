@@ -110,6 +110,20 @@ accepted during migration. CPU-only apps omit the NPU claim. Claims currently
 cover `camera.frames`, `audio.capture`, `npu.rknn`, `rga`, `codec.decode`,
 `probe.read`, and `result.publish`.
 
+The supervisor uses `health.startup_timeout_sec` as the v2 application's READY
+deadline, including model loading and resource initialization. Binding an HTTP
+port alone does not establish readiness. The `APPMGR_READY_TIMEOUT` setting
+remains the fallback for legacy manifests; an explicit supervisor call override
+takes precedence over either policy.
+
+App Center start/stop/restart requests return an asynchronous operation. If a
+background recovery already holds the lifecycle lock, these operations wait up
+to 120 seconds for it (`APPMGR_V1_LIFECYCLE_BUSY_TIMEOUT_SEC`). This lock wait is
+separate from the application's startup deadline. Background reconciliation and
+Workflow model activation yield to queued user operations before taking another
+transaction; an in-progress transaction still completes or rolls back normally.
+Synchronous configuration requests retain their shorter lock wait.
+
 ## Managed recording triggers
 
 The compatibility boundary is the result format, not a source type hierarchy.

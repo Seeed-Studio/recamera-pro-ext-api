@@ -283,6 +283,22 @@ class InferenceAuthorizationRegistry:
                 "inputs": trusted_inputs,
             })
 
+        # Only system-registered Workflow packages may extend bundled grants.
+        # Registration never mutates the installed manifest or trusts appdata.
+        from . import workflow_ui, workflow_model_contract
+        if workflow_ui.supported(installed):
+            for binding in workflow_model_contract.bindings(app_id, verify=True):
+                inp = binding["metadata"]["input"]
+                models.append({
+                    "artifact_id": "workflow-" + hashlib.sha256(binding["model_id"].encode()).hexdigest()[:32],
+                    "path": binding["path"], "sha256": binding["sha256"],
+                    "size": binding["size"],
+                    "memory_mb": estimate_model_memory_mb(binding["size"]),
+                    "priority": PLATFORM_MODEL_PRIORITY,
+                    "max_fps": PLATFORM_MODEL_MAX_FPS,
+                    "inputs": [{"name": "input", **{k: inp[k] for k in ("shape", "dtype", "layout")}}],
+                })
+
         if not models:
             raise InferenceAuthorizationError(
                 f"scheduled application {app_id} has no bundled RKNN artifact"

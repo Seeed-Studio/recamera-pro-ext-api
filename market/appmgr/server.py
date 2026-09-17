@@ -74,6 +74,7 @@ from contextlib import contextmanager
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
+from . import workflow_models
 
 from . import (assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
@@ -473,7 +474,7 @@ def _coordinator() -> appcoordinator.AppCoordinator:
             resource_manager=appresources.ResourceManager(layout[1]),
             result_gateway_sock=layout[2], inference_service_sock=layout[3],
             inference_registry=inference_auth.InferenceAuthorizationRegistry(
-                layout[4]))
+                layout[4]), application_dependency_probe=workflow_models.manager.dependency)
         _coordinator_layout = layout
     return _coordinator_instance
 
@@ -526,6 +527,34 @@ def _managed_launch(app_id: str, operation: str, manifest: dict):
         return supervisor.start(app_id, **identity)
 
     return launch
+
+
+def _activate_workflow_models(app_id):
+    """Refresh exact NPU grants through normal lifecycle, respecting a user stop."""
+    if _queued_mutation_pending():
+        return False
+    with busy_gate():
+        if _service_stopping or _queued_mutation_pending():
+            return False
+        record = state.get_app(app_id) or {}
+        if record.get("desired_state") != "running":
+            return True
+        manifest = _read_manifest(app_id) or {}
+        if not workflow_ui.supported(manifest):
+            return True
+        if workflow_models.manager.dependency(app_id, manifest):
+            return False
+        if not record.get("pid"):
+            # The normal reconciler resumes the user's waiting start request.
+            return True
+        snapshot = workflow_models.manager.snapshot(manifest, app_id)
+        if all(m["status"] in {"ready", "bundled", "validation_failed"} for m in snapshot["models"]):
+            return True
+        result = _coordinator().restart(
+            app_id, manifest=manifest, launch=_managed_launch(app_id, "models_ready", manifest))
+        _refresh_result_manifest(app_id, manifest, result)
+        _audit("workflow_models_activated", id=app_id, pid=result.get("pid"))
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -3320,7 +3349,7 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
     def lifecycle_job():
         result = callback(
-            app_id, _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC)
+            app_id, _busy_timeout=paths.V1_LIFECYCLE_BUSY_TIMEOUT_SEC)
         _operation_manager().events.publish("app", app_id=app_id, action=action)
         return result
 
@@ -3374,15 +3403,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_bytes(self, code: int, data: bytes, content_type: str,
-                    cache: str = None) -> None:
+                    cache: str = None, headers: dict = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
+        if code != 304:
+            self.send_header("Content-Length", str(len(data)))
         if cache:
             self.send_header("Cache-Control", cache)
         # Served same-origin to <img>; nothing here is a document, and the
         # extension whitelist already excludes SVG -- pin the type anyway.
         self.send_header("X-Content-Type-Options", "nosniff")
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -3471,7 +3503,11 @@ class _Handler(BaseHTTPRequestHandler):
             return False
 
     def _v1_error(self, exc: Exception) -> None:
-        if isinstance(exc, (FileNotFoundError, apptrust.TrustNotFoundError)):
+        if isinstance(exc, workflow_models.ModelConflict):
+            code = 409
+        elif isinstance(exc, workflow_models.cloud.LoginRequired):
+            return self._send(409, {"code": "sensecraft_login_required", "error": "SenseCraft authorization is required"})
+        elif isinstance(exc, (FileNotFoundError, apptrust.TrustNotFoundError)):
             code = 404
         elif isinstance(exc, apptrust.TrustConflictError):
             code = 409
@@ -3539,6 +3575,39 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
+        preview_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflows/preview", path)
+        if preview_match:
+            try:
+                app_id = preview_match.group(1)
+                _require_installed(app_id)
+                query = parse_qs(parsed.query)
+                code, data, content_type, headers = workflow_ui.preview(
+                    _read_manifest(app_id) or {}, app_id,
+                    (query.get("pipeline_id") or [""])[0],
+                    (query.get("output") or [""])[0], self.headers.get("If-None-Match"))
+                return self._send_bytes(code, data, content_type, cache="no-store", headers=headers)
+            except workflow_ui.PreviewUnavailable as exc:
+                return self._send(exc.status, {"error": exc.code})
+            except Exception as exc:
+                return self._v1_error(exc)
+        model_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflow-models(?:/(cloud-records))?", path)
+        if model_match:
+            try:
+                app_id, operation = model_match.groups()
+                _require_installed(app_id)
+                manifest = _read_manifest(app_id) or {}
+                workflow_ui.require(manifest)
+                if operation:
+                    session = workflow_models.cloud.credentials()
+                    data = workflow_models.cloud.query("get_training_records", session,
+                              framework_type=9, device_type=40, page=1, size=20)
+                    records = data.get("records", []) if isinstance(data, dict) else []
+                    return self._send(200, {"records": [{"model_id": r.get("model_id"),
+                        "status": r.get("status"), "name": str(r.get("prompt") or r.get("display_name") or r.get("model_name") or r.get("name") or r.get("model_id"))[:200]}
+                        for r in records[:20] if isinstance(r, dict)]})
+                return self._send(200, workflow_models.manager.snapshot(manifest, app_id))
+            except Exception as exc:
+                return self._v1_error(exc)
         workflow_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflows(?:/(runtime))?", path)
         if workflow_match:
             app_id, operation = workflow_match.groups()
@@ -3546,7 +3615,8 @@ class _Handler(BaseHTTPRequestHandler):
                 _require_installed(app_id)
                 manifest = _read_manifest(app_id) or {}
                 payload = (workflow_ui.runtime(manifest, app_id,
-                           include_result=(parse_qs(parsed.query).get("include_result") == ["true"]))
+                           include_result=(parse_qs(parsed.query).get("include_result") == ["true"]),
+                           include_overlay=(parse_qs(parsed.query).get("include_overlay") == ["true"]))
                            if operation else workflow_ui.workflows(manifest, app_id))
                 return self._send(200, payload)
             except Exception as exc:
@@ -3741,6 +3811,37 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        removal = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflow-models/remove", path)
+        if removal:
+            try:
+                app_id = removal.group(1)
+                body = self._body_json_v1()
+                with busy_gate():
+                    _require_installed(app_id)
+                    return self._send(200, workflow_models.manager.remove(_read_manifest(app_id) or {}, app_id, body.get("model_id")))
+            except Exception as exc:
+                return self._v1_error(exc)
+        model_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflow-models/tasks(?:/([0-9a-f]{32})/(resume|cancel|source|dataset))?", path)
+        if model_match:
+            try:
+                app_id, identifier, operation = model_match.groups()
+                _require_installed(app_id)
+                manifest = _read_manifest(app_id) or {}
+                workflow_ui.require(manifest)
+                if operation in {"source", "dataset"}:
+                    self.close_connection = True
+                    if self.headers.get("Transfer-Encoding") or self.headers.get("Content-Type") != "application/octet-stream":
+                        raise ValueError("Use a bounded binary upload with Content-Length")
+                    length = int(self.headers.get("Content-Length", "0"))
+                    self.connection.settimeout(30)
+                    result = workflow_models.manager.upload(app_id, identifier, operation, self.rfile, length)
+                else:
+                    body = self._body_json_v1(cap=128 * 1024)
+                    result = (workflow_models.manager.action(app_id, identifier, operation, body) if identifier
+                              else workflow_models.manager.create(manifest, app_id, body))
+                return self._send(200, {"task": result})
+            except Exception as exc:
+                return self._v1_error(exc)
         workflow_match = re.fullmatch(r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/workflows/editor-session", path)
         if workflow_match:
             try:
@@ -4219,6 +4320,14 @@ def _lifecycle_stopping(stop_event: Optional[threading.Event] = None) -> bool:
     return _service_stopping or (stop_event is not None and stop_event.is_set())
 
 
+def _queued_mutation_pending() -> bool:
+    # No lazy manager construction or journal mutation on a background probe.
+    manager = _operation_manager_instance
+    return (manager is not None
+            and _operation_manager_layout == paths.operation_state_file()
+            and manager.has_pending())
+
+
 def _boot_restore_locked(stop_event: Optional[threading.Event] = None) -> None:
     """Restore desired apps while the caller owns the mutation gate."""
     if _lifecycle_stopping(stop_event):
@@ -4336,7 +4445,7 @@ def _boot_restore(stop_event: Optional[threading.Event] = None) -> None:
 
 def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
     """Advance desired lifecycle state once; safe to call from host tests."""
-    if _lifecycle_stopping(stop_event):
+    if _lifecycle_stopping(stop_event) or _queued_mutation_pending():
         return []
     try:
         supervisor.reap_children()
@@ -4354,7 +4463,7 @@ def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
     # tick; liveness reads remain accurate without cleanup.
     try:
         with busy_gate():
-            if _lifecycle_stopping(stop_event):
+            if _lifecycle_stopping(stop_event) or _queued_mutation_pending():
                 return []
             swept = supervisor.sweep_stale()
             _recover_incomplete_teardowns(
@@ -4370,7 +4479,7 @@ def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
         pass
     results = []
     for app_id in state.desired_apps():
-        if _lifecycle_stopping(stop_event):
+        if _lifecycle_stopping(stop_event) or _queued_mutation_pending():
             break
         rec = state.get_app(app_id) or {}
         # Public legacy activate/switch applications are not auto-restarted,
@@ -4382,7 +4491,7 @@ def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
             continue
         try:
             with busy_gate():
-                if _lifecycle_stopping(stop_event):
+                if _lifecycle_stopping(stop_event) or _queued_mutation_pending():
                     break
                 # Re-read after taking the mutation gate: an explicit stop may
                 # have won the race while this tick was enumerating desired ids.
@@ -4703,6 +4812,8 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                _result_hub_instance.ws_port), flush=True)
         # Serve management/health requests while applications wait for IPC.
         # The worker restores desired apps before its first reconciliation.
+        workflow_models.manager.activate = _activate_workflow_models
+        workflow_models.manager.start()
         _start_reconciler(restore=True)
         httpd.serve_forever()
     except (KeyboardInterrupt, _ServiceShutdown):
@@ -4710,6 +4821,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     finally:
         _service_stopping = True
         _stop_reconciler()
+        workflow_models.manager.close()
         if httpd is not None:
             httpd.server_close()
         if _store_manager_instance is not None:

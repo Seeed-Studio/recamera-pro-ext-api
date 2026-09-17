@@ -13,11 +13,68 @@ import json
 import os
 import re
 import stat
+from urllib.parse import urlencode
 
 from . import config, paths, state
 
 MAX_DOCUMENT = 256 * 1024
 MAX_RESPONSE = 16 * 1024 * 1024
+MAX_PREVIEW = 4 * 1024 * 1024
+
+
+class PreviewUnavailable(RuntimeError):
+    def __init__(self, code, status=503):
+        super().__init__(code)
+        self.code, self.status = code, status
+
+
+def preview(manifest, app_id, pipeline_id, output, etag=None):
+    """Read one existing raster result through the device's authenticated edge."""
+    require(manifest)
+    if (not re.fullmatch(r"[0-9a-f]{32}", pipeline_id)
+            or not re.fullmatch(r"original|[0-9a-f]{20}", output)):
+        raise ValueError("Invalid Workflow preview selection")
+    record = state.get_app(app_id) or {}
+    if not record.get("pid"):
+        raise PreviewUnavailable("preview_inactive", 409)
+    identity = tuple(record.get(key) for key in ("instance_id", "generation", "pid"))
+    values = config.effective_values(manifest, app_id)
+    port, token = values.get("port", 9001), values.get("api_token", "")
+    if (type(port) is not int or not 1024 <= port <= 65535 or not isinstance(token, str)
+            or "\n" in token or "\r" in token):
+        raise ValueError("Invalid Workflow service configuration")
+    headers = {"X-Inference-Token": token, "Accept": "image/jpeg, image/png"}
+    if etag and re.fullmatch(r'"[0-9a-f]{32}:[0-9]{1,20}:(?:original|[0-9a-f]{20})"', etag):
+        headers["If-None-Match"] = etag
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        connection.request("GET", "/app-center/workflow-preview?" + urlencode({
+            "pipeline_id": pipeline_id, "output": output}), headers=headers)
+        response = connection.getresponse()
+        data = response.read(MAX_PREVIEW + 1)
+        current = state.get_app(app_id) or {}
+        if identity != tuple(current.get(key) for key in ("instance_id", "generation", "pid")):
+            raise PreviewUnavailable("preview_changed", 409)
+        if len(data) > MAX_PREVIEW:
+            raise PreviewUnavailable("preview_too_large", 413)
+        if response.status not in (200, 304):
+            codes = {404: "preview_output_missing", 409: "preview_inactive", 413: "preview_too_large",
+                     422: "preview_invalid", 425: "preview_waiting", 429: "preview_busy"}
+            raise PreviewUnavailable(codes.get(response.status, "preview_unavailable"),
+                                     response.status if response.status in codes else 503)
+        content_type = response.getheader("Content-Type", "").split(";", 1)[0]
+        if response.status == 200 and not (
+                (content_type == "image/jpeg" and data.startswith(b"\xff\xd8\xff"))
+                or (content_type == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n"))):
+            raise PreviewUnavailable("preview_invalid", 502)
+        tag = response.getheader("ETag", "")
+        if not re.fullmatch(r'"' + pipeline_id + r':[0-9]{1,20}:' + output + r'"', tag):
+            raise PreviewUnavailable("preview_changed", 409)
+        return response.status, data, content_type, {"ETag": tag}
+    except (OSError, http.client.HTTPException) as exc:
+        raise PreviewUnavailable("preview_unavailable") from exc
+    finally:
+        connection.close()
 
 
 def supported(manifest):
@@ -30,7 +87,7 @@ def require(manifest):
         raise ValueError("This application does not declare Workflow UI version 1")
 
 
-def workflows(manifest, app_id):
+def workflows(manifest, app_id, include_documents=False):
     """Available even while the app is stopped; never follow appdata symlinks."""
     require(manifest)
     if not paths.valid_app_id(app_id):
@@ -64,7 +121,10 @@ def workflows(manifest, app_id):
                             or identifier == "models"
                             or hashlib.sha256(identifier.encode()).hexdigest() + ".json" != filename):
                         raise ValueError("Workflow identifier does not match its storage entry")
-                    items.append({"id": identifier, "name": str(doc.get("name") or identifier)[:256]})
+                    item = {"id": identifier, "name": str(doc.get("name") or identifier)[:256]}
+                    if include_documents:
+                        item["document"] = doc
+                    items.append(item)
                 except (OSError, ValueError, TypeError, RecursionError):
                     invalid += 1
         finally:
@@ -128,14 +188,17 @@ def _request(values, path, *, method="GET", body=None, cookie=None, csrf=None):
         connection.close()
 
 
-def runtime(manifest, app_id, include_result=False):
+def runtime(manifest, app_id, include_result=False, include_overlay=False):
     require(manifest)
     record = state.get_app(app_id) or {}
     if not record.get("pid"):
         return {"service_only": False, "deployment": {"status": "stopped"}, "video": None, "latest": None}
     identity = (record.get("instance_id"), record.get("generation"), record.get("pid"))
     values = config.effective_values(manifest, app_id)
-    response, _ = _request(values, "/app-center/workflow-runtime?include_result=" + ("true" if include_result else "false"))
+    query = "?include_result=" + ("true" if include_result else "false")
+    if include_overlay:
+        query += "&include_overlay=true"
+    response, _ = _request(values, "/app-center/workflow-runtime" + query)
     current = state.get_app(app_id) or {}
     if identity != (current.get("instance_id"), current.get("generation"), current.get("pid")):
         raise RuntimeError("Application restarted; refresh the Workflow results")

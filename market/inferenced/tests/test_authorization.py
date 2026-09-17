@@ -22,6 +22,40 @@ from market.inferenced.authorization import (
 from market.inferenced.server import FakeBackend, InferenceService
 
 
+def test_workflow_binding_uses_exact_digest_platform_policy_and_peer_grant(installed, tmp_path, monkeypatch):
+    from market.appmgr import workflow_model_contract as contract
+    model, manifest, registry_root, writer, _ = installed
+    monkeypatch.setattr(paths, "APPMGR_DIR", str(tmp_path / "system"))
+    manifest["x-workflow-ui"] = {"version": 1}
+    (model.parent.parent / "manifest.json").write_text(json.dumps(manifest))
+    raw = b"RKNNregistered-model"
+    digest = hashlib.sha256(raw).hexdigest()
+    directory = contract.root() / "auth-demo" / "assets" / digest / "extra/1"
+    contract.private_directory(directory)
+    asset = directory / "model.rknn"
+    asset.write_bytes(raw)
+    doc = {"schema_version": 1, "model_id": "extra/1", "platform": "rv1126b", "format": "rknn", "task": "object-detection",
+           "model_file": "model.rknn", "sha256": digest, "labels": ["person"],
+           "input": {"name": "images", "shape": [1,32,32,3], "dtype": "uint8", "layout": "NHWC", "color_format": "RGB", "normalization": "baked"},
+           "outputs": [{"name": "out", "shape": [1,5,8], "dtype": "float32", "layout": "BCN"}],
+           "postprocess": {"kind": "yolo-decoded", "box_format": "xywh", "scores": "probabilities"}}
+    contract.atomic_json(directory / "model.json", doc)
+    contract.atomic_json(contract.root() / "auth-demo" / "bindings.json", [{"model_id": "extra/1", "sha256": digest}])
+    policy = writer.prepare("auth-demo", manifest)
+    assert len(policy["models"]) == 2
+    writer.publish(policy, pid=os.getpid(), instance_id="dynamic-run", generation=1)
+    reader = RegistryAuthorizer(str(registry_root), publish_wait=0)
+    auth = reader.authorize(peer_pid=os.getpid(), peer_uid=os.geteuid(), peer_gid=os.getegid(),
+                            claimed_app="auth-demo", claimed_instance="dynamic-run", claimed_generation=1)
+    granted = reader.authorize_model(auth, str(asset))
+    assert granted.sha256 == digest
+    assert granted.memory_mb == estimate_model_memory_mb(len(raw))
+    assert granted.inputs[0]["name"] == "input"
+    assert granted.inputs[0]["shape"] == (1,32,32,3)
+    with pytest.raises(AuthorizationError):
+        reader.authorize_model(auth, str(tmp_path / "unregistered.rknn"))
+
+
 def _manifest(model_bytes: bytes) -> dict:
     digest = hashlib.sha256(model_bytes).hexdigest()
     return {

@@ -349,6 +349,11 @@ class OperationManager:
                     return dict(item)
         return None
 
+    def has_pending(self) -> bool:
+        """Whether an accepted user mutation is queued or executing."""
+        with self._lock:
+            return any(item.get("status") in ACTIVE for item in self._records)
+
     def for_upload(self, upload_id: str) -> Optional[dict]:
         """Return the operation durably correlated with one upload, if any."""
         if not isinstance(upload_id, str) or _UPLOAD_ID.fullmatch(upload_id) is None:

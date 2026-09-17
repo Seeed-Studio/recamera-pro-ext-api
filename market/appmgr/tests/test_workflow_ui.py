@@ -86,3 +86,54 @@ def test_editor_exchanges_device_session_without_exposing_permanent_key(monkeypa
     assert "permanent-private" not in json.dumps(result)
     assert calls[1][1]["cookie"] == "edge_session=real-session"
     assert calls[1][1]["csrf"] == "session-csrf"
+
+
+def test_preview_bridge_binds_image_to_app_generation_and_never_follows_redirects(monkeypatch):
+    pipeline, output = "a" * 32, "b" * 20
+    etag = f'"{pipeline}:12:{output}"'
+    record = {"pid": 100, "instance_id": "one", "generation": 1}
+    mode, observed = ["ok"], []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            observed.append((self.path, self.headers.get("X-Inference-Token"), self.headers.get("If-None-Match")))
+            if mode[0] == "restart":
+                record["generation"] += 1
+            status = {"cached": 304, "redirect": 302, "waiting": 425}.get(mode[0], 200)
+            self.send_response(status)
+            self.send_header("Content-Type", "image/svg+xml" if mode[0] == "svg" else "image/jpeg")
+            self.send_header("ETag", etag)
+            if mode[0] == "redirect":
+                self.send_header("Location", "https://external.invalid/private")
+            self.end_headers()
+            if status != 304:
+                self.wfile.write(b"<svg/>" if mode[0] == "svg" else b"\xff\xd8\xffjpeg")
+
+        def log_message(self, *args):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(workflow_ui.state, "get_app", lambda *args: dict(record))
+    monkeypatch.setattr(workflow_ui.config, "effective_values", lambda *args: {
+        "port": httpd.server_port, "api_token": "private-device"})
+    try:
+        status, body, mime, headers = workflow_ui.preview(MANIFEST, "demo", pipeline, output)
+        assert (status, body, mime, headers) == (200, b"\xff\xd8\xffjpeg", "image/jpeg", {"ETag": etag})
+        mode[0] = "cached"
+        assert workflow_ui.preview(MANIFEST, "demo", pipeline, output, etag)[:2] == (304, b"")
+        assert observed[-1][1:] == ("private-device", etag)
+        for mode[0], expected in [("restart", 409), ("svg", 502), ("redirect", 503), ("waiting", 425)]:
+            with pytest.raises(workflow_ui.PreviewUnavailable) as failure:
+                workflow_ui.preview(MANIFEST, "demo", pipeline, output)
+            assert failure.value.status == expected
+        count = len(observed)
+        with pytest.raises(ValueError):
+            workflow_ui.preview(MANIFEST, "demo", pipeline, "http://external.invalid")
+        record["pid"] = None
+        with pytest.raises(workflow_ui.PreviewUnavailable):
+            workflow_ui.preview(MANIFEST, "demo", pipeline, output)
+        assert len(observed) == count
+    finally:
+        httpd.shutdown(); httpd.server_close(); thread.join(timeout=2)

@@ -186,13 +186,16 @@ MAX_SSE_SUBSCRIBERS = int(os.environ.get(
     "APPMGR_MAX_SSE_SUBSCRIBERS", "16"))
 # A v1 App Center mutation has already been accepted into the daemon's single
 # worker queue, so a short collision with the background lifecycle reconciler
-# must not turn into a random terminal BusyError.  Only those asynchronous jobs
-# opt into this bounded flock wait; the legacy synchronous API keeps the
-# historical fail-fast behaviour.  Fifty-millisecond polling is inexpensive on
-# the device and comfortably covers the sub-second reconciler critical section
-# without spinning.
+# must not turn into a random terminal BusyError. V1 mutations opt into bounded
+# flock waits; legacy endpoints keep their historical fail-fast behaviour.
+# Keep synchronous configuration/request waits within the HTTP client deadline.
 V1_OPERATION_BUSY_TIMEOUT_SEC = float(os.environ.get(
     "APPMGR_V1_OPERATION_BUSY_TIMEOUT_SEC", "5.0"))
+# Start/stop/restart are asynchronous. A background start holds the gate through
+# model loading and READY (often 60s), plus failure teardown. Accepted lifecycle
+# jobs wait for that transaction; the reconciler yields before starting another.
+V1_LIFECYCLE_BUSY_TIMEOUT_SEC = float(os.environ.get(
+    "APPMGR_V1_LIFECYCLE_BUSY_TIMEOUT_SEC", "120.0"))
 V1_OPERATION_BUSY_RETRY_SEC = float(os.environ.get(
     "APPMGR_V1_OPERATION_BUSY_RETRY_SEC", "0.05"))
 

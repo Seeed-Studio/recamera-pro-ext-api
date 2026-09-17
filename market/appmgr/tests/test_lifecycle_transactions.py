@@ -31,6 +31,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 _BASE = os.path.realpath(tempfile.mkdtemp(prefix="appmgr-lifecycle."))
 os.environ["APPMGR_APPS_DIR"] = os.path.join(_BASE, "apps")
@@ -148,6 +149,48 @@ class ReadyHandshakeTests(unittest.TestCase):
         self.assertTrue(_alive_running(pid))
         self.assertTrue(os.path.exists(paths.readyfile("good-app")),
                         "start() must return only after the app signalled READY")
+
+    def _slow_v2_app(self):
+        app_id = "slow-v2"
+        directory = self._mkapp(app_id, "import time\ntime.sleep(0.35)\n" + self.HAPPY)
+        command = supervisor._build_cmd(app_id, {"entry": "app.py"})
+        with open(os.path.join(directory, "manifest.json"), "w") as output:
+            json.dump({"id": app_id, "entry": "app.py", "manifest_version": 2,
+                       "health": {"startup_timeout_sec": 2}}, output)
+        return app_id, command
+
+    def test_v2_start_waits_for_declared_budget_and_real_ready_marker(self):
+        app_id, command = self._slow_v2_app()
+        # Only replace the package interpreter lookup: launch and READY are real.
+        with mock.patch.object(supervisor, "_build_cmd", return_value=command), \
+                mock.patch.object(supervisor, "READY_TIMEOUT", 0.05):
+            pid = supervisor.start(app_id)
+        self._pids.append(pid)
+        self.assertTrue(_alive_running(pid))
+        self.assertTrue(os.path.exists(paths.readyfile(app_id)))
+
+    def test_explicit_ready_timeout_still_limits_v2_and_cleans_failed_child(self):
+        app_id, command = self._slow_v2_app()
+        with mock.patch.object(supervisor, "_build_cmd", return_value=command):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "within 0.05s"):
+                supervisor.start(app_id, ready_timeout=0.05)
+        self.assertIsNone(supervisor.is_running(app_id))
+        self.assertFalse(os.path.exists(paths.pidfile(app_id)))
+
+    def test_legacy_keeps_fallback_and_invalid_v2_budget_does_not_spawn(self):
+        with mock.patch.object(supervisor, "READY_TIMEOUT", 0.05):
+            self.assertEqual(supervisor._startup_timeout({"health": {
+                "startup_timeout_sec": 60}}, None), 0.05)
+        for value in (None, 0, -1, True, "60"):
+            with self.subTest(value=value):
+                directory = self._mkapp("invalid-budget", self.HAPPY)
+                with open(os.path.join(directory, "manifest.json"), "w") as output:
+                    json.dump({"manifest_version": 2, "health": {
+                        "startup_timeout_sec": value}}, output)
+                with mock.patch.object(supervisor.subprocess, "Popen") as spawn:
+                    with self.assertRaisesRegex(supervisor.SupervisorError, "startup_timeout_sec"):
+                        supervisor.start("invalid-budget")
+                    spawn.assert_not_called()
 
     def test_crash_on_startup_fails_start_with_root_cause(self):
         self._mkapp("bad-app", self.CRASH)

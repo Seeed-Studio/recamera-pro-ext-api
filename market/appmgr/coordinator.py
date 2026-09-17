@@ -38,12 +38,13 @@ class AppCoordinator:
                  ipc_dependency_probe: Optional[Callable[[resources.Plan], dict]] = None,
                  result_gateway_sock: Optional[str] = None,
                  inference_service_sock: Optional[str] = None,
-                 inference_registry=None):
+                 inference_registry=None, application_dependency_probe=None):
         self.resources = resource_manager or resources.ResourceManager()
         self.supervisor = supervisor_module
         self.state = state_module
         self.dependency_probe = dependency_probe or resources.probe_inference_service
         self.ipc_dependency_probe = ipc_dependency_probe or dependencies.probe_plan
+        self.application_dependency_probe = application_dependency_probe
         self.result_gateway_sock = (result_gateway_sock
                                     if result_gateway_sock is not None
                                     else paths.RESULT_GATEWAY_SOCK)
@@ -273,7 +274,12 @@ class AppCoordinator:
         # crash; it must not burn the manifest's bounded restart budget.
         dependency = None
         if require_dependencies:
-            available, dependency, label = self._check_dependencies(plan, launch_mode)
+            dependency = (self.application_dependency_probe(app_id, manifest)
+                          if self.application_dependency_probe else None)
+            if dependency is not None and not dependency.get("available", False):
+                available, label = False, "Application dependency unavailable"
+            else:
+                available, dependency, label = self._check_dependencies(plan, launch_mode)
         else:
             available = True
         if not available:
