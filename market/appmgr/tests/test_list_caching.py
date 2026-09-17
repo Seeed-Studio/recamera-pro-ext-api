@@ -316,6 +316,13 @@ class ApplicationListScopeTests(_Pinned):
         self.addCleanup(shutil.rmtree, builtin_dir, True)
         with open(os.path.join(builtin_dir, "manifest.json"), "w") as sink:
             json.dump({"id": "builtin", "name": "Must stay hidden"}, sink)
+        # A stray acousticslab directory must stay hidden for the same reason:
+        # the firmware system identities never come from /userdata.
+        al_dir = paths.app_dir("acousticslab")
+        os.makedirs(al_dir, exist_ok=True)
+        self.addCleanup(shutil.rmtree, al_dir, True)
+        with open(os.path.join(al_dir, "manifest.json"), "w") as sink:
+            json.dump({"id": "acousticslab", "name": "Must stay hidden"}, sink)
 
         def unexpected_probe():
             self.fail("application listing must not query builtin inference")
@@ -325,14 +332,24 @@ class ApplicationListScopeTests(_Pinned):
         with patch.object(builtin, "inference_status", return_value={
                 "available": True, "enabled": False, "state": "stopped",
                 "external_hold": None, "model": "detector.rknn", "fps": 20,
-                "actual_fps": 0, "reason": None}) as probe:
+                "actual_fps": 0, "reason": None}) as probe, patch.object(
+                server, "_acousticslab_status", return_value={
+                "available": False, "running": False, "enabled": True,
+                "state": "stopped", "head": None, "uptime_s": None,
+                "inference": None, "reason": "enabled_but_stopped",
+                "pid": None}):
             web = server.do_v1_apps()
         probe.assert_called_once_with()
         self.assertEqual([item["id"] for item in legacy["apps"]], [APP])
-        self.assertEqual([item["id"] for item in web["apps"]], ["builtin", APP])
+        self.assertEqual([item["id"] for item in web["apps"]],
+                         ["builtin", "acousticslab", APP])
         self.assertNotIn("builtin", {item["id"] for item in legacy["apps"]})
+        self.assertNotIn("acousticslab", {item["id"] for item in legacy["apps"]})
         self.assertTrue(web["apps"][0]["system"])
         self.assertEqual(web["apps"][0]["name"], "AI Model Inference")
+        self.assertTrue(web["apps"][1]["system"])
+        self.assertEqual(web["apps"][1]["name"], "AcousticsLab")
+        self.assertEqual(web["apps"][1]["status"], "stopped")
 
 
 # --------------------------------------------------------------------------- #

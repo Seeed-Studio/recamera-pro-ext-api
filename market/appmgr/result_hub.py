@@ -702,17 +702,28 @@ def _system_results(payload: dict, coordinate_space: str) -> Tuple[List[dict], s
     return normalized, task_key
 
 
+# Firmware-owned system sources authorized on the strict system ingress (and
+# on the in-process submit_system path).  ``builtin`` is the rkipc inference
+# pipeline published by recamera_notify; ``acousticslab`` is the acousticslabd
+# adapter, which runs inside appmgr itself.  Both are framework-trusted; an
+# identity resolver must never derive them from an untrusted peer claim.
+SYSTEM_SOURCE_IDS = frozenset(("builtin", "acousticslab"))
+
+
 def normalize_system_payload(payload: dict, identity: dict,
                              *, fallback_seq: int = 0) -> List[dict]:
     """Normalize a pre-template built-in inference parser dictionary."""
     if not isinstance(payload, dict) or not isinstance(identity, dict):
         raise ResultHubError("system result must be an object")
     source_id = str(identity.get("id") or identity.get("source_id") or "")
-    if source_id != "builtin":
-        raise ResultHubError("system identity resolver must authorize builtin")
+    if source_id not in SYSTEM_SOURCE_IDS:
+        raise ResultHubError(
+            "system identity resolver must authorize a firmware system source")
     source = {
-        "kind": "builtin",
-        "id": "builtin",
+        # ``builtin`` keeps its historical kind for legacy consumers; later
+        # firmware system sources are stamped "system" and told apart by id.
+        "kind": "builtin" if source_id == "builtin" else "system",
+        "id": source_id,
         "trust": str(identity.get("trust") or "peercred"),
     }
     model_id = payload.get("model_id")
@@ -734,7 +745,7 @@ def normalize_system_payload(payload: dict, identity: dict,
     if payload.get("source_id") is not None:
         extensions["reported_source_id"] = payload.get("source_id")
     return [_base_envelope(
-        message_type="frame", message_id=f"builtin:{seq}:frame",
+        message_type="frame", message_id=f"{source_id}:{seq}:frame",
         source=source, seq=seq, wall_ms=wall, pts_us=pts, stream=stream,
         results=results, metrics=_metrics(payload), summary=_summary(payload),
         render=(payload.get("render") if isinstance(payload.get("render"), dict) else {}),
@@ -919,7 +930,14 @@ class ResultViewFormatter:
             content_type="application/json", profile=profile, index=0,
         )]
 
-    def _format_builtin(self, raw: dict) -> List[dict]:
+    def _format_builtin(self, raw: dict, *, family: str = "builtin") -> List[dict]:
+        """Render the firmware standard-output templates (dTemplate).
+
+        ``family`` only stamps the visible profile name: ``builtin`` for the
+        rkipc pipeline, ``system`` for other firmware system sources (e.g.
+        acousticslab), which publish the same typed envelope shape and
+        therefore share the same user-configured templates.
+        """
         task = str((raw.get("extensions") or {}).get("task_type_name") or "unknown")
         # Recreate the parser-facing context from the canonical typed entries.
         parser_view = {
@@ -943,7 +961,7 @@ class ResultViewFormatter:
         templates = self._builtin_templates()
         template = templates.get(section_key) or templates.get("default")
         if template is None:
-            return self._fallback(raw, parser_view, profile="builtin:raw")
+            return self._fallback(raw, parser_view, profile="%s:raw" % family)
         context = dict(parser_view)
         context["data"] = parser_view
         context["inference"] = parser_view
@@ -952,7 +970,8 @@ class ResultViewFormatter:
             if not body.strip() or len(body) > MAX_RENDER_LEN:
                 raise ValueError("empty or oversized template output")
         except Exception:
-            return self._fallback(raw, parser_view, profile="builtin:raw-fallback")
+            return self._fallback(raw, parser_view,
+                                  profile="%s:raw-fallback" % family)
         content_type = "text/plain; charset=utf-8"
         try:
             json.loads(body.decode("utf-8"))
@@ -961,14 +980,20 @@ class ResultViewFormatter:
             pass
         return [self._formatted(
             raw, payload=body.decode("utf-8", "replace"),
-            content_type=content_type, profile="builtin:%s" % section_key,
+            content_type=content_type, profile="%s:%s" % (family, section_key),
             index=0,
         )]
 
     def format(self, raw: dict) -> List[dict]:
         source = raw.get("source") or {}
-        if source.get("kind") == "builtin":
+        kind = source.get("kind")
+        if kind == "builtin":
             return self._format_builtin(raw)
+        if kind == "system":
+            # Firmware system sources (e.g. acousticslab) publish the same
+            # typed envelope shape as builtin: they share the standard-output
+            # dTemplate rendering, with an honest "system" profile family.
+            return self._format_builtin(raw, family="system")
         app_id = str(source.get("app_id") or source.get("id") or "")
         legacy = self._legacy_view(raw)
         public_raw = {key: value for key, value in raw.items()
@@ -2903,7 +2928,9 @@ class ResultHub:
             return [envelope]
 
     def publish_system(self, payload: dict, identity: dict) -> List[dict]:
-        fallback = self._next_source_seq("builtin")
+        fallback = self._next_source_seq(
+            str((identity or {}).get("id")
+                or (identity or {}).get("source_id") or "builtin"))
         envelopes = normalize_system_payload(payload, identity, fallback_seq=fallback)
         batch = self._make_format_batch(envelopes)
         self._received_system += 1
