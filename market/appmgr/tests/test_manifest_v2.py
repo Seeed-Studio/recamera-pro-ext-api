@@ -68,8 +68,9 @@ def minimal_manifest(**updates):
     return value
 
 
-def test_builtin_identity_is_reserved_in_runtime_and_published_schema():
-    candidate = minimal_manifest(id="builtin")
+@pytest.mark.parametrize("reserved_id", ["builtin", "acousticslab"])
+def test_builtin_identity_is_reserved_in_runtime_and_published_schema(reserved_id):
+    candidate = minimal_manifest(id=reserved_id)
     with pytest.raises(contract.ManifestValidationError, match="reserved"):
         contract.validate_manifest(candidate)
     schema_path = os.path.join(os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")

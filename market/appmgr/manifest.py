@@ -27,7 +27,10 @@ RELEASE_LOCK_VERSION = 1
 RELEASE_LOCK_PATH = "release.lock.json"
 BOM_PATH = "files.sha256"
 RESERVED_PACKAGE_PATHS = frozenset((RELEASE_LOCK_PATH, BOM_PATH))
-RESERVED_APP_IDS = frozenset(("builtin",))
+# Firmware system applications that are never installable packages: ``builtin``
+# (in-process rkipc inference) and ``acousticslab`` (the acousticslabd daemon,
+# driven through appmgr's acousticslab.py adapter).
+RESERVED_APP_IDS = frozenset(("builtin", "acousticslab"))
 MAX_ICON_BYTES = 1024 * 1024
 ICON_MEDIA_EXTENSIONS = {
     "image/png": (".png",),

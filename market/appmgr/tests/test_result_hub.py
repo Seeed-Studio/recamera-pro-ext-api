@@ -28,6 +28,7 @@ from appmgr.result_hub import (  # noqa: E402
     SCHEMA_VERSION,
     SYSTEM_PROTOCOL,
     ResultHub,
+    ResultHubError,
     ResultViewFormatter,
     _HubClient,
     _HubWebSocketServer,
@@ -1026,6 +1027,23 @@ def test_ws_generation_change_sends_exact_tombstone_and_cas_preserves_winner(
     finally:
         ws.close()
         hub.stop()
+
+
+def test_system_adapter_accepts_acousticslab_as_distinct_system_source():
+    envelope = normalize_system_payload(
+        _system_payload(task="classification", seq=3),
+        {"id": "acousticslab", "trust": "in-process"})[0]
+    # Later firmware system sources get kind "system"; only id distinguishes
+    # them, and the message id is namespaced by source.
+    assert envelope["source"]["kind"] == "system"
+    assert envelope["source"]["id"] == "acousticslab"
+    assert envelope["id"].startswith("acousticslab:3:")
+
+
+def test_system_adapter_rejects_unauthorized_source_ids():
+    with pytest.raises(ResultHubError, match="system source"):
+        normalize_system_payload(_system_payload(task="classification", seq=1),
+                                 {"id": "some-app", "trust": "spoofed"})
 
 
 def test_system_adapter_preserves_box_object_and_marks_normalized_space():
@@ -2379,6 +2397,42 @@ def test_formatted_view_reads_app_effective_config_and_restricted_builtin_templa
     assert time.monotonic() - started < 1.0
     assert repeat_fallback["profile"] == "builtin:raw-fallback"
     assert builtin["type"] == "frame" and builtin["results"]
+
+
+def test_formatted_view_system_sources_share_standard_templates(tmp_path):
+    """kind:"system" frames render through the same dTemplate standard output
+    as builtin, under an honest "system" profile family."""
+    notify = tmp_path / "notify.json"
+    notify.write_text(json.dumps({
+        "dTemplate": {
+            "sClassification": "top={{ classification.entries[0].label }}"}}))
+    formatter = ResultViewFormatter(notify_config=str(notify))
+
+    frame = normalize_system_payload(
+        _system_payload(task="classification", seq=7),
+        {"id": "acousticslab", "trust": "in-process"})[0]
+    assert frame["source"]["kind"] == "system"
+
+    rendered = formatter.format(frame)[0]
+    assert rendered["profile"] == "system:classification"
+    assert rendered["payload"] == "top=cat"
+    assert rendered["source"]["kind"] == "system"
+
+    # No matching template: compact parser-view JSON under system:raw.
+    notify.write_text(json.dumps({"dTemplate": {}}))
+    os.utime(notify, None)
+    raw = formatter.format(frame)[0]
+    assert raw["profile"] == "system:raw"
+    body = json.loads(raw["payload"])
+    assert body["classification"]["entries"][0]["label"] == "cat"
+
+    # Template that breaks inside the sandbox: honest system:raw-fallback.
+    notify.write_text(json.dumps({"dTemplate": {
+        "sClassification": "{{ cycler.__init__.__globals__.os.system('id') }}"}}))
+    os.utime(notify, None)
+    fallback = formatter.format(frame)[0]
+    assert fallback["profile"] == "system:raw-fallback"
+    assert json.loads(fallback["payload"])["task_type_name"] == "classification"
 
 
 def test_formatted_projection_renders_complete_legacy_batch_once(tmp_path, monkeypatch):
