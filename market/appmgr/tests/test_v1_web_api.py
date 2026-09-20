@@ -1001,6 +1001,65 @@ def test_queued_stop_outwaits_old_five_second_background_start_budget(layout, mo
     assert calls == ["demo"]
 
 
+@pytest.mark.parametrize("phase", [
+    "failed", "waiting_resource", "waiting_dependency", "backoff", "crash_loop",
+])
+def test_stop_without_instance_clears_managed_retry_and_wait_state(layout, monkeypatch, phase):
+    os.mkdir(os.path.join(paths.APPS_DIR, "flow"))
+    state.set_desired("flow", "running", launch_mode="managed")
+    state.transition("flow", phase, instance_id=None, pid=None,
+                     reason="memory unavailable", blocked_resource="memory",
+                     resource_owners=["other"], dependency={"available": False},
+                     runtime_guard={"resource": "memory.runtime"},
+                     restart_history=[1.0], next_retry_at=time.time() + 3600)
+    calls = []
+
+    def stop(app_id, **kwargs):
+        # Cancel retry intent before trying to stop any residual processes.
+        assert state.get_app(app_id)["desired_state"] == "stopped"
+        calls.append(app_id)
+        return {"pid": None, "signalled": False}
+
+    monkeypatch.setattr(server.supervisor, "stop", stop)
+    op = server.do_v1_lifecycle("flow", "stop")["operation"]
+    assert _wait_operation(op["id"])["status"] == "succeeded"
+    with open(paths.STATE_FILE) as source:
+        rec = json.load(source)["apps"]["flow"]
+    assert rec["desired_state"] == rec["observed_state"] == "stopped"
+    assert rec["reason"] is None and rec["next_retry_at"] is None
+    assert rec["restart_history"] == [] and rec["resource_owners"] == []
+    assert rec["runtime_guard"] is None and rec["dependency"] is None
+    assert rec["blocked_resource"] is None and not rec["teardown_pending"]
+    assert "flow" not in state.desired_apps()
+    assert calls == ["flow"]
+
+
+def test_failed_stop_without_instance_preserves_stop_intent_and_allows_retry(layout, monkeypatch):
+    os.mkdir(os.path.join(paths.APPS_DIR, "flow"))
+    state.set_desired("flow", "running", launch_mode="managed")
+    state.transition("flow", "failed", instance_id=None, reason="launch failed")
+    attempts = []
+
+    def stop(app_id, **kwargs):
+        attempts.append(app_id)
+        if len(attempts) == 1:
+            raise RuntimeError("process group teardown failed")
+        return {"pid": None, "signalled": False}
+
+    monkeypatch.setattr(server.supervisor, "stop", stop)
+    op = server.do_v1_lifecycle("flow", "stop")["operation"]
+    assert _wait_operation(op["id"])["status"] == "failed"
+    rec = state.get_app("flow")
+    assert rec["desired_state"] == "stopped"
+    assert rec["observed_state"] == "stopping" and rec["teardown_pending"]
+    assert "stop failed" in rec["reason"]
+    retry = server.do_v1_lifecycle("flow", "stop")["operation"]
+    assert _wait_operation(retry["id"])["status"] == "succeeded"
+    assert state.get_app("flow")["observed_state"] == "stopped"
+    assert not state.get_app("flow")["teardown_pending"]
+    assert attempts == ["flow", "flow"]
+
+
 def test_background_recovery_and_model_activation_yield_to_queued_stop(layout, monkeypatch):
     os.mkdir(os.path.join(paths.APPS_DIR, "demo"))
     calls = []

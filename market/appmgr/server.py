@@ -2254,7 +2254,11 @@ def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
         if not target:
             return {"stopped": None, "note": "no active app"}
         rec = state.get_app(target)
-        if rec is None or rec.get("instance_id"):
+        # A launch can fail or wait for resources before it owns an instance.
+        # Managed apps must still cancel desired-running/retry state and clear
+        # dependency diagnostics through the coordinator's complete stop path.
+        if (rec is None or rec.get("instance_id")
+                or rec.get("launch_mode") == "managed"):
             try:
                 res = _coordinator().stop(target)
             finally:
