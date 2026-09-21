@@ -285,6 +285,23 @@ def inspect_sources(trees, entry, signatures, require_entry=True):
         if not sources.is_app(cls):
             continue
         relative = sources.paths[cls[1]]
+        lineage = [cls, *sources.lineage(cls)]
+        nodes = [sources.classes[c][0] for c in lineage if c in sources.classes]
+        assigned = set()
+        dynamic = any(c not in sources.classes and c != KIT for c in lineage)
+        for owner in nodes:
+            dynamic |= any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and
+                           n.name in {"__getattr__", "__getattribute__"} for n in owner.body)
+            for n in ast.walk(owner):
+                if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store) and isinstance(n.value, ast.Name) and n.value.id == "self":
+                    assigned.add(n.attr)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "setattr" and n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "self":
+                    if len(n.args) > 1 and isinstance(n.args[1], ast.Constant) and isinstance(n.args[1].value, str):
+                        assigned.add(n.args[1].value)
+                    else:
+                        dynamic = True
+                if isinstance(n, ast.Attribute) and n.attr == "__dict__":
+                    dynamic = True
         for method in node.body:
             if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -294,7 +311,13 @@ def inspect_sources(trees, entry, signatures, require_entry=True):
                 if not isinstance(call.func.value, ast.Name) or call.func.value.id != "self":
                     continue
                 name = call.func.attr
-                if name not in signatures or sources.member(cls, name) is not None:
+                if sources.member(cls, name) is not None or name in assigned:
+                    continue
+                if name not in signatures:
+                    issues.append(issue("warning" if dynamic else "error",
+                        "unverified_app_method" if dynamic else "unknown_app_method",
+                        f"{relative}:{call.lineno}",
+                        f"self.{name} is not defined by the App or the pinned Kit API; verify dynamic dispatch."))
                     continue
                 uses_gateway |= name in {"emit", "request_recording"}
                 if name == "request_recording":
@@ -349,3 +372,36 @@ def result_contract_issues(manifest, source):
     for event in sorted(set(source.get("recording_events", [])) - allowed):
         result.append(issue("error", "undeclared_recording_event", "record_trigger", f"Recording event {event!r} is not authorized by the manifest."))
     return result
+
+
+def detector_contract_issues(trees, manifest):
+    """The standard detector's defaults only describe 640/COCO80 models."""
+    models = manifest.get("models") or []
+    if not isinstance(models, list) or not models or not isinstance(models[0], dict):
+        return []
+    primary = models[0]
+    shape = primary.get("input") or []
+    custom_size = isinstance(shape, list) and len(shape) >= 3 and shape[1:3] != [640, 640]
+    classes = primary.get("classes")
+    custom_classes = classes is not None and classes != "coco80"
+    sources = Sources(trees, manifest.get("entry", "app.py"))
+    for module in sources.modules:
+        sources.scan(module)
+    issues = []
+    for module, tree in sources.modules.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or sources.resolve(module, node.func) != (
+                "external", "kit.runtime.postprocess.detect.postprocess"
+            ):
+                continue
+            keys = {k.arg for k in node.keywords}
+            if None in keys or any(isinstance(a, ast.Starred) for a in node.args):
+                issues.append(issue("warning", "detector_parameters_unverified", sources.paths[module],
+                                    "Dynamic postprocess arguments require a model-specific smoke test."))
+                continue
+            for needed, name, position in ((custom_size, "input_size", 4), (custom_classes, "class_names", 5)):
+                if needed and name not in keys and len(node.args) <= position:
+                    issues.append(issue("error", "missing_detector_model_parameter",
+                                        f"{sources.paths[module]}:{node.lineno}",
+                                        f"Custom detector must pass {name}; postprocess defaults to 640/COCO80."))
+    return issues

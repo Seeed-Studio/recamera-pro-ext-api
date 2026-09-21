@@ -1,13 +1,13 @@
 ---
 name: recamera-pysdk
-description: "Assess and build reCamera Pro (RV1126B) Python SDK apps; package by default after offline validation, bundling target-compatible private Python wheels for the device-side per-release environment without modifying the device or shared Python runtime."
+description: "Develop and package reCamera Pro (RV1126B) Python SDK apps, including ONNX-to-RKNN conversion, dependency/API checks and controlled runtime tests; optionally upload, install and verify an app on a user-provided device."
 ---
 
 # reCamera Pro Python Development
 
 Turn a natural-language idea into an installable reCamera Pro App package
 (`.tar.gz`) that the device App Center can run. Use this skill only for
-reCamera Pro / RV1126B Python extension SDK Apps. It has three outcomes:
+reCamera Pro / RV1126B Python extension SDK Apps. It has four outcomes:
 
 1. Decide whether the requested behavior is supported by the published SDK.
 2. When supported, write or modify the App's Python source using the real SDK
@@ -15,6 +15,8 @@ reCamera Pro / RV1126B Python extension SDK Apps. It has three outcomes:
 3. For an App Center deliverable, once the code passes offline validation, build a deterministic
    App archive containing the App and its non-platform Python dependencies as
    original target-compatible wheels under `wheels/`.
+4. When the user requests device delivery/testing and supplies access, upload
+   the verified archive and optionally install/verify it through AppMgr.
 
 ## Authoritative source
 
@@ -33,17 +35,21 @@ substitute a hand-made archive or an unverified SDK revision.
 ## Scope and boundaries
 
 This skill may build the App archive described in
-[app-packaging.md](references/app-packaging.md). It must not install, sign,
-deploy, change firmware or Buildroot, modify AppMgr, or change any system or
-shared Python environment. Device-side extraction and launch-time environment
-assembly are the device's job. Keep any hardware validation read-only and
-narrow. Device access is optional: source generation, static validation, and
-packaging must all work with no device connected.
+[app-packaging.md](references/app-packaging.md) and deliver/test that App within
+the user's authorized scope using [runtime-validation.md](references/runtime-validation.md).
+Providing device access for upload does not by itself request installation or
+starting hardware actions. Honor installation/testing authorization already
+given in the session; do not ask again just because a helper has an explicit
+action flag. Do not sign, change firmware/Buildroot/AppMgr, overwrite live App
+directories, or change the shared Python environment. Extraction, per-release
+environment assembly and lifecycle remain AppMgr's job. Device access is
+optional; offline development and packaging must work without a device.
 
 Keep four evidence levels distinct in every report: the public `recamera_ext`
 API contract; the Kit/AppMgr packaging and launch contract; this skill's own
-conservative publication and safety gates; and single-device evidence (imports,
-sockets, logs), which proves presence only, never end-to-end success.
+conservative publication gates; and actual device observations. Read-only
+inventory (imports, sockets, logs) alone proves presence, not end-to-end
+success; report lifecycle, result delivery and task behavior separately.
 
 ## Workflow
 
@@ -86,6 +92,16 @@ output has **no unified public playback API**; an audible alarm is a conditional
 **firmware ALSA path** (`aplay` / `libasound`), and real sound requires an
 authorized hardware test. Never invent a `recamera_ext` playback call. Read
 [audio-playback.md](references/audio-playback.md) before implementing any audio.
+
+When a new model or ONNX conversion is needed, read
+[model-conversion.md](references/model-conversion.md). Use the matching pinned
+Rockchip Model Zoo example, an isolated host Toolkit2 environment and an
+explicit preprocessing contract. `scripts/convert_model.py` covers static
+single-image models, FP/INT8 builds and optional ONNX-versus-simulator checks;
+model-specific exports/hybrid quantization need their own reviewed recipe.
+Keep conversion, numerical validation and device validation separate. A supplied
+compatible RKNN does not require reconversion, and converter dependencies must
+not enter the App wheelhouse.
 
 ### 4. Preserve the SDK and AppMgr contracts
 
@@ -148,8 +164,11 @@ python scripts/validate_app.py --app-dir <app> --mode demo
 
 Fix every error before returning the App. Warnings and
 `runtime_preconditions_unverified` mark work that still needs SDK, firmware,
-model, or hardware confirmation. Also run the narrowest relevant pure-Python
-tests. Never fail an otherwise valid Demo just because no device is connected,
+model, or hardware confirmation. Test model-specific postprocessing against
+known outputs, including input size, class count and original-image coordinates.
+The packager checks mandatory source imports against local modules, platform
+modules and bundled wheels even when `python.imports` is empty. Dynamic imports
+and dispatch still need runtime tests. Never fail an otherwise valid Demo just because no device is connected,
 and never claim device execution unless it was actually observed. For an
 installed App that will not start, the read-only
 `scripts/diagnose_managed_app.py --host <user>@<target-host> --app-id <id>`
@@ -157,7 +176,7 @@ correlates the manifest, release lock, AppMgr history, gateway socket, and logs.
 
 ### 6. Build the requested App Center package
 
-For an App Center deliverable, packaging completes the task. Standalone SDK
+For an App Center deliverable, create and verify the package. Standalone SDK
 demos or a user-requested source-only change do not require a package. Read
 [app-packaging.md](references/app-packaging.md), then run the bundled helper:
 
@@ -203,11 +222,31 @@ files.sha256
 
 The device AppMgr applies channel-specific signature policy, safe extraction, per-release
 environment construction, activation, and rollback; it does not run pip. This
-skill does not install anything on the device, sign the archive, or hold a
-private key. A structurally valid unsigned archive is not automatically
+skill does not sign the archive or hold a private key. A structurally valid unsigned archive is not automatically
 accepted by every device or publication channel. Read `/api/app-center/v1/policy`
 when assessing installation: current local Web upload permits unsigned packages;
-other channels can require a signature. This skill remains build-only.
+other channels can require a signature.
+
+### 7. Validate the artifact and optionally deliver to the device
+
+Read [runtime-validation.md](references/runtime-validation.md). In an isolated
+host environment with the compatible SDK, run `scripts/smoke_app.py` against
+the **final archive**, using the real Kit loader and an app-specific bounded
+`smoke(app)` hook with controlled frames/model outputs. The packager remains
+non-executing. Native target wheels or missing host runtime can prevent this
+test; report it as unverified and use the target runtime rather than replacing
+dependencies with incompatible host wheels.
+
+With a user-provided IP/user and SSH key or password, `scripts/deploy_app.py`
+defaults to **upload only** with SHA-256 verification. For authorized device
+installation/testing, choose `--action install` or `--action verify`. It uses
+the official preflight/permission/async-operation APIs; verify also checks
+start/stop/restart and current-instance results. Never silently replace an
+existing App; `--replace` reflects user authorization for that specific App.
+Device verification is not complete just because a PID or socket exists.
+Use known scene/sample assertions for task accuracy and check requested
+overlays, recording, GPIO/audio behavior separately. Without target access,
+deliver the archive and clearly mark device acceptance **not run**.
 
 ## Output expectations
 
@@ -218,7 +257,10 @@ preconditions and any unverified hardware-dependent path, and deliver the
 packaged artifact for App Center requests: report the archive and build-report paths, bundled
 versus platform-provided dependencies, and the fixed platform contract. If
 packaging cannot run because a wheelhouse input is missing, state the missing
-input explicitly.
+input explicitly. Report separate evidence for static/package validation,
+host loader/mock loop, model numerical comparison (when applicable), device
+upload/install/lifecycle/result delivery, and task-specific behavior. A failed,
+pending or unverified stage must not be described as device acceptance passed.
 
 ## Maintaining the fixed contract
 
@@ -228,5 +270,6 @@ A mismatch requires review, not an automatic update during a user's build.
 Both validators use the selected official manifest module. Build reports record
 commit, dirty status and file hashes; exported non-Git overrides have unknown
 commit/dirty status. API call and entry checks use AST only: dynamic exports are
-reported as unverified, never executed on the development host. Run
+reported as unverified by the static checks; only the separate smoke helper
+executes trusted application code with a bounded lifetime. Run
 `uv run --frozen pytest skill/recamera-pysdk/tests` when maintaining this skill.

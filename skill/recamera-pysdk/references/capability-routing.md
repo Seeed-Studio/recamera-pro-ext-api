@@ -23,6 +23,7 @@ extension runtime by directly accessing RKIPC internals or media devices.
 | --- | --- | --- | --- |
 | Consume camera frames for custom CPU vision | Supported with preconditions | `recamera_ext.FrameSource` | Requires the frame extension runtime and live frame socket. Frames are NV12 DMA-BUF backed; use the Y plane or `to_bgr()` when BGR is needed. |
 | Run custom RKNN inference and publish detection, classification, tracking, keypoints, or segmentation | Supported with preconditions | `kit` or direct `FrameSource` + `ResultSink` | Requires a compatible supplied/provisioned model/runtime. Prefer kit for standard model pipelines. |
+| Convert a supplied ONNX model for RV1126B | Supported with preconditions | Host RKNN-Toolkit2; [model-conversion.md](model-conversion.md) | Needs the exact preprocessing/output contract and supported operators; INT8 needs calibration data. Build success does not prove accuracy or device compatibility. |
 | Draw external results in official OSD and emit them to recording/push channels | Supported with preconditions | `recamera_ext.ResultSink` | Requires the result extension runtime and live result socket. Send normalized coordinates and the matching frame PTS. |
 | Clear the app's OSD results | Supported with preconditions | `ResultSink.send_detections(..., boxes=[])` | Requires `ResultSink`; the same `source_id` updates a single logical slot. |
 | Observe built-in NPU metrics, preprocessing output, raw NPU output, or postprocessing output | Supported with preconditions | `recamera_ext.ProbeSource` | The requested probe stage must be exposed by the installed SDK/firmware. Treat this as read-only observation. |
@@ -117,7 +118,7 @@ Keep these claims separate in the implementation report:
 
 - **SDK contract:** a public binding, documented request, and current source/example establish that an API exists.
 - **AppMgr/packaging contract:** the Kit lifecycle, manifest, artifact, dependency, and official-builder rules establish how an App is packaged and launched.
-- **Skill policy:** offline validation, wheel closure checks, read-only probing, and publication gates are safeguards added by this Skill.
+- **Skill policy:** offline validation, wheel closure checks, controlled host tests, optional authorized device delivery/acceptance, and publication gates are checks added by this Skill.
 - **Device evidence:** imports, libraries, sockets, processes, ALSA cards, GPIO inventories, and logs describe one firmware instance only. They do not prove board wiring, pinmux, permissions, API support, or end-to-end success.
 
 In particular, never promote the presence of playback hardware into an SDK capability. For GPIO, also verify the board mapping, pinmux, gmgr or documented event route, permissions, and electrical load before enabling an output. Likewise, successful archive creation proves only the packaging contract; if AppMgr records that an App started and exited, inspect its runtime logs and dependencies separately and never report archive success as device execution success.

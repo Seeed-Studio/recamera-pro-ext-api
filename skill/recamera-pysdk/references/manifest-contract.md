@@ -248,6 +248,8 @@ syntax rules.
 Offline validation cannot prove that the target has the matching kit and
 `recamera_ext` runtime, that RKNN can load a model, that extension sockets are
 live, that ALSA/GPIO permissions are present, or that real events and overlays
-appear correctly. Report those as runtime preconditions and perform optional
-read-only device testing only when a device is available and the user permits
-it.
+appear correctly. Report those as runtime preconditions. With device access
+and authorization for delivery/testing, follow
+[runtime-validation.md](runtime-validation.md) for upload, AppMgr installation
+and lifecycle/result checks. Read-only diagnosis remains available without
+installing or starting an App.

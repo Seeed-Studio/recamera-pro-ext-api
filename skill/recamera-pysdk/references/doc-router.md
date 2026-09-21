@@ -57,7 +57,7 @@ retain the device precondition.
 | `docs/guide/hw-preprocess.md` | Using hardware ROI/resize/preprocess for model inputs | Hardware implementation guide | Closest official App, preprocess code, geometry mapping |
 | `docs/guide/inference-as-app.md` | Structuring model inference as an installable Kit App | Implementation guide | `kit/app.py`, manifest contract, closest current App |
 | `docs/guide/kit-design.md` | Understanding Kit abstractions, responsibilities, or extension points | Design and implementation mixed; may contain stale descriptions | Current `kit/app.py`; code wins over prose |
-| `docs/guide/model-onboarding.md` | Adding an RKNN model, labels, preprocessing, and manifest metadata | Implementation guide | Closest App, model loader, target RKNN compatibility |
+| `docs/guide/model-onboarding.md` | Adding an RKNN model, labels, preprocessing, and manifest metadata | SDK entrypoint to the self-contained skill conversion workflow | [model-conversion.md](model-conversion.md), selected Model Zoo example, closest App, model loader |
 | `docs/guide/output-sink.md` | Declaring output fields, mappings, channels, and sinks | Kit component/manifest implementation guide | Manifest/output tests and output implementation; not the base ResultSink API |
 | `docs/guide/per-app-dependencies.md` | Understanding dependency-isolation design background | Design/background document | `market/appmgr/pythonenv.py` and `market/packaging/build.py`; do not infer current behavior from this document alone |
 | `docs/guide/python-ai-api.md` | Checking which Python AI interfaces currently exist and their per-layer lifecycle/availability (`recamera_ext`, `kit`, RGA, RKNN, NPU broker, managed launch) | Current Python AI API/lifecycle overview with target-verification status (Chinese) | `sdk/python/recamera_ext`, `kit/`, `market/appmgr`, and the named per-layer source |
@@ -80,6 +80,11 @@ current code and record the discrepancy.
 
 ## Conditional skill references
 
+- Final-archive Kit loader/mock-loop checks, SSH/password upload, official
+  AppMgr installation and current-instance runtime acceptance:
+  [runtime-validation.md](runtime-validation.md).
+- New models, ONNX inspection, Toolkit2 setup, FP/INT8 conversion and validation:
+  [model-conversion.md](model-conversion.md).
 - Recording rules, explicit clip requests, legacy FRAME compatibility:
   [recording.md](recording.md).
 - Kit entry/lifecycle and current-instance diagnosis:

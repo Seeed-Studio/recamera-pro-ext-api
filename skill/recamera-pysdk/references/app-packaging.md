@@ -18,8 +18,9 @@ build contract, not an installation or device-modification procedure.
   safely extracts the archive, and builds a per-App/per-release environment. It
   does not run pip or access a package index.
 
-The skill never installs packages, changes shared Python, signs an archive, or
-handles a private signing key.
+The packaging helper never installs packages or executes app code. Optional
+AppMgr delivery/testing uses [runtime-validation.md](runtime-validation.md).
+The skill never changes shared Python, signs an archive, or handles a private signing key.
 
 ## Fixed platform contract
 
@@ -41,6 +42,12 @@ mismatch. `validate_app.py` checks the same contract in `package`/`publish`
 modes.
 
 ## Inputs
+
+If the model is still ONNX, complete [model-conversion.md](model-conversion.md)
+first. Its helper emits a compiled RKNN, validation report and model/artifact
+manifest fragment. Merge the fragment into the full v2 manifest after checking
+the app's preprocessing and postprocessing. Keep host conversion dependencies,
+datasets and reports outside the App payload.
 
 Run `scripts/package_app.py` with the following inputs. `--wheelhouse`,
 `--requirements`, `--sdk-root`, and `--payload-root` may be omitted:
@@ -143,11 +150,20 @@ The wheelhouse is an explicit input. The helper reads `METADATA` and
 `Requires-Dist` from each wheel and resolves the complete transitive closure
 offline. Missing wheels, unsatisfied version constraints, unsupported markers,
 source distributions, duplicate distributions, unsafe wheel members, and
-platform-owned wheel copies fail the build. The helper does not infer
-dependencies from imports, does not download anything, and does not expand
+platform-owned wheel copies fail the build. The helper checks mandatory source
+imports against local modules, platform imports and wheel top-level modules;
+it does not guess distribution names or versions from imports, download anything, or expand
 wheels into `site-packages`. The resolved dependency edges are recorded in the
 skill build report only; they are not added to the SDK-defined
 `release.lock.json`.
+
+Missing mandatory source imports fail both staged and final-archive checks,
+even if `python.imports` is empty. Private wheel modules actually imported by
+the source are added to the staged `python.imports` so AppMgr probes them at
+installation. Lazy imports are included. `TYPE_CHECKING` imports are ignored;
+`try/except ImportError` imports are recorded as optional/unverified. Dynamic
+imports, optional branches and submodule availability still need runtime tests.
+Only packaged source is scanned; keep unrelated tests/tools outside the App.
 
 ### Wheel tag rule
 
@@ -172,6 +188,12 @@ helper refuses to bundle them. Import them directly instead:
 cv2, jinja2, kit, markupsafe, numpy, recamera-ext, recamera-pro-kit,
 rknn-toolkit-lite2, rknnlite
 ```
+
+These are **distribution names**, not all Python import names. In source and
+`python.imports`, use `recamera_ext` (distribution `recamera-ext`), `kit`
+(`recamera-pro-kit`) and `rknnlite` (`rknn-toolkit-lite2`). The helper maintains
+a separate platform import allowlist rather than treating hyphenated project
+names as importable modules.
 
 A dependency on a platform-owned project is recorded in the build report as
 `platform_packages` with `source: "platform"` and `version: null`; its version

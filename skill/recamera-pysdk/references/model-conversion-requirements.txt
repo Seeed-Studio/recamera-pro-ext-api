@@ -1,0 +1,13 @@
+# Host conversion environment only; never include this file/dependencies in an App.
+# Install torch==2.4.0 from the official CPU index first (see model-conversion.md).
+# Official Toolkit2 wheel pinned by source revision and SHA-256.
+rknn-toolkit2 @ https://raw.githubusercontent.com/airockchip/rknn-toolkit2/59a913d172e7f5ff03c9076e2ec7b1b1288ffd08/rknn-toolkit2/packages/x86_64/rknn_toolkit2-2.3.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl#sha256=a05a8fd7515705ebdbb06a965c80b0090af61f7e716f1ed326a3aa5e313f23fb
+torch==2.4.0
+numpy==1.26.4
+onnx==1.16.1
+onnxruntime==1.18.1
+opencv-python==4.10.0.84
+protobuf==4.25.4
+# Toolkit2 2.3.2 imports pkg_resources, removed by newer setuptools releases.
+setuptools==75.8.2
+Pillow>=10,<13

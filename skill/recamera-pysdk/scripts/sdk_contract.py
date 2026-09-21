@@ -94,16 +94,17 @@ def api_signatures(source: str) -> dict:
     app = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "App")
     result = {}
     for node in app.body:
-        if not isinstance(node, ast.FunctionDef) or node.name not in {
-            "emit", "request_recording", "pre", "crop_roi_hw", "frames"
-        }:
+        if not isinstance(node, ast.FunctionDef) or any(
+            isinstance(d, ast.Name) and d.id == "property" for d in node.decorator_list
+        ):
             continue
         args = node.args
         positional = args.posonlyargs + args.args
+        offset = 0 if any(isinstance(d, ast.Name) and d.id == "staticmethod" for d in node.decorator_list) else 1
         result[node.name] = {
-            "positional": [p.arg for p in positional[1:]],
-            "posonly": max(0, len(args.posonlyargs) - 1),
-            "required": max(0, len(positional) - 1 - len(args.defaults)),
+            "positional": [p.arg for p in positional[offset:]],
+            "posonly": max(0, len(args.posonlyargs) - offset),
+            "required": max(0, len(positional) - offset - len(args.defaults)),
             "keyword_only": [p.arg for p in args.kwonlyargs],
             "required_keywords": [p.arg for p, d in zip(args.kwonlyargs, args.kw_defaults) if d is None],
             "varargs": bool(args.vararg), "kwargs": bool(args.kwarg),

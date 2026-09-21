@@ -42,7 +42,9 @@ class MyApp(App):
             x = self.pre(frame)
             outs = self.models.det.infer(x)          # raw RKNN head tensors
             dets = postprocess(outs, x.info,
-                               conf_thres=self.conf, iou_thres=self.iou)
+                               conf_thres=self.conf, iou_thres=self.iou,
+                               input_size=self._pre_size,
+                               class_names=self.class_names)
             self.emit([E.detection(d) for d in dets], frame.pts, results=dets)
 
 
@@ -65,6 +67,14 @@ original frame pixels. Its signature is
 class_names=COCO80)` and it returns a list of
 `{"box": [x1, y1, x2, y2], "cls": int, "cls_name": str, "score": float}` sorted
 by score descending, with `box` in original-frame pixel `xyxy`.
+
+Always supply the actual model input size and class names, as in the example.
+Omitting them for a 320-pixel model doubles DFL coordinates; omitting the
+custom class count can discard all class branches and return no detections.
+`self._pre_size` and `self.class_names` describe the primary model. Multi-model
+pipelines must pass each model's own geometry and labels. Test known raw heads
+with expected boxes/classes before device testing; numerical tensor agreement
+alone does not verify postprocessing.
 
 Two recurring bugs that produce "inference runs but no box ever appears":
 

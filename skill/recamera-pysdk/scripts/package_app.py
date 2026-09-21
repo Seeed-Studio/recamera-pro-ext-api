@@ -100,6 +100,7 @@ from sdk_contract import (
     selected_api_signatures,
 )
 from source_contract import inspect_sources, result_contract_issues
+from dependency_contract import PLATFORM_IMPORTS, check_imports
 
 # manifest.py:_SEMVER_RE equivalent; the official validator remains the judge.
 _SEMVER_RE = re.compile(
@@ -617,7 +618,7 @@ def validate_imports(
     provided: set[str] = set(payload_modules)
     for wheel in bundled:
         provided |= wheel.get("top_level") or set()
-    provided |= PLATFORM_OWNED_PROJECTS
+    provided |= PLATFORM_IMPORTS
     stdlib = set(getattr(sys, "stdlib_module_names", frozenset()))
     for module in imports:
         root = str(module).split(".", 1)[0]
@@ -780,6 +781,15 @@ def update_manifest(
         if not _IMPORT_RE.fullmatch(module):
             raise PackagingError(f"manifest.python.imports entry {module!r} is not a module name")
     validate_imports(imports, wheels, payload_modules)
+    trees = [(p.relative_to(staging).as_posix(), ast.parse(p.read_bytes()))
+             for p in staging.rglob("*.py") if "wheels" not in p.relative_to(staging).parts]
+    dependency_check = check_imports(trees, result["entry"],
+                                    {root for w in wheels for root in w.get("top_level", [])}, imports)
+    if dependency_check["missing"]:
+        raise PackagingError("unresolved source imports: " + json.dumps(dependency_check["missing"]))
+    # Make the device probe the private modules actually used by the source,
+    # even if the author forgot python.imports in the input manifest.
+    imports = sorted(set(imports) | set(dependency_check["private_imports"]))
     if wheels and not imports:
         # Not fatal: an app may import bundled wheels lazily by full path, but
         # the installer's import probe then covers nothing.
@@ -1014,12 +1024,26 @@ def _verify_final_archive(archive: Path, expected_manifest: dict, sdk_root: Path
                         raise PackagingError(f"invalid archived Python source {name}: {error}") from error
             source = inspect_sources(trees, manifest["entry"], selected_api_signatures(sdk_root))
             source["issues"].extend(result_contract_issues(manifest, source))
+            from source_contract import detector_contract_issues
+            source["issues"].extend(detector_contract_issues(trees, manifest))
+            wheel_roots = set()
+            for wheel in manifest.get("python", {}).get("wheels", []):
+                wheel_file = wheel.get("file")
+                if wheel_file:
+                    import io
+                    with zipfile.ZipFile(io.BytesIO(package.extractfile(wheel_file).read())) as zipped:
+                        wheel_roots |= _wheel_top_level_modules(zipped)
+            source["dependencies"] = check_imports(trees, manifest["entry"], wheel_roots,
+                                                    manifest.get("python", {}).get("imports", []))
+            if source["dependencies"]["missing"]:
+                raise PackagingError("final archive unresolved source imports: " + json.dumps(source["dependencies"]["missing"]))
             source_issues = source["issues"]
             errors = [i for i in source_issues if i["severity"] == "error"]
             if errors:
                 raise PackagingError("final archive source contract failed: " + json.dumps(errors))
             return {
                 "manifest": manifest,
+                "release_id": release_lock.get("release_id"),
                 "source_contract": source,
                 "records": records,
                 "artifacts": artifact_summary,
@@ -1035,6 +1059,18 @@ def _verify_final_archive(archive: Path, expected_manifest: dict, sdk_root: Path
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
+def inspect_archive(archive: Path, sdk_root: Path | None = None) -> dict:
+    """Verify an existing final archive before smoke testing or transfer."""
+    if archive.stat().st_size > MAX_PACKAGE_BYTES:
+        raise PackagingError("archive exceeds the device package cap")
+    with tarfile.open(archive, "r:gz") as package:
+        member = package.getmember("manifest.json")
+        if not member.isfile() or member.size > 1024 * 1024:
+            raise PackagingError("invalid or oversized archive manifest")
+        manifest = json.load(package.extractfile(member))
+    return _verify_final_archive(archive, manifest, find_sdk_root(sdk_root))
+
+
 def build(
     app_dir: Path,
     out_dir: Path,

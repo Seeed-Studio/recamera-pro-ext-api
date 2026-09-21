@@ -19,7 +19,7 @@ from typing import Any
 
 from sdk_contract import (ContractError, find_sdk_root, load_sdk_contract,
                           provenance, selected_api_signatures)
-from source_contract import inspect_sources, result_contract_issues
+from source_contract import inspect_sources, result_contract_issues, detector_contract_issues
 
 
 APP_ID_PATTERN = re.compile(r"[a-z0-9-]{1,64}")
@@ -1045,6 +1045,7 @@ def validate_app(
         source = inspect_sources(trees, str(entry or "app.py"), selected_api_signatures(sdk_root),
                                  require_entry=mode in {"package", "publish"})
         issues.extend(source["issues"])
+        issues.extend(detector_contract_issues(trees, manifest))
         if mode in {"package", "publish"}:
             issues.extend(result_contract_issues(manifest, source))
         _validate_output_paths(manifest, trees, issues)

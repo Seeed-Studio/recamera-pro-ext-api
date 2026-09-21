@@ -225,6 +225,7 @@ def test_documented_detector_preserves_deferred_input():
     app.pre = lambda frame: prepared
     app.models = SimpleNamespace(det=SimpleNamespace(infer=lambda value: inputs.append(value) or []))
     app.conf, app.iou = 0.5, 0.5
+    app._pre_size = 640
     app.emit = lambda *args, **kwargs: emissions.append((args, kwargs))
     namespace["postprocess"] = lambda outs, info, **kw: []
     app.run()

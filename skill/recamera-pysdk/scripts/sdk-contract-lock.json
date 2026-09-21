@@ -6,9 +6,277 @@
   },
   "commit": "60e0f2ade601152c3dd7bf7e228297cc8203a2ed",
   "kit_api": {
-    "crop_roi_hw": {
+    "__init__": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
       "keyword_only": [],
-      "kwargs": false,
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "setup": {
+      "positional": [
+        "config"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "prepare_runtime": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_reload_params": {
+      "positional": [
+        "config"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_reload_float": {
+      "positional": [
+        "params",
+        "key",
+        "cur"
+      ],
+      "posonly": 0,
+      "required": 3,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_reload_int": {
+      "positional": [
+        "params",
+        "key",
+        "cur"
+      ],
+      "posonly": 0,
+      "required": 3,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "on_config_reload": {
+      "positional": [
+        "config"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_install_reload_handler": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_install_stop_handlers": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_on_sighup": {
+      "positional": [
+        "signum",
+        "frame"
+      ],
+      "posonly": 0,
+      "required": 2,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_on_stop_signal": {
+      "positional": [
+        "signum",
+        "frame"
+      ],
+      "posonly": 0,
+      "required": 2,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_restore_signal_handlers": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_maybe_reload": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_load_model": {
+      "positional": [
+        "path"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "on_params_changed": {
+      "positional": [
+        "changed"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_bind_params": {
+      "positional": [
+        "config"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [
+        "live_only"
+      ],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_bind_class_names": {
+      "positional": [
+        "decls",
+        "app_dir"
+      ],
+      "posonly": 0,
+      "required": 2,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "start": {
+      "positional": [
+        "model_path"
+      ],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [
+        "source",
+        "url",
+        "sink",
+        "n",
+        "every",
+        "skip_gray_std",
+        "max_gray_skip",
+        "verbose",
+        "app_dir",
+        "manifest",
+        "config"
+      ],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_start_impl": {
+      "positional": [
+        "model_path"
+      ],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [
+        "source",
+        "url",
+        "sink",
+        "n",
+        "every",
+        "skip_gray_std",
+        "max_gray_skip",
+        "verbose",
+        "app_dir",
+        "manifest",
+        "config"
+      ],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "finish": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "frames": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "_warm_up": {
+      "positional": [
+        "frame"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "pre": {
+      "positional": [
+        "frame"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "crop_roi_hw": {
       "positional": [
         "frame",
         "box",
@@ -17,56 +285,76 @@
       ],
       "posonly": 0,
       "required": 3,
-      "required_keywords": [],
-      "varargs": false
-    },
-    "emit": {
-      "keyword_only": [
-        "results",
-        "geometry",
-        "extra"
-      ],
-      "kwargs": false,
-      "positional": [
-        "events",
-        "ts"
-      ],
-      "posonly": 0,
-      "required": 0,
-      "required_keywords": [],
-      "varargs": false
-    },
-    "frames": {
       "keyword_only": [],
-      "kwargs": false,
-      "positional": [],
-      "posonly": 0,
-      "required": 0,
       "required_keywords": [],
-      "varargs": false
+      "varargs": false,
+      "kwargs": false
     },
-    "pre": {
-      "keyword_only": [],
-      "kwargs": false,
+    "_warn_roi_hw": {
       "positional": [
-        "frame"
+        "e"
       ],
       "posonly": 0,
       "required": 1,
+      "keyword_only": [],
       "required_keywords": [],
-      "varargs": false
+      "varargs": false,
+      "kwargs": false
+    },
+    "_render_block": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
     },
     "request_recording": {
-      "keyword_only": [],
-      "kwargs": false,
       "positional": [
         "event_kind",
         "ts"
       ],
       "posonly": 0,
       "required": 1,
+      "keyword_only": [],
       "required_keywords": [],
-      "varargs": false
+      "varargs": false,
+      "kwargs": false
+    },
+    "emit": {
+      "positional": [
+        "events",
+        "ts"
+      ],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [
+        "results",
+        "geometry",
+        "extra"
+      ],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "tick": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
+    },
+    "run": {
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "keyword_only": [],
+      "required_keywords": [],
+      "varargs": false,
+      "kwargs": false
     }
   },
   "repository": "https://github.com/Seeed-Studio/recamera-pro-ext-api",
