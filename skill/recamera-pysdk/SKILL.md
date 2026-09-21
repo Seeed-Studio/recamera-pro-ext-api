@@ -12,7 +12,7 @@ reCamera Pro / RV1126B Python extension SDK Apps. It has three outcomes:
 1. Decide whether the requested behavior is supported by the published SDK.
 2. When supported, write or modify the App's Python source using the real SDK
    API and the current `kit` application shape.
-3. By default, once the code passes offline validation, build a deterministic
+3. For an App Center deliverable, once the code passes offline validation, build a deterministic
    App archive containing the App and its non-platform Python dependencies as
    original target-compatible wheels under `wheels/`.
 
@@ -23,7 +23,7 @@ The compatible public SDK upstream is
 It is the source for API docs, bindings, Kit code, official Apps, examples, and
 the packaging implementation. For default packaging this skill bundles the
 fixed official builder from public commit
-`525addec801680f6aabbbb7605d6de3bb390348a` under `scripts/sdk-builder/` and
+`60e0f2ade601152c3dd7bf7e228297cc8203a2ed` under `scripts/sdk-builder/` and
 verifies its three SDK files by SHA-256, so no local SDK checkout is required.
 A complete local checkout is only an explicit override via `--sdk-root` or
 `RECAMERA_SDK_ROOT`. Never embed a host, account, password, private path, or
@@ -63,14 +63,18 @@ work. Ask a focused question only when a decision materially changes the app.
 
 Read [doc-router.md](references/doc-router.md), then load only the documents the
 current feature needs. Prefer a user-provided compatible checkout; otherwise
-resolve the official public upstream HEAD once to a full commit SHA, record it
-as `sdk_source_commit`, and use only content pinned to that SHA. Do not preload
+use the bundled pinned commit as the documentation baseline. If newer APIs are
+needed, resolve and record an explicit revision and compare its contract before
+using it; do not mix newer examples with an older packager silently. Do not preload
 all of `docs/`. If GitHub cannot be read, work only from the bundled stable
 contracts and classify the unverified part as **Supported with preconditions**.
 
 ### 3. Select the development layer
 
-Use `recamera_ext` directly for a small frame-to-logic-to-result program; use
+Use `recamera_ext` directly for a standalone SDK demo. App Center packages must
+expose a `kit.app.App` subclass/instance through the manifest entry; a plain
+script is not launchable by `kit.run`. A thin Kit lifecycle wrapper may use
+direct SDK primitives without duplicating camera or result ownership. Use
 `kit` for model-backed vision, tracking, zones, OCR, pose, temporal logic,
 config hot reload, or the common output pipeline; use `ProbeSource` only to
 observe built-in inference. Read
@@ -107,14 +111,20 @@ enforces the ones that can be checked offline.
 - Keep the entry at the package root (for example `app.py`) when models,
   classes, or artifacts are declared; a subdirectory entry with package-root
   resources fails device-side model authorization.
-- **Managed result endpoint:** a model/output App uses
-  `instances.endpoint_mode: "allocated"`, declares exactly one `result.publish`
-  claim with `mode: "brokered"`, and publishes only through `kit.App.emit()`.
-  `shared` selects `result.ingress`, does not inject
-  `RECAMERA_RESULT_GATEWAY_SOCK`, and makes Kit fall back to its child-owned
-  `8124` sink. Never construct a result sink, select `ws`/`osd`, set AppMgr
-  identity variables, or bind the reserved `8124` port.
-- **Frontend boxes:** a Kit detector is frontend-renderable only when the
+- **Result route:** Kit `App.emit()` and `App.request_recording()` use exactly
+  one `result.publish: brokered` claim and `endpoint_mode: allocated`.
+  Direct SDK `ResultSink` uses `result.publish: shared/exclusive` ingress.
+  Do not infer gateway requirements merely from the existence of a model.
+  Never bind the reserved `8124` port or override AppMgr identity variables.
+- **Recording:** read [recording.md](references/recording.md) for manifest
+  authorization, explicit requests and legacy FRAME compatibility. `OsdSink`
+  and `RecordSink` are AppMgr-only despite being exported by the Python module.
+- **DMA:** for synchronous model-only frame consumption, use `hw-direct`,
+  `model_dma_input = True`, and `infer(prepared)`; read the lifetime and RGB/BGR
+  rules in [kit-app-patterns.md](references/kit-app-patterns.md). Keep ndarray
+  input and CPU/original-pixel paths where the application needs them.
+- **Optional frontend boxes:** data-only applications need no renderer. When
+  browser overlay is requested, a Kit detector is frontend-renderable only when the
   manifest declares `output.contract_version: 2`, `output.sink: "ws"`, a direct
   `output.fields[]` entry named `box` from `results[].box` with one consistent
   `coord` (`pixel_xyxy` or `normalized_xyxy`), and `render.schema_version: 1`
@@ -145,9 +155,10 @@ installed App that will not start, the read-only
 `scripts/diagnose_managed_app.py --host <user>@<target-host> --app-id <id>`
 correlates the manifest, release lock, AppMgr history, gateway socket, and logs.
 
-### 6. Package by default once validation passes
+### 6. Build the requested App Center package
 
-Packaging is a required completion gate, not optional. Read
+For an App Center deliverable, packaging completes the task. Standalone SDK
+demos or a user-requested source-only change do not require a package. Read
 [app-packaging.md](references/app-packaging.md), then run the bundled helper:
 
 ```text
@@ -190,11 +201,13 @@ release.lock.json
 files.sha256
 ```
 
-The device AppMgr handles signature verification, safe extraction, per-release
+The device AppMgr applies channel-specific signature policy, safe extraction, per-release
 environment construction, activation, and rollback; it does not run pip. This
 skill does not install anything on the device, sign the archive, or hold a
 private key. A structurally valid unsigned archive is not automatically
-accepted by every device or publication channel.
+accepted by every device or publication channel. Read `/api/app-center/v1/policy`
+when assessing installation: current local Web upload permits unsigned packages;
+other channels can require a signature. This skill remains build-only.
 
 ## Output expectations
 
@@ -202,7 +215,18 @@ For an unsupported request, give a concise feasibility conclusion and the
 precise blocker; do not create fake source files. For a supported request, name
 the selected SDK layer, make the Python edit, call out the important runtime
 preconditions and any unverified hardware-dependent path, and deliver the
-packaged artifact by default: report the archive and build-report paths, bundled
+packaged artifact for App Center requests: report the archive and build-report paths, bundled
 versus platform-provided dependencies, and the fixed platform contract. If
 packaging cannot run because a wheelhouse input is missing, state the missing
 input explicitly.
+
+## Maintaining the fixed contract
+
+Run `python scripts/sdk_contract.py --sdk-root <checkout>` to detect changes to
+manifest/build/dependency admission, Kit APIs, recording and resource routing.
+A mismatch requires review, not an automatic update during a user's build.
+Both validators use the selected official manifest module. Build reports record
+commit, dirty status and file hashes; exported non-Git overrides have unknown
+commit/dirty status. API call and entry checks use AST only: dynamic exports are
+reported as unverified, never executed on the development host. Run
+`uv run --frozen pytest skill/recamera-pysdk/tests` when maintaining this skill.

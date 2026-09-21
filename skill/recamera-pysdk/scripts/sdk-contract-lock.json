@@ -1,0 +1,88 @@
+{
+  "bundled_files": {
+    "market/appmgr/__init__.py": "56cfe9c2fea0f108b3a0490da54ddcb209cac28ed9931cd90b6e0a3c3f46b648",
+    "market/appmgr/manifest.py": "2162425693e8b09e4a76e934cb0b7dcf98b84f7f8333cb3536b6ea9db10db908",
+    "market/packaging/build.py": "9562dd29f84f7725ab256e17e07e5912591d3603f36bf30292d17bd7fc99cb3f"
+  },
+  "commit": "60e0f2ade601152c3dd7bf7e228297cc8203a2ed",
+  "kit_api": {
+    "crop_roi_hw": {
+      "keyword_only": [],
+      "kwargs": false,
+      "positional": [
+        "frame",
+        "box",
+        "out_size",
+        "pad"
+      ],
+      "posonly": 0,
+      "required": 3,
+      "required_keywords": [],
+      "varargs": false
+    },
+    "emit": {
+      "keyword_only": [
+        "results",
+        "geometry",
+        "extra"
+      ],
+      "kwargs": false,
+      "positional": [
+        "events",
+        "ts"
+      ],
+      "posonly": 0,
+      "required": 0,
+      "required_keywords": [],
+      "varargs": false
+    },
+    "frames": {
+      "keyword_only": [],
+      "kwargs": false,
+      "positional": [],
+      "posonly": 0,
+      "required": 0,
+      "required_keywords": [],
+      "varargs": false
+    },
+    "pre": {
+      "keyword_only": [],
+      "kwargs": false,
+      "positional": [
+        "frame"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "required_keywords": [],
+      "varargs": false
+    },
+    "request_recording": {
+      "keyword_only": [],
+      "kwargs": false,
+      "positional": [
+        "event_kind",
+        "ts"
+      ],
+      "posonly": 0,
+      "required": 1,
+      "required_keywords": [],
+      "varargs": false
+    }
+  },
+  "repository": "https://github.com/Seeed-Studio/recamera-pro-ext-api",
+  "watched_files": {
+    "kit/adapters/result_sink.py": "5aafdfde0dd3d39e0aa1fe93a1d68256580394a89d1feb2b3b4cb5aa939c3c4a",
+    "kit/app.py": "0e3a9becd13eed8a54d6c8b942e442a78582a29cb67aa39bd86d27d4b5ceb72e",
+    "kit/run.py": "8861605eda73c88f3eb2e04ac67be2cc5e743c70c6ef522d1ffe8bf2df92cfd3",
+    "market/appmgr/__init__.py": "56cfe9c2fea0f108b3a0490da54ddcb209cac28ed9931cd90b6e0a3c3f46b648",
+    "market/appmgr/inference_auth.py": "9a99c1298e0f0bb8950575891fc394dc1b4ec58c78f17ead9d1a4f2a8ba46628",
+    "market/appmgr/manifest.py": "2162425693e8b09e4a76e934cb0b7dcf98b84f7f8333cb3536b6ea9db10db908",
+    "market/appmgr/paths.py": "4336c646d85ca0d5ef811d17e96e863dfa5b288cdd6d30f79d8da6fd8e0b5035",
+    "market/appmgr/pythonenv.py": "db35cbbcfa85403d1acf5e2ff3db71dde811a03909284c08081968ac965a8c21",
+    "market/appmgr/recording.py": "43e8b4eae194826172471447f69596e3f583dd0ab9807b1994cea0bba107344d",
+    "market/appmgr/resources.py": "d443af1b6820e9602ffa6ad521b20bf3f0a50253448f47b7635c328e35366f16",
+    "market/appmgr/supervisor.py": "403e76c41187bd5730fe1de7f8046ff268b74b5e84c45aacefb2ca0599e81c6a",
+    "market/packaging/build.py": "9562dd29f84f7725ab256e17e07e5912591d3603f36bf30292d17bd7fc99cb3f",
+    "sdk/python/recamera_ext/__init__.py": "cadbd07afafbb8771eb27f5d66045566087bc7b5a2767e77e96d8c692d44b9dd"
+  }
+}

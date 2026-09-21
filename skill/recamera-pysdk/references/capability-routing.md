@@ -34,6 +34,25 @@ extension runtime by directly accessing RKIPC internals or media devices.
 | Call stable public platform controls | Supported with preconditions | Documented versioned HTTP control API or its kit wrapper | Confirm the endpoint/capability is published by the installed firmware; use only the documented API. |
 | Hardware privacy mask | Supported with preconditions | `MaskControl` | Confirm the installed extension library exports this optional capability; use the binding rather than its native transport directly. |
 
+## Caller and authority boundaries
+
+| Layer | Entry | Caller / prerequisite |
+| --- | --- | --- |
+| Public Python SDK | `FrameSource`, `ResultSink`, `ProbeSource` | Extension library, authorized live protocol endpoints; normalized boxes / microsecond PTS |
+| Managed Kit | `App`, `self.models.*.infer`, `emit`, `request_recording` | AppMgr lifecycle, declared allocations, gateway identity and recording authorization as applicable |
+| AppMgr-only Python exports | `OsdSink`, `RecordSink` | Verified AppMgr caller; regular apps cannot open them |
+| HTTP control plane | documented CGI/App Center APIs | Matching firmware endpoint and authentication; API response semantics determine success |
+| Firmware ALSA | `ai_asr`, `aplay` / `libasound` | Actual topology, accessible nodes and audio permissions; no unified SDK playback API |
+
+`/cgi-bin/entry.cgi/api/v1/ext/capabilities` is a static declaration, not a
+service-health or subscription probe. The ext subscriptions endpoint is not
+implemented in the audited backend. Check actual data flow when needed; a
+successful capabilities response cannot establish active subscriptions.
+
+For recording use [recording.md](recording.md). Segmentation masks do not
+trigger recording or stream OSD. Direct ingress retains legacy FRAME recording
+compatibility but derives source identity from peer credentials.
+
 ## Audio capability model
 
 Audio is the capability most often mis-classified, so assess it in three

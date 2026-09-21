@@ -33,13 +33,14 @@ from kit import events as E
 class MyApp(App):
     owns_loop = True
     # Only boxes are consumed, never frame.data pixels, so the source may
-    # letterbox on RGA into frame.data itself. See "Frame cost and throughput".
+    # prepare directly into model DMA input. See "Frame cost and throughput".
     model_frame = "hw-direct"
+    model_dma_input = True
 
     def run(self):
         for frame in self.frames():
             x = self.pre(frame)
-            outs = self.models.det.infer(x.data)          # raw RKNN head tensors
+            outs = self.models.det.infer(x)          # raw RKNN head tensors
             dets = postprocess(outs, x.info,
                                conf_thres=self.conf, iou_thres=self.iou)
             self.emit([E.detection(d) for d in dets], frame.pts, results=dets)
@@ -150,24 +151,42 @@ rectangle with OpenCV on an app-owned image is not an official preview overlay.
 
 ## Frame cost and throughput
 
-The default `model_frame = "cpu"` letterboxes inside the Python loop. That
-Python resize costs roughly 40 ms/frame at 1280x720 -> 640x640, which is often
-the dominant CPU cost in a detector that otherwise only consumes boxes. Choose
-the mode that matches what the App actually reads:
+Choose the mode from the pixels and lifetime the app actually needs:
 
-| Mode | `frame.data` | Original-res pixels | Use when |
-| --- | --- | --- | --- |
-| `"cpu"` (default) | full-res RGB | yes | always correct; App crops or reads source pixels in Python |
-| `"hw"` | full-res RGB | yes (RGA letterbox in `frame.model_data`) | model-backed App that still crops source pixels (ROI / perspective) after inference |
-| `"hw-direct"` | the RGA letterbox | no | App consumes only detections/keypoints and never reads `frame.data`; cheapest path, also skips the full-res NV12->RGB conversion |
-| `"hw-roi"` | the RGA letterbox | no (NV12 dma-buf kept reachable) | detect -> crop -> second-model cascade; take every ROI through `self.crop_roi_hw(...)` |
+| Mode | Source pixel access | Use when |
+| --- | --- | --- |
+| `"cpu"` | original RGB | CPU transforms or ordinary source image access |
+| `"hw"` | original RGB plus RGA model input | source-pixel crops/perspective after inference |
+| `"hw-direct"` | model letterbox only | synchronous detection/keypoint loops with no original pixel reads |
+| `"hw-roi"` | original NV12 retained for hardware crop | detection-to-ROI cascade via `crop_roi_hw` |
 
-Moving the letterbox onto RGA measured about +49% end-to-end throughput in the
-official detector. `frame.w`/`frame.h` and post-processed coordinates stay in
-original camera geometry in every mode, so `postprocess` output is unchanged.
-The hardware modes fall back to the CPU letterbox (identical geometry, never an
-error) when `needs_model` is false, the backend exposes no dma-buf fd
-(RTSP/snapshot), or RGA/librga is unavailable.
+For a synchronous hardware path, add `model_dma_input = True` and pass the
+prepared object directly: `x = self.pre(frame); outs = self.models.det.infer(x)`.
+Accessing `x.data` materializes an array and bypasses deferred preparation into
+the model input buffer. `infer(ndarray)` remains supported for old applications,
+custom CPU preprocessing and compatible fallbacks. Hardware acceleration is
+conditional on frame DMA-BUF availability, RGA and the selected model backend.
+Do not promise that every ROI fallback is pixel-identical: an unavailable
+hardware ROI can return a padding image; handle missing/failed crops as the
+current helper specifies.
+
+`frame.w/h`, `x.info` and postprocessed coordinates still describe original
+camera geometry. Hardware model input is RGB; OpenCV images are commonly BGR.
+Do not swap channels twice. NV12 buffers carry stride and padding; use SDK/Kit
+conversion helpers rather than reshaping bytes as tightly packed RGB. Test a
+known color target if introducing another format conversion.
+
+Consume borrowed frames, prepared inputs and hardware ROIs synchronously before
+the next frame/release. Do not pass deferred preparation across threads or retain
+it for later inference. Copy the needed independent pixels for delayed use and
+use ndarray inference. `crop_roi_hw(frame, box, out_size, pad=...)` takes boxes
+in original-frame coordinates; map second-model output back through the ROI
+geometry. Read both the frame lifetime and crop helper contract for cascades.
+
+Previous 40 ms resize / +49% throughput figures were measurements of a specific
+older detector/firmware setup, not guarantees for current models or hardware.
+Measure complete loop time (including preprocess, model call, postprocess and
+publication); report NPU execution separately from service/transport timing.
 
 Throughput discipline for a generated detector:
 
@@ -194,10 +213,13 @@ in `run`. Let kit primitives do their intended jobs:
 - `self.pre(frame)` prepares model input and geometry metadata.
 - `self.models.<id>.infer(...)` invokes a manifest-loaded model. This is the
   only model invocation surface generated application code should use; current
-  kit selects its own ctypes-backed `librknnrt.so` backend by default and
-  keeps `rknnlite` only as a fallback.
-- `self.emit(events, frame.pts, results=results)` publishes application events
-  and SDK-compatible result data.
+  Kit selects the scheduled service for AppMgr `npu.rknn: scheduled/brokered`.
+  The service owns model sessions and chooses its RKNN backend; that internal
+  ctypes/rknnlite choice does not authorize an app to open NPU runtimes itself.
+- `self.emit(events, ts=frame.pts, results=results, geometry=geometry)` publishes application events
+  and result data; `geometry` is optional and must follow the current geometry contract.
+- `self.request_recording(kind, ts=frame.pts)` submits an authorized recording
+  request; see [recording.md](recording.md).
 - Kit `emit` uses seconds; direct ResultSink uses
   microsecond `pts_us`. `self.emit(extra={"alarm": value})` creates the
   top-level field `alarm`, not `extra.alarm`.

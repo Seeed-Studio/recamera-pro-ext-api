@@ -7,9 +7,9 @@ Do not preload or copy the complete `docs/` tree into context.
 
 1. Prefer a compatible local SDK checkout supplied by the user.
 2. If the user names a tag or commit, use exactly that revision.
-3. Otherwise, when no checkout is available, resolve the compatible official
-   public SDK upstream HEAD once to a full commit SHA and record it as
-   `sdk_source_commit`.
+3. Otherwise use the bundled pin as the baseline. Newer APIs require an
+   explicitly resolved revision and contract comparison; record that revision
+   separately from the actual builder provenance.
 4. For the rest of the task, read only compatible upstream content pinned to
    that SHA. The caller or the project's public SDK documentation determines
    the repository; this Skill does not require a specific private checkout.
@@ -21,7 +21,7 @@ Do not preload or copy the complete `docs/` tree into context.
 
 Packaging does not require source resolution: the Skill already contains the
 fixed official builder from its pinned public SDK revision
-`525addec801680f6aabbbb7605d6de3bb390348a`. Use a local checkout or pinned
+`60e0f2ade601152c3dd7bf7e228297cc8203a2ed`. Use a local checkout or pinned
 public-upstream content when comparing newer API docs, Kit code, examples, or
 manifests.
 
@@ -77,3 +77,12 @@ For runtime behavior, use this order:
 
 When prose conflicts with `kit/app.py` or a current official App, follow the
 current code and record the discrepancy.
+
+## Conditional skill references
+
+- Recording rules, explicit clip requests, legacy FRAME compatibility:
+  [recording.md](recording.md).
+- Kit entry/lifecycle and current-instance diagnosis:
+  [managed-runtime.md](managed-runtime.md).
+- DMA preparation, frame borrowing, color/stride and ROI:
+  [kit-app-patterns.md](kit-app-patterns.md#frame-cost-and-throughput).

@@ -43,6 +43,7 @@ testpaths = [
     "market/appmgr/tests",
     "market/catalog",
     "sdk/tests",
+    "skill/recamera-pysdk/tests",
 ]
 norecursedirs = [
     ".git",

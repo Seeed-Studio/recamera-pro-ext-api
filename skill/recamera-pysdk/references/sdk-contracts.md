@@ -66,7 +66,9 @@ Rules:
   `[0, 1]`. Convert pixels using frame width and height.
 - Use `pts_us=frame.pts_us` for a result computed from that frame. `pts_us=0`
   is for an event intentionally not tied to a video frame.
-- `source_id="builtin"` is reserved. Choose a stable external source ID.
+- `source_id="builtin"` is reserved. The firmware overwrites direct ingress
+  source identity using peer credentials; an app-provided label is not trusted
+  per-app identity. Use the managed gateway for authenticated app attribution.
 - Same-source updates replace prior same-source display state. An empty
   detection list can clear it.
 - The current v1 baseline advertises at most 60 messages/sec per connection,
@@ -75,20 +77,27 @@ Rules:
   Firmware capability values may vary; use the published capability response
   when available and make output rate controllable rather than hard-coding
   these values.
-- Segmentation data is metadata/recording/push data; do not promise a rendered
-  OSD segmentation overlay unless the current platform explicitly documents it.
+- Segmentation masks are metadata/push data. They do not trigger recording or
+  receive stream OSD through the current path; see [recording.md](recording.md).
+- `OsdSink` and `RecordSink` are AppMgr-only clients, not regular-app APIs.
 
 ## Kit output is a separate contract
 
-`kit.app.App.emit(events=None, ts=None, *, results=None, extra=None)` produces
+`kit.app.App.emit(events=None, ts=None, *, results=None, geometry=None, extra=None)` produces
 the Kit result envelope. Its `extra` mapping is merged into the envelope at the
 top level, so `extra={"alarm": value}` is addressed as `alarm`, not
 `extra.alarm`. Kit `manifest.output.fields[].from` paths describe this envelope
 only. Direct ResultSink uses normalized coordinates and microsecond `pts_us`;
 the current Kit contract uses seconds for `emit(ts=...)`.
 
+`geometry` accepts a list of canonical geometry items or a `kit.geometry.GeometryBuilder`.
+An omitted/None value preserves the old envelope; `geometry=[]` explicitly
+publishes an empty geometry list. Declare a matching `geometry[]` output field
+with `type: "geometry[]"` and `coord: "pixel_points"` or `"normalized_points"`.
+Validate shapes with the current GeometryBuilder instead of inventing a dict schema.
+
 For a Kit detector, `emit(results=...)` only publishes a result envelope; it
-does not by itself select a frontend renderer. Use the strict manifest
+does not by itself select a frontend renderer. If browser boxes are requested, use the manifest
 contract with `output.contract_version: 2`, `sink: "ws"`, a direct
 `results[].box` field with declared coordinate space, and `render.boxes`.
 The official detector apps normally publish source-frame pixel `xyxy` boxes.
@@ -154,7 +163,9 @@ default CPU path whenever the app needs ordinary original-image pixel access.
 Do not assume desktop ML runtimes are available or suitable. For a kit model
 app, use the kit-provided `RknnModel` only through
 `self.models.<model_id>.infer(...)`; do not instantiate `rknnlite` directly in
-application code. In the current SDK, `RknnModel` defaults to a ctypes-backed
-`librknnrt.so` implementation. `rknnlite` is retained as a compatibility
-fallback, not the normal application-level integration surface. A compatible
-RKNN model and platform runtime remain preconditions.
+application code. AppMgr's scheduled lane uses an inference service, which owns the backend
+sessions. The service's ctypes `librknnrt.so` backend and compatibility fallback
+are implementation choices below the app API. Legacy exclusive direct use needs
+an explicit broker lease and is not the default app pattern. For deferred DMA
+input, RGB/BGR, NV12 stride, lifetime and ROI rules, see
+[kit-app-patterns.md](kit-app-patterns.md#frame-cost-and-throughput).

@@ -67,15 +67,15 @@ exactly `["boxes"]`, or `default` is not `false`, and it warns
 
 ## Publishing path reminder
 
-Boxes only reach the frontend through the managed result endpoint. A
-model/output App must use `instances.endpoint_mode: "allocated"` and exactly one
-`result.publish` claim with `mode: "brokered"`, and publish through
-`kit.App.emit()`. With `shared`, AppMgr does not inject
-`RECAMERA_RESULT_GATEWAY_SOCK`; Kit falls back to its child-owned `8124` sink
-and the Result Hub never receives the results, so no overlay appears regardless
-of how correct the `render` block is. See
-[managed-runtime.md](managed-runtime.md) and
-[manifest-contract.md](manifest-contract.md).
+For the Kit/Result Hub browser path described here, use
+`instances.endpoint_mode: allocated`, `result.publish: brokered`, and
+`App.emit()`. Shared/exclusive direct SDK ingress is a separate supported route;
+it does not inject the Kit gateway. Registry fallback depends on available
+adapters and must not be used to claim ownership of the reserved `8124` port.
+See [managed-runtime.md](managed-runtime.md).
+
+Data-only applications need not declare `render.boxes` or `render.stream_osd`.
+The checks below apply when browser rendering is requested.
 
 ## Debugging "no boxes on the frontend"
 

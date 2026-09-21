@@ -1,37 +1,17 @@
 # AppMgr-managed runtime
 
-Use this reference whenever an App is launched by App Center/AppMgr, especially
-for a Kit model App or an App that publishes results.
+Read for App Center launch and result ownership. AppMgr launches every installed
+Python application through `kit/run.py`; a plain SDK script can be a standalone
+demo, but needs a Kit lifecycle adapter to become an installable application.
 
-## Result ownership
+## Entry and lifecycle
 
-The managed result path is:
-
-```text
-AppMgr coordinator
-  -> supervisor injects RECAMERA_RESULT_GATEWAY_SOCK and App identity
-  -> kit registry selects GatewayResultSink
-  -> App calls kit.App.emit()
-  -> authenticated AppMgr result gateway / result hub
-```
-
-The App must not create a listener for the result stream. In particular, it
-must not construct `WsResultSink` or `GatewayResultSink`, call
-`open_result_sink("ws", ...)`, select a WebSocket/OSD sink, or bind port
-`8124`. Port `8124` belongs to the AppMgr result gateway on current firmware;
-multiple Apps cannot safely claim it.
-
-For ordinary Kit model/output Apps, the manifest must declare exactly one
-`result.publish` resource claim with `mode: "brokered"`. On the current AppMgr,
-`mode: "brokered"` is the branch that sets up the authenticated result gateway
-and injects `RECAMERA_RESULT_GATEWAY_SOCK`. `mode: "shared"` selects the direct
-`result.ingress` resource instead; it does not inject the gateway environment.
-Without that environment, Kit falls back to its development `WsResultSink` on
-`127.0.0.1:8124`, which is already owned by AppMgr and causes an address-in-use
-failure. `result.publish: shared` is therefore not a valid declaration for a
-normal Kit App that calls `App.emit()`.
-
-For a Kit App, use only the Kit lifecycle and output surface:
+The entry must export a `kit.app.App` subclass or explicit `APP` (class or
+instance). The loader prefers a local leaf class, then a visible/re-exported
+one; select `APP` when several candidates remain. Complex mixin MRO is reported
+as unverified by the static checker and needs loader validation. Inherited `owns_loop=True`
+and `run(self)` are valid. Imports and constructors must not start application
+work before Kit's lifecycle. No removed callback hooks are supported.
 
 ```python
 from kit.app import App, run_app
@@ -39,58 +19,74 @@ from kit.app import App, run_app
 
 class MyApp(App):
     owns_loop = True
+    needs_model = False
 
     def run(self):
         for frame in self.frames():
-            self.emit(events=[], frame=frame.pts, results=[])
+            self.emit(events=[], ts=frame.pts, results=[])
 
 
 if __name__ == "__main__":
     run_app(MyApp())
 ```
 
-Do not set or overwrite `RECAMERA_RESULT_GATEWAY_SOCK`,
-`RECAMERA_RESULT_GATEWAY_REQUIRED`, `RECAMERA_APP_INSTANCE`, or
-`RECAMERA_APP_GENERATION`. AppMgr mints these values for the authenticated
-launch. `instances.endpoint_mode` must be `allocated` for managed model/output
-Apps.
+The static validator resolves local inheritance, aliases and re-exports without
+executing app code. Dynamic factories, conditional exports and unknown external
+bases receive `managed_entry_unverified`; verify these with the actual loader
+and dependencies before claiming launchability. Package validation also checks
+the Python sources in the final archive, including payload overlays.
+
+## Result ownership
+
+| Application route | Manifest claim | Consumer |
+| --- | --- | --- |
+| Kit `App.emit()` / `request_recording()` | `result.publish: brokered`, `instances.endpoint_mode: allocated` | AppMgr authenticated gateway / Result Hub |
+| Direct `recamera_ext.ResultSink` | `result.publish: shared` or `exclusive` | Public `result.ingress`; normalized coordinates and microsecond PTS |
+| Model calculation without publication | Declare resources actually used | A model alone does not imply a result gateway |
+
+Kit's registry selects `GatewayResultSink` when AppMgr injects its gateway
+identity. App code must not construct `WsResultSink` or `GatewayResultSink`,
+select a child-owned WebSocket sink, or bind the reserved port `8124`.
+`shared` does not inject a gateway. With default adapter settings, Kit opens a development WebSocket sink on
+`8124` without a gateway even when the app never calls `emit`. An explicit
+verified adapter/lifecycle integration is needed for direct SDK or compute-only
+apps; mere socket presence does not select direct ingress. The validator emits
+`kit_default_sink_unverified` for this case instead of rewriting a legal claim.
+
+A direct-SDK Kit wrapper must preserve `start/run/finish`, close its SDK handles
+on exit, and avoid opening a second camera source or result listener. Use the
+intended adapter/lifecycle configuration and verify it against the target; a
+legal resource claim alone does not prove correct runtime ownership.
+
+Do not assign `RECAMERA_RESULT_GATEWAY_SOCK`,
+`RECAMERA_RESULT_GATEWAY_REQUIRED`, `RECAMERA_APP_ID`,
+`RECAMERA_APP_INSTANCE`, or `RECAMERA_APP_GENERATION`; these belong to AppMgr.
+For recording authorization and legacy result compatibility see [recording.md](recording.md).
 
 ## Manual debugging
 
-Running `app.py` directly is a different mode. Without AppMgr's gateway
-environment, the current Kit falls back to its development WebSocket sink,
-whose default is `127.0.0.1:8124`. That port is normally already occupied by
-AppMgr, so a direct launch commonly fails with:
+A direct `app.py` launch is different from AppMgr launch. Use `--sink stdout`
+for a local smoke test. It does not verify gateway identity, scheduled NPU
+authorization or App Center lifecycle. A missing/mismatched gateway must be
+investigated through AppMgr state and logs, not worked around by binding `8124`.
+
+## Read-only diagnosis
 
 ```text
-OSError: [Errno 98] Address already in use
+python scripts/probe_target.py --host <user>@<target-host> --timeout 12
+python scripts/diagnose_managed_app.py --host <user>@<target-host> --app-id <id> --timeout 12
 ```
 
-Use `--sink stdout` for a local smoke test, or deliberately choose another
-free port for manual debugging. This does not make the process an AppMgr
-managed App and cannot validate gateway authentication, scheduled NPU
-authorization, or App Center lifecycle behavior.
+Scripts require target Python 3 and key/agent-based OpenSSH authentication. They
+send a read-only Python collector through stdin with a total deadline, bounded
+file reads and redacted output. They do not open cameras, sockets, ALSA or GPIO,
+import the SDK, install packages, or start/stop services.
 
-If a managed launch still reaches `WsResultSink`, inspect the AppMgr operation
-and application logs. The likely issue is an old/bypassed launch path or a
-device Kit/AppMgr version mismatch, not a Python business-logic fix. The Skill
-can prevent an App from taking ownership of `8124`, but it cannot repair the
-device firmware's gateway injection path.
-
-## Read-only device diagnosis
-
-When a user reports an App Center startup failure, run the bundled diagnostic
-script against the explicitly supplied SSH target:
-
-```text
-python scripts/diagnose_managed_app.py --host <user>@<target-host> --app-id <app-id>
-```
-
-The script reads the installed manifest, release lock, AppMgr operations and
-audit records, App files, App process environment, result sockets, port 8124,
-and the recent App log. It emits JSON and does not install, stop, restart, or
-modify anything on the device. Treat `historical_failed_operations` as
-historical evidence when a current managed process has both `kit/run.py` and
-`RECAMERA_RESULT_GATEWAY_SOCK`; do not report an old `WsResultSink` or model
-authorization error as the current state in that case. A current process that
-continues to emit inference frames is separate evidence of a running release.
+Schema 2 reports filesystem types separately from kernel socket registration
+and protocol health. Process inventory comes from procfs, never from log names.
+Only needed environment fields are retained. The app diagnostic correlates
+app ID, PID, instance, generation and process start time with lifecycle state;
+current-run errors override optimistic PID/gateway observations. Unattributed
+or historical errors remain separate. No errors found is **not** proof of
+successful inference. Missing permissions, truncated files, races and unknown
+firmware layouts leave the relevant evidence unverified.

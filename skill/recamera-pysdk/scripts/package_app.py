@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
-import importlib.util
+import ast
 import json
 import os
 import posixpath
@@ -92,17 +92,14 @@ EXCLUDED_REQUIREMENT_FILES = frozenset({
     "requirements.txt", "requirements.lock", "requirements-py311.txt",
 })
 
-SKILL_SDK_SOURCE_REPO = "https://github.com/Seeed-Studio/recamera-pro-ext-api"
-SKILL_SDK_SOURCE_COMMIT = "525addec801680f6aabbbb7605d6de3bb390348a"
-SKILL_SDK_BUILDER_SHA256 = {
-    Path("market/packaging/build.py"):
-        "9562dd29f84f7725ab256e17e07e5912591d3603f36bf30292d17bd7fc99cb3f",
-    Path("market/appmgr/manifest.py"):
-        "fc7bcd975c61e1a8eb04a3c17dfc07b382c84a467d93dca734d43528926894d9",
-    Path("market/appmgr/__init__.py"):
-        "56cfe9c2fea0f108b3a0490da54ddcb209cac28ed9931cd90b6e0a3c3f46b648",
-}
-SDK_BUILDER_REQUIRED_FILES = frozenset(SKILL_SDK_BUILDER_SHA256)
+# Shared contract helpers remain importable from this script for existing callers.
+from sdk_contract import (
+    ContractError, SKILL_SDK_SOURCE_REPO, SKILL_SDK_SOURCE_COMMIT,
+    SKILL_SDK_BUILDER_SHA256, SDK_BUILDER_REQUIRED_FILES, bundled_sdk_root,
+    validate_sdk_builder, find_sdk_root, load_sdk_contract, provenance,
+    selected_api_signatures,
+)
+from source_contract import inspect_sources, result_contract_issues
 
 # manifest.py:_SEMVER_RE equivalent; the official validator remains the judge.
 _SEMVER_RE = re.compile(
@@ -130,7 +127,7 @@ _MARKER_RE = re.compile(
 )
 
 
-class PackagingError(ValueError):
+class PackagingError(ContractError):
     """Raised for invalid or non-reproducible App package inputs."""
 
 
@@ -170,67 +167,6 @@ def load_json(path: Path, label: str) -> dict:
     if not isinstance(value, dict):
         raise PackagingError(f"{label} must be a JSON object: {path}")
     return value
-
-
-# ---------------------------------------------------------------------------
-# Official SDK builder resolution
-# ---------------------------------------------------------------------------
-def bundled_sdk_root() -> Path:
-    """Return the pinned official SDK builder copy distributed with this Skill."""
-    return (Path(__file__).resolve().parent / "sdk-builder").resolve()
-
-
-def validate_sdk_builder(root: Path, source_label: str) -> Path:
-    """Ensure a candidate SDK builder is complete and, when bundled, unmodified."""
-    root = root.expanduser().resolve()
-    missing = [
-        path.as_posix() for path in sorted(SDK_BUILDER_REQUIRED_FILES)
-        if not (root / path).is_file()
-    ]
-    if missing:
-        raise PackagingError(
-            f"{source_label} SDK builder is incomplete; missing: {', '.join(missing)}"
-        )
-    if root == bundled_sdk_root():
-        mismatches = []
-        for relative, expected in SKILL_SDK_BUILDER_SHA256.items():
-            actual = sha256_file(root / relative)
-            if actual != expected:
-                mismatches.append(f"{relative.as_posix()} sha256 {actual}, expected {expected}")
-        if mismatches:
-            raise PackagingError(
-                "bundled SDK builder does not match the pinned official source "
-                f"({SKILL_SDK_SOURCE_REPO} @ {SKILL_SDK_SOURCE_COMMIT[:12]}): "
-                + "; ".join(mismatches)
-            )
-    return root
-
-
-def find_sdk_root(explicit: Path | None) -> Path:
-    """Resolve only explicit overrides or the Skill's pinned official builder.
-
-    Implicit checkout discovery from an App parent, cwd or home directory is
-    deliberately not performed: it makes builds depend on unrelated local state
-    and can silently swap in a builder whose contract differs from the device.
-    """
-    if explicit is not None:
-        return validate_sdk_builder(explicit, "explicit --sdk-root")
-    for variable in ("RECAMERA_SDK_ROOT", "RECAMERA_EXT_API_ROOT"):
-        value = os.environ.get(variable)
-        if value:
-            return validate_sdk_builder(Path(value), f"{variable} override")
-    return validate_sdk_builder(bundled_sdk_root(), "bundled")
-
-
-def load_sdk_contract(sdk_root: Path):
-    """Load the exact manifest helper paired with the selected official builder."""
-    path = sdk_root / "market" / "appmgr" / "manifest.py"
-    spec = importlib.util.spec_from_file_location("recamera_skill_manifest_contract", path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 # ---------------------------------------------------------------------------
@@ -855,10 +791,12 @@ def update_manifest(
     return result
 
 
-def run_validator(app_dir: Path, mode: str) -> dict:
+def run_validator(app_dir: Path, mode: str, sdk_root: Path | None = None) -> dict:
     """Delegate the authoritative contract verdict to validate_app.py."""
     validator_path = Path(__file__).with_name("validate_app.py")
     command = [sys.executable, str(validator_path), "--app-dir", str(app_dir), "--mode", mode]
+    if sdk_root is not None:
+        command.extend(["--sdk-root", str(sdk_root)])
     completed = subprocess.run(command, text=True, capture_output=True, check=False)
     if completed.returncode:
         raise PackagingError(f"App contract validation failed:\n{completed.stdout}{completed.stderr}")
@@ -866,31 +804,6 @@ def run_validator(app_dir: Path, mode: str) -> dict:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise PackagingError(f"validator produced no JSON report: {error}") from error
-
-
-def _verify_managed_result_claim(manifest: dict) -> None:
-    """Fail closed if a managed App cannot receive AppMgr's result gateway."""
-    models = manifest.get("models")
-    capabilities = manifest.get("capabilities")
-    managed = isinstance(models, list) and bool(models)
-    managed = managed or (isinstance(capabilities, list) and "output" in capabilities)
-    if not managed:
-        return
-    resources = manifest.get("resources")
-    claims = resources.get("claims") if isinstance(resources, dict) else None
-    publish_claims = [
-        claim for claim in claims or []
-        if isinstance(claim, dict) and claim.get("name") == "result.publish"
-    ] if isinstance(claims, list) else []
-    if len(publish_claims) != 1:
-        raise PackagingError(
-            "managed model/output Apps must declare exactly one result.publish claim "
-            "with mode=brokered")
-    if publish_claims[0].get("mode") != "brokered":
-        raise PackagingError(
-            "Kit model/output Apps must use result.publish: brokered; shared selects "
-            "result.ingress and does not receive AppMgr's result gateway environment, "
-            "causing fallback to a child-owned port 8124")
 
 
 # ---------------------------------------------------------------------------
@@ -1090,9 +1003,24 @@ def _verify_final_archive(archive: Path, expected_manifest: dict, sdk_root: Path
                         raise PackagingError(
                             "final archive scheduled application is missing a bundled RKNN "
                             f"artifact for model file: {model_file!r}")
-            _verify_managed_result_claim(manifest)
+            # Validate what will be installed, including sources supplied via payload roots.
+            trees = []
+            for name in records:
+                if name.endswith(".py"):
+                    data = package.extractfile(name).read()
+                    try:
+                        trees.append((name, ast.parse(data, filename=name)))
+                    except (SyntaxError, UnicodeError) as error:
+                        raise PackagingError(f"invalid archived Python source {name}: {error}") from error
+            source = inspect_sources(trees, manifest["entry"], selected_api_signatures(sdk_root))
+            source["issues"].extend(result_contract_issues(manifest, source))
+            source_issues = source["issues"]
+            errors = [i for i in source_issues if i["severity"] == "error"]
+            if errors:
+                raise PackagingError("final archive source contract failed: " + json.dumps(errors))
             return {
                 "manifest": manifest,
+                "source_contract": source,
                 "records": records,
                 "artifacts": artifact_summary,
                 "package_bytes": package_bytes,
@@ -1123,14 +1051,8 @@ def build(
     out_dir = out_dir.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     sdk_root = find_sdk_root(sdk_root)
-    builder_mode = "local" if sdk_root != bundled_sdk_root() else "bundled"
-    builder_info = {
-        "mode": builder_mode,
-        "source": "skill-bundled-pinned" if builder_mode == "bundled" else "caller-supplied-override",
-        "upstream_repository": SKILL_SDK_SOURCE_REPO,
-        "sdk_source_commit": SKILL_SDK_SOURCE_COMMIT if builder_mode == "bundled" else None,
-    }
-    validation = run_validator(app_dir, mode)
+    builder_info = provenance(sdk_root)
+    validation = run_validator(app_dir, mode, sdk_root)
     contract = load_sdk_contract(sdk_root)
     manifest = load_json(app_dir / "manifest.json", "manifest")
     validate_icon(app_dir, manifest, contract)
@@ -1183,6 +1105,7 @@ def build(
         "mode": mode,
         "platform": platform_contract(),
         "final_archive": {
+            "source_contract": final_archive["source_contract"],
             "manifest_sha256": final_archive["records"]["manifest.json"]["sha256"],
             "package_bytes": final_archive["package_bytes"],
             "unpacked_bytes": final_archive["unpacked_bytes"],
@@ -1199,7 +1122,9 @@ def build(
         "builder": builder_info,
         "validation": validation,
         "signature": {
-            "required_by_device_policy": True,
+            "required_by_device_policy": None,
+            "policy_endpoint": "/api/app-center/v1/policy",
+            "note": "Channel-specific policy is unverified offline; current local Web upload permits unsigned packages.",
             "performed_by_skill": False,
             "scope": "detached signature over exact archive bytes",
         },

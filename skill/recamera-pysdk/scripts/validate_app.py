@@ -17,12 +17,12 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from sdk_contract import (ContractError, find_sdk_root, load_sdk_contract,
+                          provenance, selected_api_signatures)
+from source_contract import inspect_sources, result_contract_issues
+
 
 APP_ID_PATTERN = re.compile(r"[a-z0-9-]{1,64}")
-# These types are used by the current official manifests in the SDK checkout.
-# They are a Kit/App manifest convention, not a complete recamera_ext schema.
-CONFIG_TYPES = frozenset({"number", "integer", "boolean", "string", "enum", "zone", "line"})
-CONFIG_APPLY_MODES = frozenset({"live", "restart"})
 OUTPUT_MODES = frozenset({"raw", "custom", "ha"})
 REMOVED_CALLBACKS = frozenset({"on_results", "process_frame", "run_postproc"})
 MODEL_TASK_ALIASES = {
@@ -35,7 +35,6 @@ BUILTIN_CLASS_NAMES = frozenset({"coco80"})
 NPU_RKNN_MODES = frozenset({"scheduled", "brokered", "exclusive"})
 NPU_RKNN_SCHEDULED_MODES = frozenset({"scheduled", "brokered"})
 RENDER_COORD_SPACES = frozenset({"pixel_xyxy", "normalized_xyxy"})
-MANAGED_RESULT_CLAIMS = frozenset({"result.publish", "result.osd", "result.gateway"})
 ARTIFACT_KINDS = frozenset({"data", "dictionary", "labels", "onnx", "rknn"})
 ARTIFACT_SOURCES = frozenset({"bundled", "catalog"})
 ARTIFACT_SHARE_SCOPES = frozenset({"content", "private"})
@@ -282,6 +281,8 @@ def _validate_stream_osd(manifest: dict[str, Any], issues: list[dict[str, str]])
     boxes = _box_fields(manifest)
     render = manifest.get("render")
     render = render if isinstance(render, dict) else {}
+    if "stream_osd" not in render:
+        return
     if not boxes:
         if "stream_osd" in render:
             issues.append(_issue(
@@ -323,13 +324,6 @@ def _validate_stream_osd(manifest: dict[str, Any], issues: list[dict[str, str]])
             issues.append(_issue(
                 "error", "stream_osd_requires_output_v2", "output.contract_version",
                 "render.stream_osd requires output.contract_version == 2"))
-    else:
-        issues.append(_issue(
-            "warning", "missing_stream_osd", "render.stream_osd",
-            "boxes will only reach the browser overlay. To also allow burn-in on the video "
-            "stream, declare render.schema_version=1 and "
-            "render.stream_osd={'supported':['boxes'],'default':false}; the user then "
-            "enables it per app through the App Center visualization setting."))
 
 
 def _looks_like_count_key(key: str) -> bool:
@@ -340,48 +334,21 @@ def _looks_like_count_key(key: str) -> bool:
     )
 
 
-def _validate_config_schema(manifest: dict[str, Any], issues: list[dict[str, str]]) -> None:
+def _validate_config_schema(manifest: dict[str, Any], issues: list[dict[str, str]], contract=None) -> None:
     schema = manifest.get("config_schema")
     if schema is None:
         return
-    if not isinstance(schema, dict):
-        issues.append(_issue("error", "invalid_config_schema", "manifest.config_schema", "config_schema must be an object"))
+    contract = contract or load_sdk_contract(find_sdk_root())
+    try:
+        contract._validate_config_schema(schema)
+    except ValueError as error:
+        issues.append(_issue("error", "invalid_config_schema", "manifest.config_schema", str(error)))
         return
-    groups = schema.get("groups")
-    if not isinstance(groups, list):
-        issues.append(_issue("error", "invalid_config_groups", "manifest.config_schema.groups", "config_schema must use groups[].items[]"))
-        return
-    seen_keys: set[str] = set()
-    for group_index, group in enumerate(groups):
-        group_location = f"manifest.config_schema.groups[{group_index}]"
-        if not isinstance(group, dict) or not isinstance(group.get("items"), list):
-            issues.append(_issue("error", "invalid_config_group", group_location, "each group must be an object with an items array"))
-            continue
-        for item_index, item in enumerate(group["items"]):
-            location = f"{group_location}.items[{item_index}]"
-            if not isinstance(item, dict):
-                issues.append(_issue("error", "invalid_config_item", location, "config item must be an object"))
-                continue
-            key = item.get("key")
-            if not isinstance(key, str) or not key:
-                issues.append(_issue("error", "missing_config_key", f"{location}.key", "config item key must be a non-empty string"))
-            elif key in seen_keys:
-                issues.append(_issue("error", "duplicate_config_key", f"{location}.key", f"duplicate config key: {key}"))
-            else:
-                seen_keys.add(key)
-            item_type = item.get("type")
-            if item_type not in CONFIG_TYPES:
-                issues.append(_issue("error", "invalid_config_type", f"{location}.type", f"Skill manifest validation accepts the current Kit types: {sorted(CONFIG_TYPES)}"))
-            apply_mode = item.get("apply")
-            if apply_mode is not None and apply_mode not in CONFIG_APPLY_MODES:
-                issues.append(_issue("error", "invalid_config_apply", f"{location}.apply", f"apply must be one of {sorted(CONFIG_APPLY_MODES)}"))
-            default = item.get("default")
-            if item_type == "integer" and (not isinstance(default, int) or isinstance(default, bool)):
-                issues.append(_issue("error", "invalid_integer_default", f"{location}.default", "integer default must be an integer and not a boolean"))
-            if isinstance(key, str) and _looks_like_count_key(key) and item_type != "integer":
-                issues.append(_issue("error", "count_requires_integer", f"{location}.type", f"count-like config key {key!r} must use integer type"))
-            elif isinstance(key, str) and key.startswith(("max_", "min_")) and item_type != "integer":
-                issues.append(_issue("warning", "review_count_type", f"{location}.type", f"review whether {key!r} is a count; continuous thresholds may remain number"))
+    for group in schema.get("groups", []):
+        for item in group["items"]:
+            if _looks_like_count_key(item["key"]) and item["type"] != "integer":
+                issues.append(_issue("warning", "review_count_type", "config_schema." + item["key"],
+                                     "Skill suggestion: a count usually uses integer; keep number for continuous values."))
 
 
 def _validate_artifacts(
@@ -548,54 +515,8 @@ def _validate_resources(manifest: dict[str, Any], issues: list[dict[str, str]]) 
             ))
 
 
-def _manifest_uses_managed_runtime(manifest: dict[str, Any]) -> bool:
-    """Return whether the App is expected to run under AppMgr ownership."""
-    models = manifest.get("models")
-    if isinstance(models, list) and models:
-        return True
-    capabilities = manifest.get("capabilities")
-    if isinstance(capabilities, list) and "output" in capabilities:
-        return True
-    resources = manifest.get("resources")
-    claims = resources.get("claims") if isinstance(resources, dict) else None
-    return isinstance(claims, list) and any(
-        isinstance(claim, dict) and claim.get("name") in MANAGED_RESULT_CLAIMS
-        for claim in claims
-    )
-
-
 def _validate_managed_runtime_manifest(manifest: dict[str, Any], issues: list[dict[str, str]]) -> None:
-    """Enforce the AppMgr-owned result endpoint contract for managed Apps."""
-    if not _manifest_uses_managed_runtime(manifest):
-        return
-    instances = manifest.get("instances")
-    if not isinstance(instances, dict):
-        issues.append(_issue(
-            "error", "missing_managed_instances", "manifest.instances",
-            "model/output Apps must declare instances.endpoint_mode=allocated so AppMgr owns runtime endpoints",
-        ))
-        return
-    if instances.get("endpoint_mode") != "allocated":
-        issues.append(_issue(
-            "error", "invalid_managed_endpoint_mode", "manifest.instances.endpoint_mode",
-            "managed model/output Apps must use endpoint_mode=allocated; fixed App-owned endpoints are not supported",
-        ))
-    resources = manifest.get("resources")
-    claims = resources.get("claims") if isinstance(resources, dict) else None
-    publish_claims = [
-        claim for claim in claims or []
-        if isinstance(claim, dict) and claim.get("name") == "result.publish"
-    ] if isinstance(claims, list) else []
-    if len(publish_claims) != 1:
-        issues.append(_issue(
-            "error", "missing_managed_result_claim", "manifest.resources.claims",
-            "managed model/output Apps must declare exactly one result.publish claim with mode=brokered",
-        ))
-    elif publish_claims[0].get("mode") != "brokered":
-        issues.append(_issue(
-            "error", "managed_result_claim_not_brokered", "manifest.resources.claims",
-            "managed model/output Apps must use result.publish mode=brokered; shared selects result.ingress and does not inject the authenticated result gateway",
-        ))
+    """Reserve the AppMgr endpoint regardless of an app's publication route."""
     permissions = manifest.get("permissions")
     network = permissions.get("network") if isinstance(permissions, dict) else None
     listeners = network.get("listen") if isinstance(network, dict) else None
@@ -703,22 +624,6 @@ def _validate_output(manifest: dict[str, Any], mode: str, issues: list[dict[str,
                     issues.append(_issue("error", f"missing_mapping_{key}", f"{location}.{key}", f"mapping {key} must be a non-empty string"))
 
 
-def _is_app_base(base: ast.expr, aliases: set[str]) -> bool:
-    return isinstance(base, ast.Name) and base.id in aliases or (
-        isinstance(base, ast.Attribute) and base.attr == "App"
-    )
-
-
-def _calls_super_setup(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    for node in ast.walk(function):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute) or node.func.attr != "setup":
-            continue
-        owner = node.func.value
-        if isinstance(owner, ast.Call) and isinstance(owner.func, ast.Name) and owner.func.id == "super":
-            return True
-    return False
-
-
 def _model_attribute_names(tree: ast.AST) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -728,16 +633,6 @@ def _model_attribute_names(tree: ast.AST) -> set[str]:
         if isinstance(owner, ast.Attribute) and owner.attr == "models" and isinstance(owner.value, ast.Name) and owner.value.id == "self":
             names.add(node.attr)
     return names
-
-
-def _kit_app_aliases(tree: ast.Module) -> set[str]:
-    aliases: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom) and node.module == "kit.app":
-            for name in node.names:
-                if name.name == "App":
-                    aliases.add(name.asname or name.name)
-    return aliases
 
 
 def _string_literals(tree: ast.AST) -> list[str]:
@@ -773,56 +668,6 @@ def _validate_command_execution(tree: ast.AST, relative: str, issues: list[dict[
             issues.append(_issue("error", "configurable_command_entry", f"{relative}:{node.lineno}", "Skill safety policy: the executable passed to subprocess must be a fixed literal or literal argv list"))
 
 
-def _validate_managed_result_channel(tree: ast.AST, relative: str, issues: list[dict[str, str]]) -> None:
-    """Reject child-owned result listeners and hand-written AppMgr identity."""
-    sink_classes = {"WsResultSink", "GatewayResultSink"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            function_name = node.func.id if isinstance(node.func, ast.Name) else (
-                node.func.attr if isinstance(node.func, ast.Attribute) else None
-            )
-            if function_name in sink_classes:
-                issues.append(_issue(
-                    "error", "direct_result_sink_construction", f"{relative}:{node.lineno}",
-                    "AppMgr-managed Apps must publish through kit.App.emit(); do not construct WsResultSink or GatewayResultSink",
-                    ))
-            port_keyword = next((keyword.value for keyword in node.keywords if keyword.arg == "port"), None)
-            if isinstance(port_keyword, ast.Constant) and port_keyword.value == 8124:
-                issues.append(_issue(
-                    "error", "fixed_result_sink_port", f"{relative}:{node.lineno}",
-                    "AppMgr-managed Apps must not hard-code the reserved result port 8124",
-                ))
-            if function_name in {"open_result_sink", "select_result_sink"}:
-                kind = node.args[0] if node.args else None
-                if isinstance(kind, ast.Constant) and kind.value in {"ws", "osd"}:
-                    issues.append(_issue(
-                        "error", "direct_result_sink_construction", f"{relative}:{node.lineno}",
-                        "AppMgr-managed Apps must not select a child-owned WebSocket/OSD sink; use kit.App.emit()",
-                    ))
-            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-                if node.func.value.id == "os" and node.func.attr in {"putenv"}:
-                    first = node.args[0] if node.args else None
-                    if isinstance(first, ast.Constant) and first.value == "RECAMERA_RESULT_GATEWAY_SOCK":
-                        issues.append(_issue(
-                            "error", "manual_managed_gateway_override", f"{relative}:{node.lineno}",
-                            "RECAMERA_RESULT_GATEWAY_SOCK is minted by AppMgr and must not be set by the App",
-                        ))
-        target = None
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            target = node.targets[0] if isinstance(node, ast.Assign) and node.targets else node.target
-        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Attribute):
-            if isinstance(target.value.value, ast.Name) and target.value.value.id == "os" and target.value.attr == "environ":
-                key = target.slice
-                if isinstance(key, ast.Constant) and key.value == "RECAMERA_RESULT_GATEWAY_SOCK":
-                    issues.append(_issue(
-                        "error", "manual_managed_gateway_override", f"{relative}:{node.lineno}",
-                        "RECAMERA_RESULT_GATEWAY_SOCK is minted by AppMgr and must not be assigned by the App",
-                    ))
-        # Plain documentation strings and diagnostic messages are harmless. The
-        # validator only rejects 8124 when it is used as a socket/CLI argument,
-        # which is handled by the call-site checks above.
-
-
 def _emit_paths(tree: ast.AST) -> tuple[set[str], bool, bool]:
     """Collect envelope roots and top-level keys produced by kit.App.emit()."""
     roots: set[str] = set()
@@ -836,6 +681,8 @@ def _emit_paths(tree: ast.AST) -> tuple[set[str], bool, bool]:
         found_emit = True
         roots.update({"results", "events", "inference_time_ms", "pipeline_ms", "stream_id"})
         for keyword in node.keywords:
+            if keyword.arg == "geometry" and not (isinstance(keyword.value, ast.Constant) and keyword.value.value is None):
+                roots.add("geometry")
             if keyword.arg == "extra" and isinstance(keyword.value, ast.Dict):
                 for key in keyword.value.keys:
                     if isinstance(key, ast.Constant) and isinstance(key.value, str):
@@ -916,26 +763,13 @@ def _validate_detection_render_contract(
     trees: list[tuple[str, ast.AST]],
     issues: list[dict[str, str]],
 ) -> None:
-    """Require the browser-renderable contract for Kit detection Apps.
-
-    Publishing an envelope is not enough to make the Result Center draw boxes.
-    This gate applies only to Kit Apps that declare a detector model and/or
-    emit Kit results, leaving event-only and direct ResultSink Apps separate.
-    """
-    kit_results_found, dynamic_results = _kit_emit_result_usage(trees)
-    detector_declared = any(
-        bool(model_tasks.get(task))
-        for task in ("detect", "det", "detection")
-    )
+    """Validate browser rendering only when the manifest explicitly requests it."""
+    render = manifest.get("render")
+    if not isinstance(render, dict) or "boxes" not in render:
+        return
+    _, dynamic_results = _kit_emit_result_usage(trees)
     output = manifest.get("output")
     output_fields = output.get("fields") if isinstance(output, dict) else None
-    has_box_field = isinstance(output_fields, list) and any(
-        isinstance(field, dict) and field.get("from") == "results[].box"
-        for field in output_fields
-    )
-    if not (detector_declared and kit_results_found) and not has_box_field:
-        return
-
     location = "manifest.output"
     if not isinstance(output, dict):
         issues.append(_issue(
@@ -1017,6 +851,8 @@ def _validate_python(app_dir: Path, model_ids: set[str], model_tasks: dict[str, 
     parsed_trees: list[tuple[str, ast.AST]] = []
     for path in sorted(app_dir.rglob("*.py")):
         relative = path.relative_to(app_dir).as_posix()
+        if any(part in {".venv", "venv", "build", "dist", "__pycache__", "node_modules", "kit"} or part.startswith(".") for part in Path(relative).parts):
+            continue
         try:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=relative)
@@ -1029,35 +865,6 @@ def _validate_python(app_dir: Path, model_ids: set[str], model_tasks: dict[str, 
             issues.append(_issue("error", "forbidden_media_path", relative, "App must not bypass or compete with RKIPC media paths"))
         _validate_entry_file_path_usage(tree, relative, issues)
         _validate_command_execution(tree, relative, issues)
-        _validate_managed_result_channel(tree, relative, issues)
-        aliases = _kit_app_aliases(tree)
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef) or not any(_is_app_base(base, aliases) for base in node.bases):
-                continue
-            owns_loop = False
-            methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
-            for child in node.body:
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    methods[child.name] = child
-                elif isinstance(child, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "owns_loop" for target in child.targets):
-                    owns_loop = isinstance(child.value, ast.Constant) and child.value.value is True
-                elif isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name) and child.target.id == "owns_loop":
-                    owns_loop = isinstance(child.value, ast.Constant) and child.value.value is True
-            class_location = f"{relative}:{node.lineno}"
-            if not owns_loop:
-                issues.append(_issue("error", "missing_owns_loop", class_location, "current Kit implementation: App subclass must declare owns_loop = True"))
-            run = methods.get("run")
-            if run is None:
-                issues.append(_issue("error", "missing_run", class_location, "current Kit implementation: App subclass must implement run(self)"))
-            else:
-                positional = list(run.args.posonlyargs) + list(run.args.args)
-                if len(positional) != 1 or positional[0].arg != "self" or run.args.vararg is not None:
-                    issues.append(_issue("error", "invalid_run_signature", f"{relative}:{run.lineno}", "current Kit implementation: run must have the signature run(self)"))
-            for removed in sorted(REMOVED_CALLBACKS & set(methods)):
-                issues.append(_issue("error", "removed_kit_callback", f"{relative}:{methods[removed].lineno}", f"current Kit implementation: {removed} is not part of the current App lifecycle"))
-            setup = methods.get("setup")
-            if setup is not None and not _calls_super_setup(setup):
-                issues.append(_issue("error", "missing_super_setup", f"{relative}:{setup.lineno}", "current Kit implementation: setup(config) override must call super().setup(config)"))
         valid_model_attributes = set(model_ids)
         for task, ids in model_tasks.items():
             if len(ids) == 1 and task in MODEL_TASK_ALIASES:
@@ -1186,6 +993,7 @@ def validate_app(
     app_dir: Path,
     mode: str = "demo",
     sdk_source_commit: str | None = None,
+    sdk_root: Path | None = None,
 ) -> dict[str, Any]:
     """Validate an App directory without accessing a device or network."""
     if mode not in {"demo", "package", "publish"}:
@@ -1193,7 +1001,14 @@ def validate_app(
     app_dir = app_dir.resolve()
     if not app_dir.is_dir():
         raise ValidationFailure(f"App directory does not exist: {app_dir}")
+    try:
+        sdk_root = find_sdk_root(sdk_root)
+        contract = load_sdk_contract(sdk_root)
+        builder = provenance(sdk_root)
+    except (ContractError, OSError) as error:
+        raise ValidationFailure(str(error)) from error
     issues: list[dict[str, str]] = []
+    source = None
     manifest = _load_json(app_dir / "manifest.json", "manifest", issues)
     if manifest is not None:
         app_id = manifest.get("id")
@@ -1211,7 +1026,12 @@ def validate_app(
         entry_is_root = entry_path is not None and len(entry_path.parts) == 1
         if "pipeline" in manifest:
             issues.append(_issue("error", "unsupported_pipeline_field", "manifest.pipeline", "SDK/Kit evidence: the current public runtime has no consumer for manifest.pipeline"))
-        _validate_config_schema(manifest, issues)
+        _validate_config_schema(manifest, issues, contract)
+        if mode in {"package", "publish"}:
+            try:
+                contract.validate_manifest(manifest, allow_v1=False)
+            except ValueError as error:
+                issues.append(_issue("error", "firmware_manifest_contract", "manifest", str(error)))
         bundled_artifacts = _validate_artifacts(app_dir, manifest, entry_is_root, issues)
         model_ids, model_tasks = _validate_models(app_dir, manifest, entry_is_root, issues)
         _validate_resources(manifest, issues)
@@ -1222,6 +1042,11 @@ def validate_app(
             _validate_platform_contract(manifest, issues)
         _validate_stream_osd(manifest, issues)
         trees = _validate_python(app_dir, model_ids, model_tasks, issues)
+        source = inspect_sources(trees, str(entry or "app.py"), selected_api_signatures(sdk_root),
+                                 require_entry=mode in {"package", "publish"})
+        issues.extend(source["issues"])
+        if mode in {"package", "publish"}:
+            issues.extend(result_contract_issues(manifest, source))
         _validate_output_paths(manifest, trees, issues)
         _validate_detection_render_contract(manifest, model_tasks, trees, issues)
         _validate_publish_hygiene(app_dir, manifest, mode, issues)
@@ -1239,7 +1064,10 @@ def validate_app(
             "arch": TARGET_ARCH,
             "python": TARGET_PYTHON_CONSTRAINT,
         },
-        "sdk_source_commit": sdk_source_commit,
+        "sdk_source_commit": builder["sdk_source_commit"],
+        "requested_sdk_source_commit": sdk_source_commit,
+        "builder": builder,
+        "source_contract": source,
         "device_connected": False,
         "runtime_preconditions_unverified": list(RUNTIME_PRECONDITIONS),
     }
@@ -1249,11 +1077,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate a reCamera Pro Python App without a device")
     parser.add_argument("--app-dir", required=True, type=Path)
     parser.add_argument("--mode", choices=("demo", "package", "publish"), default="demo")
-    parser.add_argument("--sdk-source-commit")
+    parser.add_argument("--sdk-source-commit", help="Caller context only; actual builder provenance is recorded separately")
+    parser.add_argument("--sdk-root", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
     try:
-        report = validate_app(args.app_dir, args.mode, args.sdk_source_commit)
+        report = validate_app(args.app_dir, args.mode, args.sdk_source_commit, args.sdk_root)
     except ValidationFailure as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -10,7 +10,7 @@ This reference combines two evidence levels. Current SDK/Kit-derived rules are
 the grouped manifest shape used by current official Apps, the current Kit
 lifecycle, model declarations and aliases, Kit emit-envelope behavior, and
 referenced resource existence. Additional Skill policy covers validation modes,
-strict entry handling, App ID syntax, count-type heuristics, output uniqueness,
+count-type suggestions, output uniqueness,
 `default_mapping` publication gates, and command-execution restrictions. A Skill
 policy failure is not automatically a claim about the base `recamera_ext` API.
 The fixed platform contract (`compatibility` and `python.runtime_profile`), App
@@ -23,7 +23,7 @@ Center v2 package metadata, wheel descriptors, `release.lock.json`, and
 | Mode | Purpose | Device required |
 | --- | --- | --- |
 | `demo` | Source-generation feedback; accepts an implicit `app.py` entry with a warning | No |
-| `package` | Packaging gate; adds the fixed platform-contract and wheel-descriptor checks | No |
+| `package` | Official manifest-v2 validation, platform/wheel checks and Kit entry resolution | No |
 | `publish` | Public-release gate; adds a stable-channel requirement and payload-hygiene checks | No |
 
 Run it directly with:
@@ -44,7 +44,10 @@ correct offline Demo or package.
 - Skill/App Center publication policy requires `id` to match
   `[a-z0-9-]{1,64}` and `version` to be non-empty.
 - `entry` must be a safe relative path to an existing Python entry file.
-  Package and publish modes require it explicitly.
+  Package and publish modes require it explicitly and check that `kit.run` can
+  resolve a Kit App. Ordinary SDK scripts remain legal demos. Dynamic exports
+  are reported as unverified rather than executed. See [managed-runtime.md](managed-runtime.md).
+- `builtin` and `acousticslab` are reserved system application IDs.
 - For Apps with `models[]`, non-builtin `models[].classes`, or
   `artifacts[]`, keep the entry at the package root (for example `app.py`).
   Kit derives its resource root from the entry module's directory; a
@@ -79,17 +82,18 @@ manifest; see [app-packaging.md](app-packaging.md).
 
 ## Configuration schema
 
-Current official manifests use `config_schema.groups[].items[]`. Every item
-needs a unique non-empty `key`. Types observed in current official Apps are
-`number`, `integer`, `boolean`, `string`, `enum`, `zone`, and `line`; observed
-apply modes are `live` and `restart`. This is a current Kit/App convention,
-not an exhaustive public `recamera_ext` schema.
+The validator calls the exact official `_validate_config_schema` paired with
+the selected builder; it maintains no separate type/apply whitelist. Current
+fields include `number`, `integer`, `boolean`, `string`, `enum`, `zone`, `line`,
+`select`, `password`, `array`, `object`, `field_mapping`, and `output_filters`.
+Apply modes are `live`, `restart`, and `reschedule`. Groups need `key`, `title`
+and `items`; items need `key`, `type`, `apply` and valid type-specific values.
+Use password fields for secrets and `reschedule` for allocation-changing
+parameters. Do not weaken a field just to satisfy old skill rules.
 
-As an additional Skill consistency policy, use `integer` for count-like values
-such as `interval_frames`, `*_count`,
-`count_*`, `target_reps`, and `target_sets`. Do not infer type only from an
-integer-looking default: seconds, angles, thresholds, and rates may still have
-continuous semantics.
+Count-like keys produce an advisory type warning, not an API prohibition on
+continuous values. Package/publish also run the official full manifest validator,
+including reserved IDs, recording declarations and render contracts.
 
 ## Models and resources
 
@@ -165,24 +169,23 @@ inference authorization failed: scheduled application <app-id> has no bundled RK
 
 ### Managed result endpoints
 
-Model Apps and Apps that publish through the App Center result path are
-AppMgr-managed. They must declare `instances.endpoint_mode` as `allocated`.
-AppMgr injects `RECAMERA_RESULT_GATEWAY_SOCK` and the authenticated instance
-identity, and the Kit registry then selects its gateway-backed result sink.
-The App itself must only call `kit.App.emit()`; it must not construct
-`WsResultSink`/`GatewayResultSink`, select `ws` or `osd`, set the AppMgr
-identity variables, or bind the reserved `127.0.0.1:8124` endpoint. See
-[`managed-runtime.md`](managed-runtime.md) for the manual-debug distinction.
-Such ordinary Kit model/output Apps must also declare exactly one
-`resources.claims[]` entry with `name: "result.publish"` and
-`mode: "brokered"`. In the current AppMgr, `shared` means `result.ingress` and
-does not inject `RECAMERA_RESULT_GATEWAY_SOCK`; Kit then falls back to its
-child-owned `127.0.0.1:8124` WebSocket sink. The validator reports this as
-`managed_result_claim_not_brokered` before packaging.
+Choose by actual use: `App.emit()` / `request_recording()` require
+`result.publish: brokered` with `endpoint_mode: allocated`; direct SDK
+`ResultSink` requires shared/exclusive ingress. A model or output declaration
+alone does not prove which path is used. The source checks report incompatible
+claim/call pairs. See [managed-runtime.md](managed-runtime.md).
+
+Do not construct a child-owned result WebSocket server, bind `8124`, override
+AppMgr identity, or open the AppMgr-only `OsdSink`/`RecordSink`. Direct ingress
+and Kit gateway use different identity, coordinate and timestamp contracts.
+Recording requires installed `record_trigger` authorization; see
+[recording.md](recording.md), including the retained legacy FRAME behavior.
 
 ## Output declaration
 
-When `capabilities` contains `output`, `output` must declare:
+For usable generated output metadata, this skill additionally checks the
+following when `capabilities` contains `output` (these are authoring gates, not
+a complete description of firmware schema requirements):
 
 - a non-empty `default_channel` string or string array;
 - `default_mode` equal to `raw`, `custom`, or `ha`;
@@ -205,8 +208,8 @@ manifest fields.
 
 ### Browser-renderable detection output
 
-Any Kit App that declares a detector model and emits `results` must opt into
-the strict browser result contract. It requires:
+Browser rendering is optional. Only when the app declares `render.boxes` does
+the skill require its matching browser result contract:
 
 - `output.contract_version: 2` and `output.sink: "ws"`;
 - a direct output field named `box` from `results[].box` with one of
@@ -225,8 +228,8 @@ their separate normalized-coordinate contract.
 
 A current `kit.app.App` subclass must:
 
-- declare `owns_loop = True`;
-- define `run(self)` without additional positional arguments;
+- declare or inherit `owns_loop = True`;
+- define or inherit `run(self)` without additional positional arguments;
 - call `super().setup(config)` when overriding `setup(config)`;
 - not define removed callbacks `on_results`, `process_frame`, or
   `run_postproc`.

@@ -30,20 +30,20 @@
 
 ## 核心约定（最易踩，动手前先读）
 
-- **坐标一律归一化 `[0,1]`**：所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）及关键点 point 的 x/y 均为相对画面宽高的比例。**传像素值会被 OSD clamp 成 1px 隐形框**——手头是像素就除以帧宽/帧高。分割 mask 是行主序原始字节（非坐标）。这是最常见的 BUG。
+- **底层 `recamera_ext.ResultSink` 坐标归一化 `[0,1]`**：所有 box 坐标（检测/分类 ROI/分割 ROI/跟踪/关键点对象框）及关键点 point 的 x/y 均为相对画面宽高的比例。**传像素值会被 OSD clamp 成 1px 隐形框**——手头是像素就除以帧宽/帧高。分割 mask 是行主序原始字节（非坐标）。Kit `App.emit` 则按 manifest 声明坐标，官方检测应用通常是原图像素 `xyxy`；不要重复归一化。
 - **Python 用 uv，不裸 `pip install`**：`uv run pytest` / `uv add`。
 - **OSD 单槽后写覆盖**：同一 `source_id` 的结果后写覆盖前写；空 `send_detections` 用于清屏。
 - **seg 不上 OSD、不触发录像**：分割 mask 只走结果推送，Vigil 不转换此任务。
 - **`source_id` 不能用保留字 `"builtin"`**（内建推理专用，外部用被拒 EAUTH）。
 - **限速 60 msg/s/连接**（burst 15）+ 全局 120（burst 30），单条 payload ≤ 64KB，并发注入连接 ≤ 4。超限丢弃+计数，别超过帧率发。
-- **`pts_us`**：要与某帧对齐叠加时传该帧的 `frame.pts_us`（同 VI 帧 PTS 时钟）；`0` 表示不与具体帧关联。
+- **时间单位**：Kit `emit(ts=frame.pts)` 使用秒；底层 **`pts_us`** 使用微秒：要与某帧对齐叠加时传该帧的 `frame.pts_us`（同 VI 帧 PTS 时钟）；`0` 表示不与具体帧关联。
 - **零拷贝视图跨帧要 `.copy()`**：`frame.array` / `ProbeSample.array` 下一次迭代即失效。
 
 ## 开发一个 app
 
-1. 继承 `kit.app.App`，覆盖 `setup(config)`（读 config_schema 参数）和 `on_results(results, frame)`（业务逻辑：原始检测 → app 级事件）。CPU-only app 设 `needs_model=False` 并覆盖 `process_frame`。
+1. 应用中心入口导出 `kit.app.App` 子类或显式 `APP`，声明/继承 `owns_loop=True` 并实现 `run(self)`。循环中按需调用 `frames`、`pre`、`self.models.<id>.infer` 和 `emit`；覆盖 `setup(config)` 时调用 `super().setup(config)`。CPU-only 应用设 `needs_model=False`；旧 `on_results`、`process_frame`、`run_postproc` 回调已移除。
 2. 写 `manifest.json`（`id` / `version` / `entry: app.py` / `models` / `config_schema` 等，参考 `apps/*/manifest.json`）。
-3. 直接用 SDK：`from recamera_ext import FrameSource, ResultSink, ProbeSource`。需要 RKNN 的生产 app 必须由 appmgr 启动，并让 `RknnSession`/`ExternalNpuLease` 取得 broker 租约；不能用 CGI 成功响应、pidfile 或普通 flock 冒充 NPU 所有权。
+3. 独立 SDK 示例可以是普通脚本，安装到应用中心则仍需 Kit 生命周期入口。直接用 SDK：`from recamera_ext import FrameSource, ResultSink, ProbeSource`。普通 RKNN 应用由 AppMgr 以 `npu.rknn: scheduled` 启动，使用 `self.models.<id>.infer` 调用调度服务。仅显式 legacy exclusive 路径通过 `RknnSession`/`ExternalNpuLease` 取得 broker 租约；不能用 CGI 成功响应、pidfile 或普通 flock 冒充 NPU 所有权。
 
 ## 构建 / 测试
 
@@ -61,7 +61,7 @@ python3 examples/02-inject-result/inject_result.py --task detection
 
 - 当前源码构建把 SDK/kit 装入固件 Python 3.11 site-packages，native library 装入 `/usr/lib`；`/userdata/sdk` 仅是历史手工布局。
 - 前置：固件必须含四个扩展 socket，并完成协议握手；仅 `ls` 看 inode 不足以证明版本兼容。
-- **NPU 推理 (rknnlite)**：`RknnSession` 必须先从 `inference-control@1` 取得 lease，初始化成功后 READY；broker 缺失或失联一律 fail closed。旧固件只允许 appmgr 走明确标记的 CGI stopped-state 兼容屏障。
+- **NPU 推理**：scheduled/brokered 应用由推理服务持有模型并选择后端；legacy exclusive 路径的 `RknnSession` 必须先从 `inference-control@1` 取得 lease，初始化成功后 READY；broker 缺失或失联一律 fail closed。旧固件只允许 appmgr 走明确标记的 CGI stopped-state 兼容屏障。
 - 烟雾 demo：`examples/02-inject-result`，然后 RTSP（`rtsp://<ip>:8554/...`）或 WS（`127.0.0.1:8123 /ws/inference/results`）看注入的框。
 - 端到端自检清单见 `docs/guide/deploy-ops.md` §5。
 

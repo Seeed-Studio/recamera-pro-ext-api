@@ -12,7 +12,7 @@ build contract, not an installation or device-modification procedure.
 - The SDK's `market/packaging/build.py` is the authority for archive layout,
   deterministic tar creation, `release.lock.json`, and `files.sha256`.
 - The skill bundles the fixed official builder files from public commit
-  `525addec801680f6aabbbb7605d6de3bb390348a` under `scripts/sdk-builder/`;
+  `60e0f2ade601152c3dd7bf7e228297cc8203a2ed` under `scripts/sdk-builder/`;
   their SHA-256 values are checked before every default build.
 - Device AppMgr verifies the detached signature according to device policy,
   safely extracts the archive, and builds a per-App/per-release environment. It
@@ -62,9 +62,13 @@ supplied explicitly with `--sdk-root` or `RECAMERA_SDK_ROOT`; a local override
 must contain all three required builder files (`market/packaging/build.py`,
 `market/appmgr/manifest.py`, `market/appmgr/__init__.py`). The helper never
 searches the App tree, working directory, or user home for a checkout. The build
-report records `builder.mode` as `bundled` or `local`, records the pinned
-`sdk_source_commit` for bundled mode, and records only `caller-supplied-override`
-for local mode (never the absolute path).
+report records `builder.mode`, the actual source commit, local dirty status,
+and SHA-256 of the selected builder/manifest files. Non-Git exported overrides
+have unknown commit/dirty values, with file hashes still recorded. Both the
+source validator and final archive checks use that same selected contract.
+Run `python scripts/sdk_contract.py --sdk-root <checkout>` to detect drift in
+watched SDK/API files before intentionally refreshing the bundled snapshot.
+The check never updates files or silently selects a newer revision.
 
 If `--requirements` is omitted, the helper uses the first exact dependency file
 found in the App directory: `requirements.lock`, `requirements.txt`, or
@@ -101,9 +105,9 @@ values the helper fills and the validator requires):
   },
   "artifacts": [],
   "config_schema": {"groups": []},
-  "resources": {"claims": []},
+  "resources": {"claims": [{"name": "result.publish", "mode": "brokered", "required": true}]},
   "permissions": {
-    "sdk": [],
+    "sdk": ["result.publish"],
     "filesystem": {"read": [], "write": []},
     "network": {"listen": [], "outbound": []}
   },
@@ -128,7 +132,10 @@ values the helper fills and the validator requires):
 `version` must be SemVer, `type` must be `self-hosted`, and `release.channel`
 must be `stable`, `beta`, or `dev`. Resource claims require the matching SDK
 permission. This example is a minimal contract fixture, not a substitute for
-app-specific models, output, configuration, and permissions.
+app-specific models, output, configuration, and permissions. The brokered
+result claim supplies the gateway used by default `kit.run`, even for a small
+CPU-only app; direct SDK ingress requires a separately verified adapter/lifecycle
+route. See [managed-runtime.md](managed-runtime.md).
 
 ## Dependency rules
 
@@ -237,8 +244,10 @@ not add `python/site-packages/` or `requirements.lock.json` to a v2 package.
 
 The official builder creates the deterministic `.tar.gz` and release metadata.
 The skill reports the archive SHA-256. Signing is a separate release operation:
-current device policy requires an ECDSA P-256/SHA-256 detached signature over
-the exact archive bytes, placed outside the archive. The skill must not generate
+consult `/api/app-center/v1/policy` for the device/channel policy. Current local
+Web upload permits unsigned packages without a separate signature UI; other
+channels may require an ECDSA P-256/SHA-256 detached signature over the exact
+archive bytes, placed outside the archive. The skill must not generate
 or store the release private key. An unsigned archive that passes this build
 contract is not a promise that every device or publication channel will accept
 it; signature admission remains an external AppMgr/release-service decision.
@@ -248,7 +257,8 @@ it; signature admission remains an external AppMgr/release-service decision.
 Run the skill validator before packaging. The helper reopens the exact final
 `.tar.gz` and verifies the archive's `manifest.json`, `release.lock.json`, and
 `files.sha256` against the payload bytes, enforces the size and member caps, and
-checks App identity. For scheduled/brokered NPU Apps it also requires every
+checks App identity and the archived Kit entry/API calls without executing them.
+Dynamic entry exports remain explicitly unverified. For scheduled/brokered NPU Apps it also requires every
 declared model file to have a bundled `kind: "rknn"` artifact in that final
 archive. The helper reports the archive SHA-256 and deletes a stale same-name
 output before building. No device is needed for static validation. A successful
