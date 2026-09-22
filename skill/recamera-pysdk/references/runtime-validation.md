@@ -100,8 +100,17 @@ resolve resource conflicts. The existing App can be stopped by an authorized
 upgrade/reinstall; `install` leaves startup to AppMgr's policy (unsigned local
 uploads normally remain stopped).
 
-Installation goes through **device nginx on port 80**, with matching Host and
-Origin, to `/api/app-center/v1/`. The documented integrated firmware supports
+Installation goes through **device nginx**, with matching Host and Origin, to
+`/api/app-center/v1/`. Before sending any upload or mutation, a read-only policy
+request detects the firmware's HTTP-to-HTTPS redirect. Only a redirect to the
+same loopback host and policy path on HTTPS port 443 is accepted; mutations
+are never automatically replayed after a redirect. HTTPS and WSS verify the
+certificate chain/validity using the device's public
+`/userdata/config/system/ssl/server.crt`, read inside the authenticated SSH
+session, and pin the exact peer certificate before sending application data.
+The certificate's name can differ from `127.0.0.1`; the exact certificate pin
+replaces hostname matching only for this local connection. Plain HTTP firmware
+continues to use port 80. The documented integrated firmware supports
 localhost control authentication, so the authenticated SSH worker can use this
 edge without needing the user's Web password. SSH and Web credentials are not
 assumed identical. If the device returns 401/403 or lacks these endpoints, keep

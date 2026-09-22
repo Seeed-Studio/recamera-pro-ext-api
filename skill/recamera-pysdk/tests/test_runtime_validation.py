@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import sys
+import ssl
+import base64
 import tarfile
 import threading
 import time
@@ -318,7 +320,7 @@ def test_observation_rejects_replay_and_detects_crash(monkeypatch):
            "instance": {"id": "current", "generation": 1}}
     api = SimpleNamespace(request=lambda *args: {"apps": [app]})
     class ReplayedResult:
-        def __init__(self, app_id):
+        def __init__(self, app_id, **kwargs):
             pass
         def close(self):
             pass
@@ -342,6 +344,11 @@ def test_http_stream_is_accepted_by_official_upload_parser(tmp_path, monkeypatch
     package.write_bytes(payload)
     received = []
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{}')
+
         def do_POST(self):
             assert self.path == "/api/app-center/v1/uploads"
             assert self.headers["Origin"] == "http://127.0.0.1"
@@ -416,3 +423,96 @@ def test_smoke_failure_is_separate_from_loader_success(make_app, tmp_path):
     assert result["loader"] == "passed"
     assert result["mock_loop"] == "failed"
     assert result["device"] == "not_run"
+
+
+@pytest.mark.parametrize("location", [
+    "https://external.invalid/api/app-center/v1/policy",
+    "https://127.0.0.1:8130/api/app-center/v1/policy",
+    "http://127.0.0.1/api/app-center/v1/policy",
+    "https://user@127.0.0.1/api/app-center/v1/policy",
+    "https://127.0.0.1/unexpected",
+    "https://127.0.0.1/api/app-center/v1/policy?next=external",
+])
+def test_edge_discovery_rejects_foreign_or_unexpected_redirects(location, monkeypatch):
+    requests = []
+    connection = SimpleNamespace(
+        request=lambda *args, **kwargs: requests.append(args),
+        getresponse=lambda: SimpleNamespace(status=307, getheader=lambda key: location),
+        close=lambda: None)
+    monkeypatch.setattr(device_app.http.client, "HTTPConnection", lambda *args, **kwargs: connection)
+    with pytest.raises(device_app.DeviceError, match="redirect"):
+        device_app.Edge.discover()
+    assert requests == [("GET", "/api/app-center/v1/policy")]
+
+
+def test_https_and_wss_use_verified_device_certificate(tmp_path, monkeypatch):
+    from market.appmgr.result_hub import _ws_frame
+    cert, key = tmp_path / "device.crt", tmp_path / "device.key"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key), "-out", str(cert), "-days", "1",
+                    "-subj", "/CN=recamera-test-device"], check=True, capture_output=True)
+    monkeypatch.setattr(device_app, "DEVICE_CERTIFICATE", str(cert))
+    requests = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, self.headers.get("Origin")))
+            if self.path == "/ws/ai/results/v2":
+                accept = base64.b64encode(hashlib.sha1((self.headers["Sec-WebSocket-Key"] +
+                    "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+                self.send_response(101)
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept)
+                self.end_headers()
+                self.wfile.write(_ws_frame(b'{"type":"hello"}'))
+                self.wfile.flush()
+                self.connection.settimeout(2)
+                self.rfile.read(2)  # Wait for client's masked subscription.
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"apps":[]}')
+        def log_message(self, *args):
+            pass
+    class TLSServer(ThreadingHTTPServer):
+        def handle_error(self, request, client_address):
+            # The certificate-mismatch assertion deliberately closes before
+            # any HTTP request; TLS clients may reset on that expected path.
+            if not isinstance(sys.exc_info()[1], (ConnectionError, ssl.SSLEOFError)):
+                super().handle_error(request, client_address)
+    server = TLSServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    original = device_app.http.client.HTTPSConnection
+    discovery = []
+    redirect = SimpleNamespace(
+        request=lambda *args, **kwargs: discovery.append(args),
+        getresponse=lambda: SimpleNamespace(status=307, getheader=lambda key:
+                                            "https://127.0.0.1/api/app-center/v1/policy"),
+        close=lambda: None)
+    monkeypatch.setattr(device_app, "http", SimpleNamespace(client=SimpleNamespace(
+        HTTPConnection=lambda *args, **kw: redirect,
+        HTTPSConnection=lambda *args, **kw: original("127.0.0.1", server.server_port, **kw))))
+    api = device_app.API()
+    try:
+        assert api.request("GET", "/apps") == {"apps": []}
+        assert api.edge.context.verify_mode == ssl.CERT_REQUIRED
+        assert discovery == [("GET", "/api/app-center/v1/policy")]
+        subscriber = device_app.Results("demo", edge=api.edge)
+        try:
+            assert subscriber.message(time.monotonic() + 2)["type"] == "hello"
+        finally:
+            subscriber.close()
+        assert requests == [("/api/app-center/v1/apps", "https://127.0.0.1"),
+                            ("/ws/ai/results/v2", "https://127.0.0.1")]
+        api.edge.certificate = b"different certificate"
+        with pytest.raises(device_app.DeviceError, match="does not match"):
+            api.request("POST", "/apps", {})
+        assert len(requests) == 2  # No mutation sent after certificate mismatch.
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

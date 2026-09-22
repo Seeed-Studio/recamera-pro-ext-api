@@ -199,6 +199,14 @@ The fragment is not a complete manifest and must not replace one.
 - Declare `npu.rknn` with `mode: scheduled` and SDK permission `npu.infer`.
   Keep existing brokered/exclusive choices only after checking their runtime
   lane; do not silently change an existing app's resource ownership.
+- Set an explicit `resources.limits.memory_mb` with room for all resident
+  models, shared input/output buffers and the App's own working memory. Without
+  it, the current authorization defaults to the sum of model reservations;
+  shared buffers allocated for the first model can leave insufficient budget
+  for a second model. For example, two 33 MiB reservations plus a few KiB of
+  shared buffers exceed an implicit 66 MiB limit. Start from the closest App's
+  measured budget and verify all models load together; do not use RKNN file
+  size alone as peak memory or prescribe one fixed limit for every App.
 - Keep the entry (such as `app.py`) at the app root. Add the model's actual
   `classes` list or bundled label file; never silently inherit COCO labels for
   a custom class set. `task` identifies the model/aliases, not its decoder.

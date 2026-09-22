@@ -12,15 +12,18 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import ssl
 import struct
 import sys
 import tempfile
 import time
 import uuid
+from urllib.parse import urlsplit
 
 PREFIX = "/api/app-center/v1"
 MAX_PACKAGE = 200 * 1024 * 1024
 MAX_RESPONSE = 4 * 1024 * 1024
+DEVICE_CERTIFICATE = "/userdata/config/system/ssl/server.crt"
 
 
 class DeviceError(RuntimeError):
@@ -59,12 +62,69 @@ def receive(stream, config, root="/userdata/appstage"):
         raise
 
 
+class Edge:
+    """Select the public local edge before sending any mutation.
+
+    The SSH worker reads the device's public certificate as its trust anchor.
+    Its SAN need not include loopback: validate the chain and validity, then
+    pin the exact leaf certificate before sending HTTP or WebSocket headers.
+    """
+    def __init__(self, scheme="http"):
+        self.scheme = scheme
+        self.context = None
+        self.certificate = None
+        if scheme == "https":
+            pem = Path(DEVICE_CERTIFICATE).read_text()
+            self.certificate = ssl.PEM_cert_to_DER_cert(pem)
+            self.context = ssl.create_default_context(cafile=DEVICE_CERTIFICATE)
+            self.context.check_hostname = False  # Exact device certificate below.
+
+    @property
+    def origin(self):
+        return self.scheme + "://127.0.0.1"
+
+    @classmethod
+    def discover(cls):
+        connection = http.client.HTTPConnection("127.0.0.1", 80, timeout=10)
+        try:
+            connection.request("GET", PREFIX + "/policy", headers={"Origin": "http://127.0.0.1"})
+            response = connection.getresponse()
+            if response.status in {301, 302, 307, 308}:
+                location = urlsplit(response.getheader("Location") or "")
+                if (location.scheme != "https" or location.hostname != "127.0.0.1"
+                        or location.port not in (None, 443) or location.username or location.password
+                        or location.path != PREFIX + "/policy" or location.query or location.fragment):
+                    raise DeviceError("Refusing an unexpected firmware edge redirect")
+                return cls("https")
+            return cls()
+        finally:
+            connection.close()
+
+    def connection(self):
+        if self.scheme == "http":
+            return http.client.HTTPConnection("127.0.0.1", 80, timeout=30)
+        connection = http.client.HTTPSConnection("127.0.0.1", 443, context=self.context, timeout=30)
+        try:
+            connection.connect()
+            if connection.sock.getpeercert(binary_form=True) != self.certificate:
+                raise DeviceError("HTTPS peer does not match the device's SSH-authenticated certificate")
+            return connection
+        except BaseException:
+            connection.close()
+            raise
+
+
 class API:
+    def __init__(self):
+        self.edge = None
+
     def request(self, method, path, body=None, package=None):
         # SSH establishes device identity. The local request still goes through
         # the real firmware auth/origin/signature-policy boundary, not :8130.
-        connection = http.client.HTTPConnection("127.0.0.1", 80, timeout=30)
-        headers = {"Origin": "http://127.0.0.1", "Accept": "application/json"}
+        if self.edge is None:
+            self.edge = Edge.discover()
+        connection = self.edge.connection()
+        headers = {"Origin": self.edge.origin, "Accept": "application/json"}
         try:
             if package is not None:
                 boundary = "recamera" + uuid.uuid4().hex
@@ -190,13 +250,18 @@ def install(api, package, config, report):
 
 class Results:
     """Bounded read-only client for canonical ResultHub via the nginx edge."""
-    def __init__(self, app_id):
-        self.sock = socket.create_connection(("127.0.0.1", 80), timeout=5)
+    def __init__(self, app_id, edge=None):
+        edge = edge or Edge()
+        self.connection = edge.connection()
+        if self.connection.sock is None:
+            self.connection.connect()
+        self.sock = self.connection.sock
+        self.sock.settimeout(5)
         self.buffer = bytearray()
         try:
             key = base64.b64encode(os.urandom(16)).decode()
             self.sock.sendall(("GET /ws/ai/results/v2 HTTP/1.1\r\nHost: 127.0.0.1\r\n"
-                               "Origin: http://127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                               f"Origin: {edge.origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                                f"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n").encode())
             while b"\r\n\r\n" not in self.buffer:
                 chunk = self.sock.recv(4096)
@@ -216,7 +281,7 @@ class Results:
             raise
 
     def close(self):
-        self.sock.close()
+        self.connection.close()
 
     def send(self, payload, opcode=1):
         mask = os.urandom(4)
@@ -313,7 +378,7 @@ def observe(api, app_id, seconds, report, label):
     deadline = time.monotonic() + seconds
     try:
         try:
-            subscriber = Results(app_id)
+            subscriber = Results(app_id, edge=getattr(api, "edge", None))
         except Exception as exc:
             evidence["reason"] = str(exc)
         next_poll = 0
@@ -418,6 +483,9 @@ def main():
             report[stage] = "failed"
         report["error"] = str(exc)
     finally:
+        if api.edge is not None:
+            report["edge"] = {"origin": api.edge.origin,
+                              "tls_peer_pinned": api.edge.scheme == "https"}
         if report.get("app_id") and config.get("action") != "upload":
             try:
                 report["final_app_state"] = app_state(api, report["app_id"])
