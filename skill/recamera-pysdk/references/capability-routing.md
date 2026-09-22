@@ -34,6 +34,16 @@ extension runtime by directly accessing RKIPC internals or media devices.
 | Read RTSP as a side consumer | Supported with preconditions | RTSP consumer path | This is secondary to `FrameSource`; decoder availability depends on the installed environment. |
 | Call stable public platform controls | Supported with preconditions | Documented versioned HTTP control API or its kit wrapper | Confirm the endpoint/capability is published by the installed firmware; use only the documented API. |
 | Hardware privacy mask | Supported with preconditions | `MaskControl` | Confirm the installed extension library exports this optional capability; use the binding rather than its native transport directly. |
+| Typed AI results and generic geometry | Supported with preconditions | `kit.ai`, `kit.geometry` | Validate coordinates and output/render declarations; local acceptance is not server acknowledgement. |
+| Buffer ownership and RGA image transforms | Supported with preconditions | `kit.Frame`, `kit.ImageBuffer`, `kit.media.image` | Hardware paths require an active NV12 DMA frame; public RGA transforms return owned RGB, distinct from model-bound DMA input. |
+| Compose stages, cancellation and bounded queues | Supported | `kit.workflow` | Synchronous execution with cooperative cancellation; no automatic threads, NPU admission or resource creation. |
+| Observe capability and manage SDK objects | Supported with preconditions | `kit.capabilities`, `kit.Device` | Filesystem hints can be UNKNOWN; resource lifetime management does not establish firmware availability. |
+| Upload, install and validate a built application | Supported with preconditions | Bundled `deploy_app.py` and AppMgr APIs | Device access and authorization for the selected action; preserve current-instance lifecycle/result evidence. See `runtime-validation.md`. |
+
+For exact arguments, returns, field defaults and per-module constraints use the
+bundled [complete API index](api/index.md) and [interface characteristics](api/features.md).
+Exported platform backends and migration stubs are documented for compatibility,
+not promoted to ordinary app APIs.
 
 ## Caller and authority boundaries
 
@@ -109,7 +119,7 @@ playback hardware; audible output not yet verified", never as "speaker works".
 | Modify built-in inference internals from probe tensors | Not supported | `ProbeSource` is observation only. It can inform a separate app but is not a stable control/inference replacement. |
 | Assume arbitrary OpenCV, GStreamer, FFmpeg, Python package, or decoder availability | Requires confirmation | Do not code it as a default dependency. Check the supplied target runtime or use the core SDK route. |
 | Guarantee unrestricted simultaneous NPU applications | Requires product policy and runtime confirmation | Treat built-in and custom NPU workloads as resource-constrained; do not promise concurrency or performance. |
-| Add firmware features, Buildroot packages, system services, deployment, or device-side installation | Out of this skill's scope | State that the requested work belongs to platform, release, or installation engineering. |
+| Add firmware features, Buildroot packages, system services, or replace the shared runtime | Out of this skill's scope | This belongs to platform engineering; authorized App package upload/install/testing is supported separately. |
 | Build an App Center v2 archive with target-compatible private dependencies | Supported by this skill | Read `app-packaging.md`; package only a supplied wheel closure as `wheels/*.whl` and delegate archive metadata to the SDK builder. |
 
 ## Evidence discipline

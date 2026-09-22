@@ -23,7 +23,11 @@ reCamera Pro / RV1126B Python extension SDK Apps. It has four outcomes:
 The compatible public SDK upstream is
 [Seeed-Studio/recamera-pro-ext-api](https://github.com/Seeed-Studio/recamera-pro-ext-api).
 It is the source for API docs, bindings, Kit code, official Apps, examples, and
-the packaging implementation. For default packaging this skill bundles the
+the packaging implementation. The skill includes an offline
+[public API reference](references/api/index.md), with exact signatures, fields,
+defaults, descriptions and [interface characteristics](references/api/features.md).
+Its source revision is recorded in `scripts/api-reference-lock.json`;
+it is independent of the builder revision. For default packaging this skill bundles the
 fixed official builder from public commit
 `60e0f2ade601152c3dd7bf7e228297cc8203a2ed` under `scripts/sdk-builder/` and
 verifies its three SDK files by SHA-256, so no local SDK checkout is required.
@@ -68,8 +72,11 @@ work. Ask a focused question only when a decision materially changes the app.
 ### 2. Resolve SDK documentation without flooding context
 
 Read [doc-router.md](references/doc-router.md), then load only the documents the
-current feature needs. Prefer a user-provided compatible checkout; otherwise
-use the bundled pinned commit as the documentation baseline. If newer APIs are
+current feature needs. Start with the bundled [API index](references/api/index.md)
+and the relevant module; it includes SDK/Kit, native ABI, HTTP and WebSocket
+contracts without requiring a repository checkout or network access.
+Prefer a user-provided compatible checkout when comparing versions; otherwise
+use the API reference's pinned commit as the documentation baseline. If newer APIs are
 needed, resolve and record an explicit revision and compare its contract before
 using it; do not mix newer examples with an older packager silently. Do not preload
 all of `docs/`. If GitHub cannot be read, work only from the bundled stable
@@ -263,6 +270,13 @@ upload/install/lifecycle/result delivery, and task-specific behavior. A failed,
 pending or unverified stage must not be described as device acceptance passed.
 
 ## Maintaining the fixed contract
+
+Run `python scripts/api_reference.py --sdk-root <checkout> --check` to compare
+the complete documented SDK/Kit API surface, AppMgr routes, signatures, fields
+and source hashes. Review changed behavior and update `api-notes.json` /
+`api-http-notes.json` before `--write --revision <full-commit>`; do not regenerate
+against an unreviewed version during ordinary app development. This check is
+independent of the builder/manifest contract below and does not certify hardware.
 
 Run `python scripts/sdk_contract.py --sdk-root <checkout>` to detect changes to
 manifest/build/dependency admission, Kit APIs, recording and resource routing.

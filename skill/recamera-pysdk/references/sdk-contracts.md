@@ -1,8 +1,10 @@
 # SDK Contracts
 
 This reference summarizes the public Python SDK contracts that affect code
-correctness. Verify unfamiliar method signatures against
-`sdk/python/recamera_ext/__init__.py` in the current SDK checkout.
+correctness. Use the bundled [complete API reference](api/index.md) for exact
+signatures and fields, and [interface characteristics](api/features.md) for
+ownership, timing, concurrency and availability. A compatible SDK checkout is
+needed only when comparing another version or executing host runtime tests.
 
 ## Architecture boundary
 

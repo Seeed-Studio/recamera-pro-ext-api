@@ -3,11 +3,29 @@
 Use this index to read only the SDK material needed for the current request.
 Do not preload or copy the complete `docs/` tree into context.
 
+## Bundled offline API documentation
+
+Start with [api/index.md](api/index.md) and select the required module. All
+public definitions/exports in the current non-private `recamera_ext` and `kit`
+modules have signatures, defaults, data fields and explanations, including
+compatibility and platform-only APIs marked with their restrictions.
+
+- Ownership, color/stride, timestamps, coordinates, scheduling, threading,
+  permissions, errors and examples: [api/features.md](api/features.md).
+- All AppMgr HTTP routes and result subscription contracts:
+  [api/http.md](api/http.md), [api/http-routes.md](api/http-routes.md).
+- Native types, error codes and lifecycle: [api/c-abi.md](api/c-abi.md).
+
+The API reference baseline is recorded in `scripts/api-reference-lock.json`.
+It is independent of the older bundled builder pin. These references are
+installed with the skill; upstream guides below are optional deeper reading,
+not a requirement to recover missing baseline method signatures.
+
 ## Source resolution
 
 1. Prefer a compatible local SDK checkout supplied by the user.
 2. If the user names a tag or commit, use exactly that revision.
-3. Otherwise use the bundled pin as the baseline. Newer APIs require an
+3. Otherwise use the bundled API reference pin as the baseline. Newer APIs require an
    explicitly resolved revision and contract comparison; record that revision
    separately from the actual builder provenance.
 4. For the rest of the task, read only compatible upstream content pinned to
@@ -15,9 +33,9 @@ Do not preload or copy the complete `docs/` tree into context.
    the repository; this Skill does not require a specific private checkout.
 5. Do not mix floating branch content with pinned content, clone the whole
    repository by default, or fetch every document.
-6. If GitHub is unavailable, do not guess unfamiliar APIs. Use the bundled
-   stable contracts only and classify unverified behavior as **Supported with
-   preconditions**.
+6. If GitHub is unavailable, use the bundled full baseline API reference.
+   Do not guess APIs introduced after that revision; classify unverified newer
+   behavior as **Supported with preconditions**.
 
 Packaging does not require source resolution: the Skill already contains the
 fixed official builder from its pinned public SDK revision
