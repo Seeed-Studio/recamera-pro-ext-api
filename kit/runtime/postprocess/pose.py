@@ -10,9 +10,10 @@ in-graph concat/decode (see models/convert/export_pose.py):
         cls branch  [1,  1, H, W]   -> person score (single class)
         kpt branch  [1, 51, H, W]   -> 17 keypoints, each (x, y, conf)
 
-Keypoint decode (ultralytics convention):
-    kx = (raw_x * 2.0 + (gx - 0.5)) * stride
-    ky = (raw_y * 2.0 + (gy - 0.5)) * stride
+Keypoint decode (ultralytics convention, anchors = grid + 0.5, so
+anchors - 0.5 is the integer grid index):
+    kx = (raw_x * 2.0 + gx) * stride
+    ky = (raw_y * 2.0 + gy) * stride
     kc = sigmoid(raw_conf)
 
 Output: list of dicts
@@ -83,8 +84,8 @@ def _decode_pose(outputs: Sequence[np.ndarray], conf_thres: float,
 
         # ---- 3. keypoint decode for survivors ----
         kp_sel = kp.reshape(n_kpt, 3, n)[:, :, keep].astype(np.float32)  # (17,3,k)
-        kx = (kp_sel[:, 0, :] * 2.0 + (gx[None, :] - 0.5)) * stride       # (17,k)
-        ky = (kp_sel[:, 1, :] * 2.0 + (gy[None, :] - 0.5)) * stride
+        kx = (kp_sel[:, 0, :] * 2.0 + gx[None, :]) * stride               # (17,k)
+        ky = (kp_sel[:, 1, :] * 2.0 + gy[None, :]) * stride
         kc = _sigmoid(kp_sel[:, 2, :])
         kpts = np.stack([kx, ky, kc], axis=-1).transpose(1, 0, 2)         # (k,17,3)
 

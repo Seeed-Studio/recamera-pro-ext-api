@@ -120,12 +120,12 @@ def _raw_kpt(ox: float, oy: float):
     """Original-frame (x, y) -> the raw (x, y) the pose head must emit.
 
     Inverse of the decoder: original -> letterbox (scale + pad) -> ultralytics
-    keypoint decode ``k = (raw * 2 + (g - 0.5)) * stride``.
+    keypoint decode ``k = (raw * 2 + g) * stride``.
     """
     lx = ox * _LB_INFO.scale + _LB_INFO.pad_w
     ly = oy * _LB_INFO.scale + _LB_INFO.pad_h
-    return ((lx / STRIDE - CELL_COL + 0.5) / 2.0,
-            (ly / STRIDE - CELL_ROW + 0.5) / 2.0)
+    return ((lx / STRIDE - CELL_COL) / 2.0,
+            (ly / STRIDE - CELL_ROW) / 2.0)
 
 
 def _fixed_frames():
