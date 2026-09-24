@@ -2,9 +2,12 @@
 Temporal fall state machine, ported from the first-gen C++
 (solutions/fall-detection/main/fall_detector.cpp).
 
-Design faithful to the production first-gen/Jetson detector. Geometry and
-motion arm ``suspected``; by default only a learned temporal-positive result on
-a valid current pose can confirm ``fallen``.  ``temporal_confirmation_required``
+Design faithful to the production first-gen/Jetson detector. Only geometry
+arms ``suspected``: a fast hip drop followed, within ``motion_window_sec``, by a
+horizontal cue (torso angle or box aspect).  A temporal-positive result alone
+never leaves ``normal``.  By default ``fallen`` is confirmed only from
+``suspected`` when the learned temporal gate is positive AND the current valid
+pose is lying with enough evidence features.  ``temporal_confirmation_required``
 may be set false explicitly for legacy geometry-only bring-up.
 
 State: Normal -> Suspected -> Fallen -> Recovering -> Normal.
@@ -62,7 +65,7 @@ class FallConfig:
 class FallOutput:
     state: str = NORMAL
     fall_detected: bool = False   # true while Fallen or Recovering
-    fall_event: bool = False      # edge: Normal/Suspected -> Fallen
+    fall_event: bool = False      # edge: Suspected -> Fallen
     event_id: int = 0
     diagnostics: Dict[str, float] = field(default_factory=dict)
 
@@ -200,9 +203,10 @@ class FallDetector:
             cooldown = o.timestamp_sec < self._cooldown_until
 
             if self._state == NORMAL:
-                if (not cooldown and temporal_available and temporal_positive):
-                    self._to_fallen(o)
-                elif (not cooldown and self._last_fast_drop >= 0.0 and
+                # Geometry is the only way out of NORMAL.  A temporal-positive
+                # window on its own (e.g. somebody sitting down quickly) must
+                # not raise an alarm without the hip-drop + horizontal arming.
+                if (not cooldown and self._last_fast_drop >= 0.0 and
                         o.timestamp_sec - self._last_fast_drop <= c.motion_window_sec and
                         horizontal_cue):
                     self._state = SUSPECTED
@@ -212,11 +216,13 @@ class FallDetector:
                     self._max_drop = (max(0.0, o.hip_y - self._baseline_hip_y)
                                       if self._have_baseline else 0.0)
             elif self._state == SUSPECTED:
-                if (not cooldown and temporal_available and temporal_positive):
+                if lying and enough:
+                    self._last_strong_evidence = o.timestamp_sec
+                if (not cooldown and temporal_available and temporal_positive and
+                        lying and enough):
+                    # Learned confirmation also needs the current pose lying.
                     self._to_fallen(o)
                 else:
-                    if lying and enough:
-                        self._last_strong_evidence = o.timestamp_sec
                     if (not c.temporal_confirmation_required and
                             self._motion_triggered and lying and enough and
                             self._max_drop >= c.hip_drop_distance_threshold and

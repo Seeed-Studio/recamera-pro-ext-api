@@ -188,3 +188,99 @@ def test_temporal_profile_and_strict_confirmation_policy():
     legacy.update(observation(0.2, 0.65, 70.0, 1.5))
     legacy_out = legacy.update(observation(0.7, 0.68, 75.0, 1.6))
     assert legacy_out.state == "fallen" and legacy_out.fall_event
+
+
+def _obs(ts, hip, torso, aspect, valid=True):
+    from kit.logic.geometry import Observation
+
+    obs = Observation(ts)
+    obs.valid = valid
+    obs.hip_y = hip
+    obs.torso_angle_deg = torso
+    obs.bbox_aspect_ratio = aspect
+    obs.person_score = 0.9
+    return obs
+
+
+def _replay(detector, frames, temporal_from=0.0):
+    """Feed (ts, hip, torso, aspect) frames; temporal is positive from
+    ``temporal_from`` onward (p=0.99), mimicking a saturated learned gate."""
+    outs = []
+    for ts, hip, torso, aspect in frames:
+        positive = ts >= temporal_from
+        outs.append(detector.update(
+            _obs(ts, hip, torso, aspect), temporal_available=True,
+            temporal_positive=positive,
+            temporal_probability=0.99 if positive else 0.1))
+    return outs
+
+
+def test_upright_person_with_temporal_positive_never_alarms():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    frames = [(i / 15.0, 0.45, 8.0, 0.45) for i in range(150)]
+    outs = _replay(detector, frames)
+    assert not any(o.fall_event for o in outs)
+    assert {o.state for o in outs} == {"normal"}
+
+
+def test_sit_down_with_temporal_positive_never_alarms():
+    """Fast hip drop (and a wide seated box) but no lying torso."""
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    frames = []
+    for i in range(150):
+        ts = i / 15.0
+        if ts < 1.0:
+            hip, torso, aspect = 0.45, 8.0, 0.45       # standing
+        elif ts < 1.8:
+            k = (ts - 1.0) / 0.8                        # sitting down in 0.8 s
+            hip, torso, aspect = 0.45 + 0.2 * k, 8.0 + 22.0 * k, 0.45 + 0.9 * k
+        else:
+            hip, torso, aspect = 0.65, 30.0, 1.35       # seated, wide box
+        frames.append((ts, hip, torso, aspect))
+    outs = _replay(detector, frames, temporal_from=1.2)
+    assert not any(o.fall_event for o in outs)
+    assert "fallen" not in {o.state for o in outs}
+
+
+def test_real_fall_with_temporal_positive_alarms_once():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    frames = []
+    for i in range(150):
+        ts = i / 15.0
+        if ts < 1.0:
+            hip, torso, aspect = 0.45, 8.0, 0.45        # standing
+        elif ts < 1.4:
+            k = (ts - 1.0) / 0.4                        # falling in 0.4 s
+            hip, torso, aspect = 0.45 + 0.3 * k, 8.0 + 72.0 * k, 0.45 + 2.0 * k
+        else:
+            hip, torso, aspect = 0.75, 80.0, 2.45       # lying on the floor
+        frames.append((ts, hip, torso, aspect))
+    outs = _replay(detector, frames, temporal_from=1.6)
+    edges = [i for i, o in enumerate(outs) if o.fall_event]
+    assert len(edges) == 1 and outs[edges[0]].event_id == 1
+    # FALLEN was reached through SUSPECTED, never straight from NORMAL.
+    assert outs[edges[0] - 1].state == "suspected"
+
+
+def test_temporal_positive_while_suspected_needs_current_lying_pose():
+    from kit.logic.temporal import FallConfig, FallDetector
+
+    detector = FallDetector(FallConfig(suspected_timeout_sec=3.0))
+    detector.update(_obs(0.0, 0.4, 10.0, 0.7))
+    armed = detector.update(_obs(0.2, 0.65, 40.0, 1.5))   # wide box, not lying
+    assert armed.state == "suspected"
+    not_lying = detector.update(_obs(0.3, 0.66, 40.0, 1.5),
+                                temporal_available=True,
+                                temporal_positive=True,
+                                temporal_probability=0.99)
+    assert not_lying.state == "suspected" and not not_lying.fall_event
+    lying = detector.update(_obs(0.4, 0.68, 75.0, 1.6),
+                            temporal_available=True, temporal_positive=True,
+                            temporal_probability=0.99)
+    assert lying.state == "fallen" and lying.fall_event

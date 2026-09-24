@@ -6,9 +6,11 @@ window, learned classifier, geometry state machine, and event counter.
 
 The production default is strict confirmation:
 
-- geometry (hip drop plus a horizontal cue) may arm `suspected`;
-- `fallen` requires a temporal probability of at least 0.8 on three evaluations
-  and a valid pose in the current frame;
+- only geometry (hip drop plus a horizontal cue within the motion window) may
+  arm `suspected`; a temporal-positive window alone never leaves `normal`;
+- `fallen` is reached only from `suspected` and requires a temporal probability
+  of at least 0.8 on three evaluations and a valid lying pose (torso angle and
+  box aspect both above threshold) in the current frame;
 - a first-frame lying pose, missing pose, or invalid pose cannot create an event;
 - set `temporal_confirmation_required=false` only for explicit legacy
   geometry-only bring-up.
