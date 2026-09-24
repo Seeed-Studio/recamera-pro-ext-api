@@ -474,3 +474,120 @@ def test_min_features_three_confirms_stationary_lying_victim():
     edges = _edges(outs)
     assert len(edges) == 1
     assert edges[0].diagnostics["hip_drop_speed"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Location cooldown vs. identity (real FallDetector, stubbed temporal gate).
+# --------------------------------------------------------------------------- #
+def _lying_pose(box):
+    x1, y1, x2, y2 = box
+    y = (y1 + y2) * 0.5
+    kpts = [[x1 + (x2 - x1) * 0.2, y, 0.9] for _ in range(17)]
+    kpts[5] = [x1 + (x2 - x1) * 0.25, y - 4, 0.9]
+    kpts[6] = [x1 + (x2 - x1) * 0.25, y + 4, 0.9]
+    kpts[11] = [x1 + (x2 - x1) * 0.6, y - 4, 0.9]
+    kpts[12] = [x1 + (x2 - x1) * 0.6, y + 4, 0.9]
+    return {"box": list(box), "score": 0.9, "keypoints": kpts}
+
+
+def _falling_pose(stand_box, lie_box, k):
+    """Linear blend of an upright and a lying pose, k in [0, 1]."""
+    a, b = _pose(stand_box), _lying_pose(lie_box)
+    mix = lambda u, v: [p + (q - p) * k for p, q in zip(u, v)]
+    return {"box": mix(a["box"], b["box"]), "score": 0.9,
+            "keypoints": [mix(p, q) for p, q in zip(a["keypoints"],
+                                                    b["keypoints"])]}
+
+
+def _person_at(ts, stand_box, lie_box, t_fall, fall_sec=0.4):
+    if ts < t_fall:
+        return _pose(stand_box)
+    if ts < t_fall + fall_sec:
+        return _falling_pose(stand_box, lie_box, (ts - t_fall) / fall_sec)
+    return _lying_pose(lie_box)
+
+
+class _PositiveFrom:
+    """Temporal gate stub: positive from ``t`` on (a saturated learned gate)."""
+
+    def __init__(self, t):
+        self.t = t
+
+    def update(self, _frame, ts):
+        positive = ts >= self.t
+        return True, positive, 0.99 if positive else 0.1
+
+
+def _identity_app(mod, positive_from, **config):
+    app = _make_app(mod, dict({"occlusion_grace_sec": 0.75,
+                               "location_cooldown_sec": 10.0}, **config))
+    app._temporal_for = lambda _tid: _PositiveFrom(positive_from)
+    app.recordings = []
+    mod.request_configured_recording = (
+        lambda _app, kind, pts: app.recordings.append((kind, pts)) or True)
+    return app
+
+
+_A_STAND, _A_LIE = (170, 100, 230, 380), (100, 300, 300, 380)
+_B_STAND, _B_LIE = (270, 200, 330, 480), (100, 400, 300, 480)
+
+
+def _replay_people(app, people, n):
+    """people: [(stand_box, lie_box, t_fall)]; returns the fall events."""
+    frame = SimpleNamespace(w=640, h=480, pts=0.0)
+    falls = []
+    for i in range(n):
+        frame.pts = i / 15.0
+        results = [_person_at(frame.pts, s, l, t) for s, l, t in people]
+        falls += [e for e in app._advance_tracks(results, frame)
+                  if e["kind"] == "fall"]
+    return falls
+
+
+def test_boxes_used_by_identity_tests_are_disjoint_but_near():
+    mod = _load_app_module()
+    assert mod.IoUTracker._iou(list(_A_LIE), list(_B_LIE)) == 0.0
+    assert mod._boxes_near(_A_LIE, _B_LIE)
+
+
+def test_two_people_falling_near_each_other_at_once_both_alarm():
+    mod = _load_app_module()
+    app = _identity_app(mod, positive_from=1.8)
+    falls = _replay_people(app, [(_A_STAND, _A_LIE, 1.0),
+                                 (_B_STAND, _B_LIE, 1.0)], 60)
+    assert len({e["track_id"] for e in falls}) == 2
+    assert len(falls) == 2
+    assert [k for k, _ in app.recordings] == ["fall", "fall"]
+
+
+def test_second_nearby_fall_while_first_person_still_visible_alarms():
+    mod = _load_app_module()
+    app = _identity_app(mod, positive_from=1.8)
+    falls = _replay_people(app, [(_A_STAND, _A_LIE, 1.0),
+                                 (_B_STAND, _B_LIE, 3.0)], 75)
+    assert len(falls) == 2
+    assert falls[0]["track_id"] != falls[1]["track_id"]
+    assert len(app.recordings) == 2
+
+
+def test_location_cooldown_window_is_not_extended_by_suppressed_edges():
+    mod = _load_app_module()
+    app = _make_app(mod, {"occlusion_grace_sec": 0.2,
+                          "location_cooldown_sec": 10.0})
+    app._detector_for = lambda tid, d={}: d.setdefault(tid, _EdgeOnFirstUpdate())
+    frame = SimpleNamespace(w=640, h=480, pts=0.0)
+
+    def step(pts, boxes):
+        frame.pts = pts
+        return [e for e in app._advance_tracks([_pose(b) for b in boxes], frame)
+                if e["kind"] == "fall"]
+
+    here = (100, 300, 300, 380)
+    assert len(step(0.0, [here])) == 1
+    # Re-detections under new ids (old id gone) every second are suppressed...
+    for pts in range(1, 10):
+        assert step(pts, []) == []
+        assert step(pts + 0.5, [here]) == []
+    # ...but the window runs from the emitted event only (0.0 + 10.0).
+    step(10.2, [])
+    assert len(step(10.5, [here])) == 1
