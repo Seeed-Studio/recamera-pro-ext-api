@@ -355,3 +355,122 @@ def test_location_cooldown_zero_disables_suppression():
             count += sum(e["kind"] == "fall" for e in app._advance_tracks(
                 [_pose(b) for b in boxes], frame))
     assert count == 3
+
+
+# --------------------------------------------------------------------------- #
+# Arming / confirmation timing (kit.logic.temporal) on 15 fps sequences.
+# --------------------------------------------------------------------------- #
+_FPS = 15.0
+_STAND = (8.0, 0.45)                     # torso deg, box aspect
+_LIE = (80.0, 2.45)
+
+
+def _fall_frames(t_fall, n, fall_sec=0.4, hip0=0.45, hip1=0.75,
+                 stand_up_at=None, gap=None):
+    """Standing, a ``fall_sec`` fall starting at ``t_fall``, then lying.
+
+    ``gap=(a, b)`` marks frames in [a, b) as invalid pose (occlusion);
+    ``stand_up_at`` switches back to an upright pose from that time.
+    Yields (ts, hip, torso, aspect, valid).
+    """
+    for i in range(n):
+        ts = i / _FPS
+        if stand_up_at is not None and ts >= stand_up_at:
+            hip, (torso, aspect) = hip0, _STAND
+        elif ts < t_fall:
+            hip, (torso, aspect) = hip0, _STAND
+        elif fall_sec > 0 and ts < t_fall + fall_sec:
+            k = (ts - t_fall) / fall_sec
+            hip = hip0 + (hip1 - hip0) * k
+            torso = _STAND[0] + (_LIE[0] - _STAND[0]) * k
+            aspect = _STAND[1] + (_LIE[1] - _STAND[1]) * k
+        else:
+            hip, (torso, aspect) = hip1, _LIE
+        valid = not (gap and gap[0] <= ts < gap[1])
+        yield ts, hip, torso, aspect, valid
+
+
+def _run(detector, frames, positive_from):
+    outs = []
+    for ts, hip, torso, aspect, valid in frames:
+        positive = ts >= positive_from
+        outs.append(detector.update(
+            _obs(ts, hip, torso, aspect, valid), temporal_available=True,
+            temporal_positive=positive,
+            temporal_probability=0.99 if positive else 0.1))
+    return outs
+
+
+def _edges(outs):
+    return [o for o in outs if o.fall_event]
+
+
+def test_occluded_fall_arms_by_displacement_and_alarms_once():
+    """Pose invalid through most of the fall: the hip speed measured across
+    the gap (0.2 / 1.0 s) stays under the 0.25/s threshold."""
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    frames = list(_fall_frames(1.0, 150, fall_sec=0.0, hip0=0.40, hip1=0.60,
+                               gap=(1.0, 2.0)))
+    outs = _run(detector, frames, positive_from=2.4)
+    speeds = [o.diagnostics["hip_drop_speed"] for o in outs]
+    assert max(speeds) < 0.25
+    assert len(_edges(outs)) == 1
+
+
+def test_occluded_sit_down_never_alarms():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    frames = []
+    for ts, hip, _t, _a, valid in _fall_frames(
+            1.0, 150, fall_sec=0.0, hip0=0.45, hip1=0.65,
+            gap=(1.0, 2.0)):
+        seated = ts >= 1.0
+        frames.append((ts, hip, 30.0 if seated else 8.0,
+                       1.35 if seated else 0.45, valid))
+    outs = _run(detector, frames, positive_from=1.2)
+    assert not _edges(outs)
+
+
+def test_late_temporal_positive_while_still_lying_confirms_once():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()          # suspected_timeout 1.5 s
+    # Armed at ~1.1 s; the learned gate only turns positive 2.9 s later.
+    outs = _run(detector, _fall_frames(1.0, 150), positive_from=4.0)
+    assert len(_edges(outs)) == 1
+    assert _edges(outs)[0].event_id == 1
+
+
+def test_late_temporal_positive_after_standing_up_does_not_alarm():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    outs = _run(detector, _fall_frames(1.0, 150, stand_up_at=3.0),
+                positive_from=4.0)
+    assert not _edges(outs)
+    assert outs[-1].state == "normal"
+
+
+def test_late_confirmation_latch_is_bounded():
+    from kit.logic.temporal import FallDetector
+
+    detector = FallDetector()
+    # Positive arrives long after the arming drop: the latch has expired.
+    outs = _run(detector, _fall_frames(1.0, 200), positive_from=9.0)
+    assert not _edges(outs)
+    assert outs[-1].state == "normal"
+
+
+def test_min_features_three_confirms_stationary_lying_victim():
+    """Confirmation counts the latched arming motion, not the current hip
+    speed, which is ~0 once the victim lies still."""
+    from kit.logic.temporal import FallConfig, FallDetector
+
+    detector = FallDetector(FallConfig(min_suspected_features=3))
+    outs = _run(detector, _fall_frames(1.0, 150), positive_from=1.9)
+    edges = _edges(outs)
+    assert len(edges) == 1
+    assert edges[0].diagnostics["hip_drop_speed"] == 0.0
