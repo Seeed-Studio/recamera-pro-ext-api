@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import collections
 import itertools
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Optional
+
+
+log = logging.getLogger(__name__)
 
 
 class QueueFullError(RuntimeError):
@@ -32,6 +36,7 @@ class ScheduledJob:
     fairness_id: Optional[str] = None
     sequence: int = 0
     enqueued_at: float = field(default_factory=time.monotonic)
+    cleanup: Optional[Callable[[], None]] = None
     _done: threading.Event = field(default_factory=threading.Event, init=False)
     _result: Any = field(default=None, init=False)
     _error: Optional[BaseException] = field(default=None, init=False)
@@ -220,8 +225,15 @@ class FairScheduler:
                 # The worker can now sleep indefinitely. The waiting caller
                 # owns its job/result; do not keep the last tensor payload (or
                 # a failed job's input closure) alive in this thread's frame.
+                cleanup = job.cleanup
                 result = None
                 job = None
+                if cleanup is not None:
+                    try:
+                        cleanup()
+                    except Exception:
+                        log.exception("scheduled job cleanup notification failed")
+                cleanup = None
 
 
 __all__ = [

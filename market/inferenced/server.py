@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import gc
 import hashlib
 import json
 import logging
@@ -34,6 +33,7 @@ from kit.runtime.engine import (
 )
 
 from .driver_lock import NpuDriverCoordinator
+from ._memory import DeferredCycleCollector, service_runtime
 from .authorization import (
     AuthorizationError,
     AuthorizationPending,
@@ -77,6 +77,9 @@ class RknnBackend:
     def __init__(self, *, runtime_factory=None, coordinator=None) -> None:
         self._runtime_factory = runtime_factory
         self.coordinator = coordinator or NpuDriverCoordinator()
+        self._native_lock = threading.RLock()
+        self._cycles = DeferredCycleCollector()
+        self._cleanup_local = threading.local()
 
     def _new_runtime(self, model_spec: Optional[ModelSpec] = None):
         if self._runtime_factory is not None:
@@ -84,8 +87,40 @@ class RknnBackend:
         if model_spec is None:
             # Keep the small internal hook source-compatible for diagnostics
             # and vendor tests that instantiate a backend directly.
-            return _default_runtime_factory()
-        return _runtime_for_spec(model_spec)
+            return service_runtime(_default_runtime_factory())
+        return service_runtime(_runtime_for_spec(model_spec))
+
+    @staticmethod
+    def _needs_collection(handle):
+        return (getattr(handle, "backend", None) != "ctypes"
+                and getattr(handle, "collects_output_cycles", False) is not True)
+
+    def _defer_collection(self):
+        self._cycles.request()
+        self._cleanup_local.pending = True
+
+    def output_cleanup(self, handle):
+        if self._needs_collection(handle):
+            # Called on the connection thread before queuing inference. Its
+            # response may finish before a timed-out worker finishes executing.
+            self._cleanup_local.pending = True
+            return self.response_finished
+        return None
+
+    def response_finished(self):
+        if getattr(self._cleanup_local, "pending", False):
+            self._cleanup_local.pending = False
+            self._cycles.request()
+
+    def collect_pending(self, *, force=False):
+        # The accept loop must not wait behind a running model. No extra NPU
+        # flock is acquired for GC, and ctypes-only workloads never request it.
+        if not self._native_lock.acquire(blocking=force):
+            return False
+        try:
+            return self._cycles.collect(force=force)
+        finally:
+            self._native_lock.release()
 
     def _select_runtime(self, model_spec: ModelSpec):
         """Return ``(runtime, may_fall_back_to_rknnlite)``.
@@ -130,19 +165,24 @@ class RknnBackend:
         # Backend selection happens before entering the driver lock and before
         # either implementation performs native model loading.
         runtime, may_fall_back = self._select_runtime(model_spec)
-        with self.coordinator.hold() as token:
+        with self._native_lock:
             try:
-                self._initialize(token, runtime, path, model_spec)
-            except CtypesUnsupportedModel as unsupported:
-                # Fall back only after the ctypes context was destroyed; a
-                # failed teardown has already quarantined the driver.
-                if not (may_fall_back and getattr(runtime, "released", False)
-                        and not getattr(runtime, "native_cleanup_failed", False)):
-                    raise
-                log.info("ctypes backend cannot run %s (%s); using RKNNLite",
-                         model_spec.name or path, unsupported)
-                runtime = _default_runtime_factory()
-                self._initialize(token, runtime, path, model_spec)
+                with self.coordinator.hold() as token:
+                    try:
+                        self._initialize(token, runtime, path, model_spec)
+                    except CtypesUnsupportedModel as unsupported:
+                        # Fall back only after safe native context teardown.
+                        if not (may_fall_back and getattr(runtime, "released", False)
+                                and not getattr(runtime, "native_cleanup_failed", False)):
+                            raise
+                        log.info("ctypes backend cannot run %s (%s); using RKNNLite",
+                                 model_spec.name or path, unsupported)
+                        runtime = service_runtime(_default_runtime_factory())
+                        self._initialize(token, runtime, path, model_spec)
+            finally:
+                if self._needs_collection(runtime):
+                    self._defer_collection()
+                    self.collect_pending(force=True)
         return runtime
 
     @staticmethod
@@ -174,40 +214,41 @@ class RknnBackend:
             raise
 
     def infer(self, handle: Any, inputs: Sequence[np.ndarray]) -> list[np.ndarray]:
-        if (getattr(handle, "backend", None) != "ctypes"
-                and getattr(handle, "collects_output_cycles", False) is not True):
-            # RKNNLite 2.3.2 keeps each call's output arrays in reference
-            # cycles, so only the cyclic GC frees them.  GC is triggered by
-            # object counts, not bytes: a 34 MB SenseVoice logits tensor per
-            # call accumulated until the kernel OOM-killed this daemon.  By
-            # now the previous call's outputs have been sent and dropped, so
-            # a full collection here reclaims them without copying the
-            # current outputs. Runs outside the driver lock. Kit's protected
-            # wrapper already collects at return/exception boundaries; only
-            # raw/injected RKNNLite handles need this compatibility fallback.
-            gc.collect()
-        with self.coordinator.hold():
-            outputs = handle.inference(inputs=list(inputs))
-            if outputs is None:
-                raise RuntimeError("RKNNLite.inference returned no outputs")
-            return list(outputs)
+        needs_collection = self._needs_collection(handle)
+        with self._native_lock:
+            self.collect_pending(force=needs_collection)
+            try:
+                with self.coordinator.hold():
+                    outputs = handle.inference(inputs=list(inputs))
+                    if outputs is None:
+                        raise RuntimeError("RKNNLite.inference returned no outputs")
+                    return list(outputs)
+            finally:
+                if needs_collection:
+                    self._defer_collection()
 
     def release(self, handle: Any) -> None:
-        with self.coordinator.hold() as token:
+        with self._native_lock:
             try:
-                result = handle.release()
-                if result not in (None, 0):
-                    raise RuntimeError(f"RKNNLite.release returned {result!r}")
-            except BaseException as exc:
-                token.retain_fail_closed(f"RKNN context teardown failed: {exc}")
-                raise
+                with self.coordinator.hold() as token:
+                    try:
+                        result = handle.release()
+                        if result not in (None, 0):
+                            raise RuntimeError(f"RKNNLite.release returned {result!r}")
+                    except BaseException as exc:
+                        token.retain_fail_closed(f"RKNN context teardown failed: {exc}")
+                        raise
+            finally:
+                if self._needs_collection(handle):
+                    self._defer_collection()
+                    self.collect_pending(force=True)
 
     def shared_io_size(self, handle):
         return (int(handle.shared_io_size_bytes)
                 if getattr(handle, "io_mode", None) == "bound" else 0)
 
     def open_shared_io(self, handle):
-        with self.coordinator.hold() as token:
+        with self._native_lock, self.coordinator.hold() as token:
             input_buffer = None
             try:
                 input_buffer = handle.allocate_input_buffer()
@@ -226,7 +267,7 @@ class RknnBackend:
             return input_buffer, outputs
 
     def close_shared_io(self, handle, channel):
-        with self.coordinator.hold() as token:
+        with self._native_lock, self.coordinator.hold() as token:
             try:
                 handle.release_input_buffer(channel.input)
                 handle.release_output_buffers(channel.outputs)
@@ -236,9 +277,13 @@ class RknnBackend:
 
     def infer_shared_io(self, handle, channel):
         started = time.monotonic()
-        with self.coordinator.hold():
-            admitted = time.monotonic()
-            handle.infer_dma_buffers(channel.input, channel.outputs)
+        with self._native_lock:
+            # A previous RKNNLite response may finish while only DMA models
+            # keep running. Drain due work without scheduling GC for DMA itself.
+            self.collect_pending()
+            with self.coordinator.hold():
+                admitted = time.monotonic()
+                handle.infer_dma_buffers(channel.input, channel.outputs)
         return {
             "driver_wait": (admitted - started) * 1000.0,
             "runtime": (time.monotonic() - admitted) * 1000.0,
@@ -500,8 +545,14 @@ class InferenceService:
     def serve_forever(self) -> None:
         self.start()
         while not self._stopping.is_set():
+            collect = getattr(self.backend, "collect_pending", None)
+            if callable(collect):
+                collect()
+            listener = self._listener
+            if listener is None:
+                break
             try:
-                conn, _ = self._listener.accept()  # type: ignore[union-attr]
+                conn, _ = listener.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -574,6 +625,12 @@ class InferenceService:
                     # and flock on this exact failure by design.
                     self._record_native_fault(exc, operation="shutdown release failed")
                     break
+        finish = getattr(self.backend, "response_finished", None)
+        if callable(finish):
+            finish()
+        collect = getattr(self.backend, "collect_pending", None)
+        if callable(collect):
+            collect(force=True)
         try:
             if stat_is_socket(os.lstat(self.socket_path).st_mode):
                 os.unlink(self.socket_path)
@@ -693,6 +750,9 @@ class InferenceService:
                     # recv, including failed sends. Shared DMA allocations stay
                     # owned by client.shared_io until unload/disconnect.
                     request = tensors = response = outputs = fds = None
+                    finish = getattr(self.backend, "response_finished", None)
+                    if callable(finish):
+                        finish()
         except (EOFError, BrokenPipeError, ConnectionResetError):
             pass
         except ProtocolError as exc:
@@ -718,6 +778,9 @@ class InferenceService:
         finally:
             if client is not None:
                 self._drop_client(client)
+            finish = getattr(self.backend, "response_finished", None)
+            if callable(finish):
+                finish()
             conn.close()
             with self._lock:
                 self._connections.discard(conn)
@@ -1072,6 +1135,8 @@ class InferenceService:
             deadline=deadline,
             execute=execute,
             ready_at=lambda: model.next_allowed,
+            cleanup=(self.backend.output_cleanup(model.handle)
+                     if callable(getattr(self.backend, "output_cleanup", None)) else None),
         )
         self.scheduler.submit(job)
         outputs = job.result(timeout=timeout_ms / 1000.0 + 1.0)

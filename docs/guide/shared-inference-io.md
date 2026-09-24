@@ -12,7 +12,8 @@
 - 多输入、非图像特征等不满足共享 DMA 条件的模型使用普通张量传输；单个静态
   float32 音频特征输入仍可由 ctypes 普通 IO 执行。新客户端仅在 hello 声明支持时
   申请 DMA 通路；旧服务、旧客户端以及不支持的模型保持原 version-1 张量消息。
-  RKNNLite 兼容路径统一执行输出脱离和循环引用回收，见[推理内存生命周期](inference-memory.md)。
+  服务的 RKNNLite 兼容路径直接发送厂商输出，再按生命周期回收循环引用，
+  见[推理内存生命周期](inference-memory.md)。
 - `RemoteRknnSession(..., shared_io=False)` 可关闭共享传输做 A/B。
   `session.io_transport` 返回 `rknn-dma-v1` 或 `tensor-v1`。
   `session.last_timings_ms` 包含 queue，DMA 路径另有 driver_wait 和 runtime，单位毫秒。

@@ -104,7 +104,9 @@ App 的 `hw-direct + model_dma_input=True` 是另一条面向模型的优化路�
   服务端配置和适配前提见[多输入与后端选择](../kit-app-patterns.md#multi-input-models-and-backend-selection)。
 - **单输入特征与内存：**静态 uint8/int8/float16/float32 非图像输入可使用 ctypes
   普通 IO，例如 float32 NTF 语音特征；这不等于支持图像 DMA 前处理。RKNNLite
-  兼容路径会复制输出并回收厂商循环缓冲，保持输出独立有效，有额外复制和 GC 开销。
+  本地兼容路径会复制输出并回收厂商循环缓冲，保持输出独立有效；共享服务直接发送
+  厂商输出，在下一次推理前或响应/后台任务结束后的延迟清理中回收，避免这次额外
+  复制。客户端输出契约不变，socket 传输及 GC 仍有成本。
 - 普通应用使用 scheduled/brokered NPU，由 AppMgr 和推理服务持有 context。
   `self.models.<id>.infer(...)` 或 `Device.rknn_session(...)` 选择受管 client；
   `RemoteRknnSession` 直接构造也需要真实的受管身份和分配，不能伪造环境变量。
