@@ -93,14 +93,17 @@ class RknnBackend:
         A model whose manifest declares no input contract uses the ctypes
         runtime, which reads the contract from the verified graph at init.
         Its IO stays on the general API (no bound/shared IO), as with
-        RKNNLite.  Graphs ctypes cannot run fall back to RKNNLite at load.
+        RKNNLite.  Graphs ctypes cannot run fall back to RKNNLite at load,
+        including 4D image graphs: without a declared uint8 contract their
+        callers may send float pixels, which ctypes rejects for images.
         ``ESK_RKNN_BACKEND=rknnlite|ctypes`` keeps its forcing meaning.
         """
         if self._runtime_factory is not None or model_spec.inputs:
             return self._new_runtime(model_spec), False
         choice = str(os.environ.get("ESK_RKNN_BACKEND", "auto")).strip().lower()
         if choice == "auto" and _ctypes_rknn.library_path():
-            return _ctypes_rknn.CtypesRknnModel(io_mode="legacy"), True
+            return _ctypes_rknn.CtypesRknnModel(
+                io_mode="legacy", image_inputs=False), True
         return self._new_runtime(model_spec), False
 
     @staticmethod

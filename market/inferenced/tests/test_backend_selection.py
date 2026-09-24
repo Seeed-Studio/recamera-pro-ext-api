@@ -217,21 +217,20 @@ def test_declared_uint8_nhwc_keeps_bound_io(native):
         backend.release(handle)
 
 
-def test_undeclared_image_model_does_not_enable_bound_io(native):
+def test_undeclared_image_model_stays_on_rknnlite(native):
+    # Without a declared uint8 contract the caller may send float pixels,
+    # which ctypes rejects for image graphs; RKNNLite accepted them before.
     install, lites, path = native
     lib = install(DmaLib())
-    backend = RknnBackend(coordinator=Coordinator())
+    coordinator = Coordinator()
+    backend = RknnBackend(coordinator=coordinator)
     handle = backend.load(path, UNDECLARED)
-    try:
-        assert isinstance(handle, r.CtypesRknnModel)
-        assert handle.io_mode == "legacy"
-        assert lib.allocations == 0
-        assert backend.shared_io_size(handle) == 0
-        backend.infer(handle, [np.full((1, 2, 5, 3), 7, np.uint8)])
-        with pytest.raises(ValueError, match="uint8"):
-            backend.infer(handle, [np.zeros((1, 2, 5, 3), np.float32)])
-    finally:
-        backend.release(handle)
+    assert handle is lites[0]
+    assert backend.backend_name(handle) == "rknnlite"
+    assert lib.allocations == 0
+    assert backend.shared_io_size(handle) == 0
+    assert coordinator.retained == []
+    backend.infer(handle, [np.zeros((1, 2, 5, 3), np.float32)])
 
 
 def test_env_rknnlite_forces_rknnlite_for_undeclared(native, monkeypatch):
