@@ -87,6 +87,7 @@ from . import (acousticslab, assets, builtin, config as appconfig,
                signing as appsigning, trust as apptrust,
                store_download, store_tasks,
                uploads as appuploads, visualization as appvisualization,
+               render_override as apprenderoverride,
                voiceruntime, workflow_ui)
 
 
@@ -440,6 +441,98 @@ def do_set_app_visualization(app_id: str, incoming: dict, *,
             stream_burn_in={"enabled": requested})
         return _app_visualization_view(
             app_id, manifest=manifest, config=saved)
+
+
+def _render_override_manifest(app_id: str) -> dict:
+    """Installed manifest for a render-override request (404 when absent)."""
+    if app_id == builtin.BUILTIN_ID:
+        raise FileNotFoundError("app not installed: %s" % app_id)
+    _require_installed(app_id)
+    return _read_manifest(app_id) or {}
+
+
+def _publish_render_override(app_id: str, manifest: dict) -> bool:
+    """Refresh the live generation's effective render and notify WS clients."""
+    hub = _result_hub_instance
+    if hub is None or not hasattr(hub, "refresh_app_render"):
+        return False
+    try:
+        return bool(hub.refresh_app_render(app_id, manifest))
+    except Exception as exc:
+        print("[appmgr] render override refresh failed for %s: %r" %
+              (app_id, exc), flush=True)
+        return False
+
+
+def do_get_render_override(app_id: str) -> dict:
+    manifest = _render_override_manifest(app_id)
+    return apprenderoverride.view(app_id, manifest)
+
+
+def _render_override_body(incoming: dict) -> tuple:
+    if not isinstance(incoming, dict):
+        raise apprenderoverride.RenderOverrideError(
+            "body", "must be an object")
+    for key in incoming:
+        if key not in ("revision", "override"):
+            raise apprenderoverride.RenderOverrideError(
+                str(key), "unknown field")
+    if "revision" not in incoming:
+        raise apprenderoverride.RenderOverrideError("revision", "is required")
+    if "override" not in incoming:
+        raise apprenderoverride.RenderOverrideError("override", "is required")
+    return incoming["revision"], incoming["override"]
+
+
+def do_set_render_override(app_id: str, incoming: dict, *,
+                           _busy_timeout: float = 0.0) -> dict:
+    revision, override = _render_override_body(incoming)
+    with busy_gate(wait_timeout=_busy_timeout):
+        manifest = _render_override_manifest(app_id)
+        document = apprenderoverride.replace(app_id, revision, override)
+        _audit("v1_render_override", id=app_id, op="replace",
+               revision=document["revision"])
+    _publish_render_override(app_id, manifest)
+    return apprenderoverride.view(app_id, manifest, document=document)
+
+
+def do_delete_render_override(app_id: str, revision, *,
+                              _busy_timeout: float = 0.0) -> dict:
+    with busy_gate(wait_timeout=_busy_timeout):
+        manifest = _render_override_manifest(app_id)
+        document = apprenderoverride.reset(app_id, revision)
+        _audit("v1_render_override", id=app_id, op="reset",
+               revision=document["revision"])
+    _publish_render_override(app_id, manifest)
+    return apprenderoverride.view(app_id, manifest, document=document)
+
+
+def _remove_render_override(app_id: str, *, reason: str) -> None:
+    """Delete an app's display override; failures are audited, not fatal."""
+    try:
+        if apprenderoverride.remove(app_id):
+            _audit("v1_render_override", id=app_id, op="removed",
+                   reason=reason)
+    except Exception as exc:
+        _audit("v1_render_override_cleanup_failed", id=app_id,
+               reason=reason, error=str(exc))
+        print("[appmgr] render override cleanup failed for %s: %r" %
+              (app_id, exc), flush=True)
+
+
+def _recover_render_overrides() -> dict:
+    """Startup: drop stale pending files, revalidate live overrides."""
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        report = apprenderoverride.recover_startup(
+            _read_manifest,
+            lambda app_id: os.path.isdir(paths.app_dir(app_id)))
+    for app_id, dropped in report.get("revalidated", {}).items():
+        print("[appmgr] render override for %s revalidated; dropped %s" %
+              (app_id, dropped), flush=True)
+    if (report.get("pending_removed") or report.get("orphans_removed")
+            or report.get("revalidated")):
+        _audit("render_override_recovered", **report)
+    return report
 
 
 class RequestOriginError(ValueError):
@@ -1183,7 +1276,8 @@ def do_list() -> dict:
                 # shape-driven fallback). Passed through RAW -- appmgr never
                 # interprets a layout / `as` primitive, it only carries the block
                 # so the overlay can read it without fetching the package.
-                "render": (appvisualization.effective_render(man)
+                "render": (appvisualization.effective_render(
+                               man, override=apprenderoverride.load_override(name))
                            if isinstance(man.get("render"), dict)
                            else man.get("render")),
                 "installed": True,
@@ -1580,6 +1674,17 @@ def do_install(pkg_path: str, signature: str = None, *,
                 # would silently opt it into device-wide video burn-in.
                 _remove_app_visualization_source(
                     app_id, reason="fresh_install")
+                # A new installation starts from the author's defaults.
+                apprenderoverride.remove(app_id)
+            else:
+                # Upgrade step 1: revalidate the override for the new release
+                # into <id>.json.pending before any package file is published.
+                staged = apprenderoverride.stage_upgrade(
+                    app_id, candidate.manifest)
+                if staged is not None and staged.get("dropped"):
+                    _audit("v1_render_override", id=app_id,
+                           op="upgrade_revalidated",
+                           dropped=staged["dropped"])
 
             installer.begin_install_transaction(
                 candidate, config_snapshot=config_snapshot,
@@ -1782,6 +1887,14 @@ def do_install(pkg_path: str, signature: str = None, *,
                 raise
 
             installer.clear_install_transaction(candidate)
+            if pre_installed:
+                # Upgrade step 2a: the package transaction committed.
+                try:
+                    if apprenderoverride.commit_upgrade(app_id):
+                        _publish_render_override(app_id, manifest)
+                except Exception as exc:
+                    _audit("v1_render_override_cleanup_failed", id=app_id,
+                           reason="upgrade_commit", error=str(exc))
             if unsigned_install or not pre_installed:
                 state.clear_active_if(app_id)
             # During an upgrade, retain the user's choice only while the newly
@@ -1816,6 +1929,12 @@ def do_install(pkg_path: str, signature: str = None, *,
                     "requires_manual_start": unsigned_install,
                     "signature": sig}
         finally:
+            # Upgrade step 2b: any failed/rolled-back transaction leaves the
+            # previous override untouched (no-op once committed above).
+            try:
+                apprenderoverride.abort_upgrade(app_id)
+            except Exception:
+                pass
             # A retained journal is deliberate when rollback itself failed; it
             # is the boot-time recovery authority.  Candidate cleanup never
             # removes published live code/environment.
@@ -1869,6 +1988,7 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         if (_result_hub_instance is not None
                 and hasattr(_result_hub_instance, "invalidate_app_manifest")):
             _result_hub_instance.invalidate_app_manifest(app_id)
+        _remove_render_override(app_id, reason="uninstall")
         try:
             _remove_app_visualization_source(app_id, reason="uninstall")
         except Exception as exc:
@@ -2947,7 +3067,8 @@ def do_v1_apps() -> dict:
             # projection keeps the Web capability list consistent with the
             # Result Hub's trusted legacy-box compatibility decision.
             manifest = dict(manifest)
-            manifest["render"] = appvisualization.effective_render(manifest)
+            manifest["render"] = appvisualization.effective_render(
+                manifest, override=apprenderoverride.load_override(app_id))
         status = _v1_status(raw)
         active_operation = operations.active_for(app_id)
         if active_operation:
@@ -3674,6 +3795,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": str(exc)})
             return False
 
+    def _render_override_error(self, exc: Exception) -> None:
+        if isinstance(exc, apprenderoverride.RevisionConflict):
+            return self._send(409, {
+                "error": "revision_conflict",
+                "current_revision": exc.current_revision,
+            })
+        if isinstance(exc, apprenderoverride.RenderOverrideError):
+            return self._send(400, {
+                "error": "invalid_override",
+                "field": exc.field,
+                "detail": exc.detail,
+            })
+        return self._v1_error(exc)
+
     def _v1_error(self, exc: Exception) -> None:
         if isinstance(exc, workflow_models.ModelConflict):
             code = 409
@@ -3881,6 +4016,15 @@ class _Handler(BaseHTTPRequestHandler):
                     200, do_get_app_visualization(visualization_match.group(1)))
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                return self._send(
+                    200, do_get_render_override(override_match.group(1)))
+            except Exception as exc:
+                return self._render_override_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/(config|logs)",
             path)
@@ -4259,6 +4403,16 @@ class _Handler(BaseHTTPRequestHandler):
                     _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                return self._send(200, do_set_render_override(
+                    override_match.group(1), self._body_json_v1(),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._render_override_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/config", path)
         if not match:
@@ -4283,13 +4437,30 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._guard_mutation_origin():
             return
-        path = urlparse(self.path).path.rstrip("/")
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
         store_match = re.fullmatch(r"/api/app-center/v1/store/tasks/([0-9a-f]{32})", path)
         if store_match:
             try:
                 return self._send(200, {"task": _store_manager().cancel(store_match.group(1))})
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                values = parse_qs(parsed.query, keep_blank_values=True).get(
+                    "revision") or []
+                if len(values) != 1 or not re.fullmatch(r"[0-9]{1,15}",
+                                                        values[0]):
+                    raise apprenderoverride.RenderOverrideError(
+                        "revision", "query parameter must be a non-negative integer")
+                return self._send(200, do_delete_render_override(
+                    override_match.group(1), int(values[0]),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._render_override_error(exc)
         upload_match = re.fullmatch(
             r"/api/app-center/v1/uploads/([0-9a-f]{32})", path)
         if upload_match:
@@ -4967,6 +5138,11 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                   flush=True)
     except Exception as e:
         print(f"[appmgr] install reconciliation skipped: {e!r}", flush=True)
+    try:
+        _recover_render_overrides()
+    except Exception as exc:
+        print("[appmgr] render override recovery skipped: %r" % exc,
+              flush=True)
     coord = _coordinator()
     _result_hub_instance = canonical_results.ResultHub(
         ws_host=paths.RESULT_HUB_HOST,

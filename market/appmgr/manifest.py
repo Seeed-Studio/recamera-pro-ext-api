@@ -762,6 +762,110 @@ def _validate_geometry_style(value: Any, path: str) -> None:
                   f"must be a finite number in [{minimum},{maximum}]")
 
 
+# Browser display style rules shared by manifest ``render`` defaults and the
+# device-level render override (render_override.py).  Each helper accepts a
+# ``fail(path, detail)`` callable so both callers keep their own error type.
+RENDER_SUBTITLE_POSITIONS = (
+    "top-left", "top-center", "top-right",
+    "middle-left", "center", "middle-right",
+    "bottom-left", "bottom-center", "bottom-right",
+)
+RENDER_EVENT_RENDERERS = ("none", "badge", "toast", "panel", "subtitle")
+RENDER_PROTOTYPE_NAMES = frozenset(("__proto__", "prototype", "constructor"))
+RENDER_MAX_COLORS = 64
+RENDER_MAX_COLOR_KEY = 128
+RENDER_MAX_TEXT = 1024
+RENDER_FIELD_PATH_MAX = 64
+_RENDER_FIELD_SEGMENT_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_+:-]*")
+
+
+def _render_number(value: Any, path: str, minimum: float, maximum: float,
+                   *, integer: bool, fail=_fail) -> Any:
+    if integer:
+        valid = _is_int(value)
+    else:
+        valid = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                 and math.isfinite(value))
+    if not valid or not minimum <= value <= maximum:
+        kind = "an integer" if integer else "a finite number"
+        fail(path, f"must be {kind} in [{minimum},{maximum}]")
+    return value
+
+
+def validate_render_color(value: Any, path: str, *, fail=_fail) -> str:
+    if not isinstance(value, str) or not _GEOMETRY_COLOR_RE.fullmatch(value):
+        fail(path, "must be #RRGGBB or #RRGGBBAA")
+    return value
+
+
+def validate_render_field_path(value: Any, path: str, *, fail=_fail) -> str:
+    """A result field path such as ``label`` or ``attributes.class_name``."""
+    if not isinstance(value, str) or not 1 <= len(value) <= RENDER_FIELD_PATH_MAX:
+        fail(path, f"must be a string of length 1..{RENDER_FIELD_PATH_MAX}")
+    for segment in value.split("."):
+        if segment in RENDER_PROTOTYPE_NAMES:
+            fail(path, "must not reference a prototype property name")
+        if not _RENDER_FIELD_SEGMENT_RE.fullmatch(segment):
+            fail(path, "must be a dot-separated field path")
+    return value
+
+
+def validate_render_colors(value: Any, path: str, *, fail=_fail) -> dict:
+    """Validate a ``value -> color`` table used by ``boxes.colors``."""
+    if not isinstance(value, dict):
+        fail(path, "must be an object")
+    if len(value) > RENDER_MAX_COLORS:
+        fail(path, f"must contain at most {RENDER_MAX_COLORS} entries")
+    for key, color in value.items():
+        if (not isinstance(key, str)
+                or not 1 <= len(key) <= RENDER_MAX_COLOR_KEY
+                or "\x00" in key):
+            fail(path, f"keys must be strings of length 1..{RENDER_MAX_COLOR_KEY}")
+        if key in RENDER_PROTOTYPE_NAMES:
+            fail(path + "." + key, "prototype property names are not allowed")
+        validate_render_color(color, path + "." + key, fail=fail)
+    return dict(value)
+
+
+def validate_render_subtitles(value: Any, path: str, *, fail=_fail,
+                              allow_extensions: bool = True) -> dict:
+    """Validate the top-level ``render.subtitles`` display style."""
+    if not isinstance(value, dict):
+        fail(path, "must be an object")
+    allowed = ("font_size", "color", "background_color", "background_opacity",
+               "position", "max_lines", "duration_sec")
+    for key in value:
+        if key in allowed or (allow_extensions and isinstance(key, str)
+                              and key.startswith("x-")):
+            continue
+        fail(path + "." + str(key), "unknown field")
+    if "font_size" in value:
+        _render_number(value["font_size"], path + ".font_size", 8, 72,
+                       integer=True, fail=fail)
+    for key in ("color", "background_color"):
+        if key in value:
+            validate_render_color(value[key], path + "." + key, fail=fail)
+    if "background_opacity" in value:
+        _render_number(value["background_opacity"],
+                       path + ".background_opacity", 0, 1,
+                       integer=False, fail=fail)
+    if "position" in value:
+        validate_render_position(value["position"], path + ".position", fail=fail)
+    if "max_lines" in value:
+        _render_number(value["max_lines"], path + ".max_lines", 1, 10,
+                       integer=True, fail=fail)
+    if "duration_sec" in value:
+        _render_number(value["duration_sec"], path + ".duration_sec", 0.1, 60,
+                       integer=False, fail=fail)
+    return dict(value)
+
+
+def validate_render_position(value: Any, path: str, *, fail=_fail) -> str:
+    if not isinstance(value, str) or value not in RENDER_SUBTITLE_POSITIONS:
+        fail(path, "must be one of " + ", ".join(RENDER_SUBTITLE_POSITIONS))
+    return value
+
+
 def _validate_render_contract(value: Any) -> None:
     render = _expect_object(value, "render")
     if "schema_version" not in render:
@@ -773,11 +877,11 @@ def _validate_render_contract(value: Any) -> None:
         _fail("render.schema_version", "must equal 1")
     _closed(render, frozenset((
         "schema_version", "boxes", "quads", "keypoints", "geometry", "events",
-        "stream_osd",
+        "stream_osd", "subtitles",
     )), "render")
     if "boxes" in render:
         boxes = _expect_object(render["boxes"], "render.boxes")
-        _closed(boxes, frozenset(("color_by", "label", "line_width")),
+        _closed(boxes, frozenset(("color_by", "label", "line_width", "colors")),
                 "render.boxes")
         for key in ("color_by", "label"):
             if key in boxes:
@@ -785,6 +889,10 @@ def _validate_render_contract(value: Any) -> None:
         if "line_width" in boxes:
             _positive_int(boxes["line_width"], "render.boxes.line_width",
                           maximum=16)
+        if "colors" in boxes:
+            validate_render_colors(boxes["colors"], "render.boxes.colors")
+    if "subtitles" in render:
+        validate_render_subtitles(render["subtitles"], "render.subtitles")
     if "quads" in render:
         quads = _expect_object(render["quads"], "render.quads")
         _closed(quads, frozenset(("points", "label", "line_width")),

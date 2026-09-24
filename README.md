@@ -21,11 +21,11 @@ NPU 租约、回注结果并观测流水线。进程边界即契约。
 | 目录 | 作用 |
 |------|------|
 | [`docs/api/`](docs/api/) | 规格与架构：[`spec.md`](docs/api/spec.md)（socket 路径 / protobuf schema / ABI 版本）、[`architecture.md`](docs/api/architecture.md)（系统分层与数据流）。 |
-| [`docs/guide/`](docs/guide/) | 开发指南：[总入口](docs/guide/README.md) + 各专题手册（控制 API、结果推送、GPIO、音频 PCM、前端扩展、FFmpeg / GStreamer 集成、应用中心上架、部署运维）+ Kit 设计 / 适配器路径 / 语音应用设计。 |
+| [`docs/guide/`](docs/guide/) | 开发指南：[总入口](docs/guide/README.md) + 各专题手册（控制 API、结果推送、GPIO、音频 PCM、前端扩展、FFmpeg / GStreamer 集成、应用中心上架、部署运维）+ Kit 设计 / 适配器路径 / 语音应用设计；AI 结果叠加自定义见 [`overlay-customization.md`](docs/guide/overlay-customization.md)，部署交接见 [`overlay-customization-handoff.md`](docs/guide/overlay-customization-handoff.md)。 |
 | [`sdk/`](sdk/) | 设备侧 SDK：`librecamera_ext.so.1` + Python 包 `recamera_ext`（ctypes 薄封装）+ C 头文件。 |
 | [`kit/`](kit/) | 可复用 Python 推理套件：L0 适配器、runtime 前后处理、logic 库、`app.py`。 |
 | [`apps/`](apps/) | 示例应用（yolo-detector / face-analysis / fall-detection / voice-transcribe 等）。 |
-| [`examples/`](examples/) | SDK 最小用法示例（拿帧 / 注入结果 / 帧→推理→OSD / GPIO 触发 / C 帧）。 |
+| [`examples/`](examples/) | SDK 最小用法示例（拿帧 / 注入结果 / 帧→推理→OSD / GPIO 触发 / C 帧 / 浏览器叠加自由绘制 `11-overlay-geometry`）。 |
 | [`release/`](release/) | 历史交付快照；当前 `release/pkg` **不可部署**，正式产物必须由已固定 commit 的源码构建重新生成。 |
 
 ## 快速上手

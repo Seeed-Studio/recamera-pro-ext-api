@@ -367,6 +367,13 @@ def audit_log() -> str:
     return os.path.join(APPMGR_DIR, "audit.log")
 
 
+def render_overrides_dir() -> str:
+    """Per-app browser display overrides (outside the replaceable app dir)."""
+    return os.environ.get(
+        "APPMGR_RENDER_OVERRIDES_DIR",
+        os.path.join(APPMGR_DIR, "render-overrides"))
+
+
 def operation_state_file() -> str:
     return os.path.join(APPMGR_DIR, "operations.json")
 

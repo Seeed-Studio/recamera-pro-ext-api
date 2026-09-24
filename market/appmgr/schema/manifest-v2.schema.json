@@ -733,6 +733,38 @@
         }
       ]
     },
+    "renderColorV1": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    },
+    "renderColorMapV1": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "minLength": 1,
+        "maxLength": 128,
+        "not": {"enum": ["__proto__", "prototype", "constructor"]}
+      },
+      "additionalProperties": {"$ref": "#/$defs/renderColorV1"}
+    },
+    "renderSubtitlesV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "properties": {
+        "font_size": {"type": "integer", "minimum": 8, "maximum": 72},
+        "color": {"$ref": "#/$defs/renderColorV1"},
+        "background_color": {"$ref": "#/$defs/renderColorV1"},
+        "background_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+        "position": {"enum": [
+          "top-left", "top-center", "top-right",
+          "middle-left", "center", "middle-right",
+          "bottom-left", "bottom-center", "bottom-right"
+        ]},
+        "max_lines": {"type": "integer", "minimum": 1, "maximum": 10},
+        "duration_sec": {"type": "number", "minimum": 0.1, "maximum": 60}
+      }
+    },
     "renderV1": {
       "type": "object",
       "additionalProperties": false,
@@ -747,9 +779,11 @@
           "properties": {
             "color_by": {"$ref": "#/$defs/token"},
             "label": {"$ref": "#/$defs/token"},
-            "line_width": {"type": "integer", "minimum": 1, "maximum": 16}
+            "line_width": {"type": "integer", "minimum": 1, "maximum": 16},
+            "colors": {"$ref": "#/$defs/renderColorMapV1"}
           }
         },
+        "subtitles": {"$ref": "#/$defs/renderSubtitlesV1"},
         "quads": {
           "type": "object",
           "additionalProperties": false,
