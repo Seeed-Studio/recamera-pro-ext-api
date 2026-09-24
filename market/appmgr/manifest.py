@@ -66,7 +66,7 @@ _V2_REQUIRED = frozenset((
 _V2_ALLOWED = _V2_REQUIRED | frozenset((
     "name_zh", "description", "description_zh", "author", "image", "icon", "scene",
     "scene_zh", "tags", "models", "needs_model", "postproc", "render",
-    "output", "record_trigger", "ha_entities", "package",
+    "output", "record_trigger", "ha_entities", "package", "webui",
 ))
 
 _CONFIG_TYPES = frozenset((
@@ -964,6 +964,46 @@ def _validate_render_references(output_value: Any, render_value: Any) -> None:
                   "requires an output field with the same event_kind")
 
 
+def _validate_webui(value: Any) -> None:
+    """Optional browser UI entry point: the App Center renders an Open link
+    (scheme://device-host:port/path) when present. The app owns the listener
+    and any authentication behind it; this is presentation metadata only.
+
+    The optional ``token`` block declares that the UI accepts a one-time
+    credential in the URL fragment: appmgr's launch endpoint reads the
+    current token from ``<appdata>/<file>`` at click time and redirects to
+    ``scheme://host:port/path#/?<fragment_param>=<token>``. The token never
+    passes through list payloads or page JS."""
+    obj = _expect_object(value, "webui")
+    _closed(obj, frozenset(("port", "scheme", "path", "token")), "webui")
+    _required(obj, frozenset(("port",)), "webui")
+    _positive_int(obj["port"], "webui.port", maximum=65535)
+    if obj.get("scheme", "http") not in ("http", "https"):
+        _fail("webui.scheme", "must be http or https")
+    path = obj.get("path", "/")
+    if (not isinstance(path, str) or not path.startswith("/")
+            or path.startswith("//")):
+        _fail("webui.path", "must be an absolute path starting with /")
+    if "#" in path:
+        _fail("webui.path", "must not contain a fragment (#)")
+    token = obj.get("token")
+    if token is None:
+        return
+    tobj = _expect_object(token, "webui.token")
+    _closed(tobj, frozenset(("file", "fragment_param")), "webui.token")
+    _required(tobj, frozenset(("file", "fragment_param")), "webui.token")
+    token_file = tobj["file"]
+    if (not isinstance(token_file, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", token_file)
+            is None):
+        _fail("webui.token.file",
+              "must be a plain file name inside the app data dir")
+    if (not isinstance(tobj["fragment_param"], str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tobj["fragment_param"])
+            is None):
+        _fail("webui.token.fragment_param", "must match [A-Za-z0-9_-]{1,64}")
+
+
 def _validate_release(value: Any) -> None:
     obj = _expect_object(value, "release")
     _closed(obj, frozenset(("sequence", "channel")), "release")
@@ -1346,6 +1386,8 @@ def validate_manifest(manifest: Any, *, allow_v1: bool = True) -> int:
         validate_icon_declaration(obj["icon"])
     if "package" in obj:
         _validate_package(obj["package"])
+    if "webui" in obj:
+        _validate_webui(obj["webui"])
     if "output" in obj:
         _validate_output_contract(obj["output"])
     if "record_trigger" in obj:

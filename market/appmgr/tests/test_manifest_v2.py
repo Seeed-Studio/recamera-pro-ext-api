@@ -822,3 +822,59 @@ def test_schema_stream_osd_constraints_match_runtime_validator():
         with pytest.raises(contract.ManifestValidationError):
             contract.validate_manifest(bad)
         assert list(validator.iter_errors(bad)), bad
+
+
+def test_webui_declaration_validation():
+    base = minimal_manifest()
+    contract.validate_manifest(base)  # absent webui is fine
+
+    good = minimal_manifest(webui={"port": 8765})
+    contract.validate_manifest(good)
+    contract.validate_manifest(minimal_manifest(
+        webui={"port": 8443, "scheme": "https", "path": "/ui/"}))
+    contract.validate_manifest(minimal_manifest(webui={
+        "port": 8765,
+        "token": {"file": "webui_password.txt", "fragment_param": "bootstrapSecret"},
+    }))
+
+    for bad in (
+        {"port": 0}, {"port": 70000}, {"port": "8765"},
+        {"port": 8765, "scheme": "ftp"},
+        {"port": 8765, "path": "ui"}, {"port": 8765, "path": "//evil"},
+        {"port": 8765, "path": "/ui#frag"},
+        {"port": 8765, "extra": 1}, {},
+        {"port": 8765, "token": {"file": "t.txt"}},
+        {"port": 8765, "token": {"fragment_param": "p"}},
+        {"port": 8765, "token": {"file": "../escape", "fragment_param": "p"}},
+        {"port": 8765, "token": {"file": "a/b.txt", "fragment_param": "p"}},
+        {"port": 8765, "token": {"file": ".hidden", "fragment_param": "p"}},
+        {"port": 8765, "token": {"file": "t.txt", "fragment_param": "bad param"}},
+        {"port": 8765, "token": {"file": "t.txt", "fragment_param": "p", "x": 1}},
+    ):
+        manifest = minimal_manifest(webui=bad)
+        try:
+            contract.validate_manifest(manifest)
+        except contract.ManifestValidationError:
+            continue
+        raise AssertionError(f"webui {bad!r} must fail validation")
+
+
+def test_schema_webui_constraints_match_runtime_validator():
+    schema_path = os.path.join(
+        os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        schema = json.load(source)
+    validator = Draft202012Validator(schema)
+    assert "webui" in schema["properties"]
+    assert validator.is_valid(minimal_manifest(webui={"port": 8765}))
+    assert not validator.is_valid(minimal_manifest(webui={"port": 70000}))
+    assert not validator.is_valid(minimal_manifest(webui={"port": 8765, "x": 1}))
+    token_webui = {"port": 8765, "token": {
+        "file": "webui_password.txt", "fragment_param": "bootstrapSecret"}}
+    assert validator.is_valid(minimal_manifest(webui=token_webui))
+    assert not validator.is_valid(minimal_manifest(
+        webui={"port": 8765, "path": "/ui#frag"}))
+    assert not validator.is_valid(minimal_manifest(webui={
+        "port": 8765, "token": {"file": "a/b.txt", "fragment_param": "p"}}))
+    assert not validator.is_valid(minimal_manifest(webui={
+        "port": 8765, "token": {"file": "t.txt"}}))

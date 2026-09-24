@@ -2761,3 +2761,88 @@ def test_recording_migration_acknowledge_requires_explicit_confirmation(layout, 
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=2)
+
+
+def _webui_app(layout, monkeypatch, tmp_path, webui, app_id="demo"):
+    """Install a bare app with the given webui block (raw, validation-free)."""
+    app_dir = os.path.join(paths.APPS_DIR, app_id)
+    os.mkdir(app_dir)
+    with open(os.path.join(app_dir, "manifest.json"), "w") as stream:
+        json.dump({"id": app_id, "name": "Demo", "version": "1.0.0",
+                   "webui": webui}, stream)
+    appdata = tmp_path / "appdata"
+    (appdata / app_id).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(paths, "APPDATA_DIR", str(appdata))
+    return appdata / app_id
+
+
+def test_v1_webui_launch_url_carries_fragment_token(layout, monkeypatch, tmp_path):
+    data = _webui_app(layout, monkeypatch, tmp_path, {
+        "port": 18765, "path": "/",
+        "token": {"file": "webui_password.txt", "fragment_param": "bootstrapSecret"}})
+    (data / "webui_password.txt").write_text("s3cret/x?\n")
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: 4242)
+    url = server.do_v1_app_webui_launch("demo", "192.168.66.66:443")
+    assert url == "http://192.168.66.66:18765/#/?bootstrapSecret=s3cret%2Fx%3F"
+
+
+def test_v1_webui_launch_url_degrades_without_token(layout, monkeypatch, tmp_path):
+    # No token declaration: plain URL.
+    _webui_app(layout, monkeypatch, tmp_path,
+               {"port": 8080, "scheme": "https", "path": "/ui/"}, app_id="plain")
+    # Token declared but the file is absent: the UI simply prompts.
+    _webui_app(layout, monkeypatch, tmp_path, {
+        "port": 18765,
+        "token": {"file": "missing.txt", "fragment_param": "bootstrapSecret"}},
+        app_id="notoken")
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: 4242)
+    assert (server.do_v1_app_webui_launch("plain", "console.local") ==
+            "https://console.local:8080/ui/")
+    assert (server.do_v1_app_webui_launch("notoken", "console.local") ==
+            "http://console.local:18765/")
+    # IPv6 and bare hosts survive; empty Host falls back to loopback.
+    assert (server.do_v1_app_webui_launch("plain", "[fd00::1]:8443") ==
+            "https://[fd00::1]:8080/ui/")
+    assert (server.do_v1_app_webui_launch("plain", "") ==
+            "https://127.0.0.1:8080/ui/")
+
+
+def test_v1_webui_launch_errors(layout, monkeypatch, tmp_path):
+    _webui_app(layout, monkeypatch, tmp_path, {"port": 18765}, app_id="stopped")
+    _webui_app(layout, monkeypatch, tmp_path, None, app_id="nowebui")
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: None)
+    with pytest.raises(server.BusyError, match="not running"):
+        server.do_v1_app_webui_launch("stopped", "h")
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: 1)
+    with pytest.raises(FileNotFoundError, match="no webui"):
+        server.do_v1_app_webui_launch("nowebui", "h")
+    with pytest.raises(FileNotFoundError, match="not installed"):
+        server.do_v1_app_webui_launch("ghost", "h")
+
+
+def test_v1_webui_launch_redirect_over_http(layout, monkeypatch, tmp_path):
+    data = _webui_app(layout, monkeypatch, tmp_path, {
+        "port": 18765, "path": "/",
+        "token": {"file": "webui_password.txt", "fragment_param": "bootstrapSecret"}})
+    (data / "webui_password.txt").write_text("pw123")
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: 4242)
+    httpd = server._AppHTTPServer(("127.0.0.1", 0), server._Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", httpd.server_port, timeout=5)
+        connection.request(
+            "GET", "/api/app-center/v1/apps/demo/webui",
+            headers={"Host": "192.168.66.66"})
+        response = connection.getresponse()
+        assert response.status == 302
+        assert (response.getheader("Location") ==
+                "http://192.168.66.66:18765/#/?bootstrapSecret=pw123")
+        assert response.getheader("Cache-Control") == "no-store"
+        response.read()
+        connection.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
