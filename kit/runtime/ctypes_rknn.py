@@ -879,6 +879,10 @@ class CtypesRknnModel:
         elif arr.dtype.name not in _CALLER_TYPES:
             raise InputContractError("ctypes backend requires uint8, int8, float16 or "
                                      f"float32 input, got {arr.dtype}")
+        elif not arr.dtype.isnative:
+            # The driver reads the buffer in native byte order; a '>f4' array
+            # passes the name check but its bytes would decode to other values.
+            arr = arr.astype(arr.dtype.newbyteorder("="))
         if arr.shape != self._input_shape:
             raise InputContractError(
                 f"input shape {arr.shape} != model shape {self._input_shape}")
