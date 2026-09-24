@@ -233,6 +233,29 @@ def test_undeclared_image_model_stays_on_rknnlite(native):
     backend.infer(handle, [np.zeros((1, 2, 5, 3), np.float32)])
 
 
+def test_undeclared_float_input_converts_non_native_byte_order(native):
+    install, lites, path = native
+    lib = install(GraphLib())
+    backend = RknnBackend(coordinator=Coordinator())
+    handle = backend.load(path, UNDECLARED)
+    seen = []
+    set_inputs = lib.rknn_inputs_set
+
+    def capture(ctx, count, inputs):
+        item = inputs[0]
+        raw = r.ctypes.string_at(item.buf, item.size)
+        seen.append(np.frombuffer(raw, dtype=np.float32)[:2].tolist())
+        return set_inputs(ctx, count, inputs)
+
+    lib.rknn_inputs_set = capture
+    try:
+        value = np.ones((1, 344, 560), dtype=">f4")
+        backend.infer(handle, [value])
+        assert seen == [[1.0, 1.0]]
+    finally:
+        backend.release(handle)
+
+
 def test_env_rknnlite_forces_rknnlite_for_undeclared(native, monkeypatch):
     install, lites, path = native
     lib = install(GraphLib())
