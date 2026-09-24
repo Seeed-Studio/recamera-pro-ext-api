@@ -48,6 +48,7 @@ stops after N completed transcripts (used by the on-device e2e test).
 """
 import os
 import sys
+import time
 
 from kit.app import App, run_app
 
@@ -55,6 +56,69 @@ from kit.app import App, run_app
 # States mirrored from kit.logic.voice_sm (kept local to avoid importing sherpa
 # at module import time -- voice_sm only pulls sherpa when a pipeline is built).
 IDLE = "idle"
+LISTENING = "listening"
+ALWAYS_ON_BACKEND = "always-on"
+_TRUE_STRINGS = ("1", "true", "yes", "on")
+
+
+def _as_bool(value, default=False):
+    """Parse a bool config value (bool, or "true/false/1/0/on/off" strings)."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if not v:
+            return default
+        return v in _TRUE_STRINGS
+    return bool(value)
+
+
+class _AlwaysOnWake:
+    """Synthetic wake event used when the wake word is disabled."""
+    keyword = ""
+    backend = ALWAYS_ON_BACKEND
+    score = 1.0
+    transcript = ""
+
+
+class _SwitchableWake:
+    """WakeWord wrapper that honours the live `wake_word_enabled` switch.
+
+    The kit VoiceStateMachine only calls ``accept()`` while idle. With the wake
+    word disabled this returns a synthetic event on the first idle frame, so the
+    machine re-arms straight into listening (continuous transcription). The
+    real detector is always built, so switching the wake word on takes effect
+    live without rebuilding the pipeline.
+
+    ``accept()`` also calls ``app.tick()`` about once per second so a SIGHUP
+    config change is applied even while no voice event is emitted.
+    """
+
+    TICK_INTERVAL_SEC = 1.0
+
+    def __init__(self, inner, app, clock=time.monotonic):
+        self._inner = inner
+        self._app = app
+        self._clock = clock
+        self._next_tick = 0.0
+
+    def accept(self, frame):
+        now = self._clock()
+        if now >= self._next_tick:
+            self._next_tick = now + self.TICK_INTERVAL_SEC
+            self._app.tick()
+        if getattr(self._app, "wake_word_enabled", False):
+            return self._inner.accept(frame)
+        return _AlwaysOnWake()
+
+    def reset(self):
+        return self._inner.reset()
+
+    def __getattr__(self, name):
+        # Only reached for attributes not defined here (close, etc.).
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._inner, name)
 
 SHARED_MODEL_DIR = "/userdata/local/models/asr"
 STAGING_MODEL_DIR = "/userdata/tmp/asr"
@@ -109,6 +173,10 @@ class VoiceTranscribeApp(App):
             except (TypeError, ValueError):
                 return float(default)
 
+        # Wake word gate (apply:"live"). Off = continuous transcription.
+        self.wake_word_enabled = _as_bool(
+            getattr(self, "wake_word_enabled", c.get("wake_word_enabled")),
+            False)
         self.wake_backend = _s("wake_backend", "kws").lower()
         # ASR backend selector (voxedge consumer): "rk" (NPU w4a16 via
         # kit.asr_rknn_backend, default -- the bundled asset dir ships the w4a16
@@ -200,10 +268,18 @@ class VoiceTranscribeApp(App):
         The audio source, VAD, wake-word detector and state machine capture all
         Voice runtime parameters during ``prepare_runtime``.  Their manifest
         entries are therefore ``apply:restart`` and do not reach this hook.
+        The one live voice parameter is ``wake_word_enabled``: it is read per
+        idle frame by ``_SwitchableWake``, so re-binding it is sufficient.
         Output formatter/filter settings are reloaded independently by the sink
         tree.  Keeping this hook explicit makes an accidental future live field
         visible in logs without pretending that a captured object changed.
         """
+        if changed and "wake_word_enabled" in changed:
+            # kit re-bound the value onto self; normalise it. _SwitchableWake
+            # reads the attribute on every idle frame, nothing else to rebuild.
+            self.wake_word_enabled = _as_bool(self.wake_word_enabled, False)
+            print(f"[voice-transcribe] wake word enabled="
+                  f"{self.wake_word_enabled}", flush=True)
         if changed:
             print(f"[voice-transcribe] live app parameters changed="
                   f"{sorted(changed)}", flush=True)
@@ -336,7 +412,10 @@ class VoiceTranscribeApp(App):
         # calls it itself (spec §2, `self.tick()`).
         self.tick()
         kind = ev.get("type", "event")
+        if self._suppress_in_continuous_mode(ev, kind):
+            return
         out = dict(ev)
+        out.pop("_initial", None)
         out["kind"] = kind
         if kind == "state":
             self._state = ev.get("state", self._state)
@@ -348,6 +427,29 @@ class VoiceTranscribeApp(App):
                   extra={"state": self._state,
                          "summary": {"state": self._state,
                                      "text": self._last_text}})
+
+    def _suppress_in_continuous_mode(self, ev, kind):
+        """Hide wake-cycle plumbing when the wake word is disabled.
+
+        In continuous mode the state machine still walks idle -> wake ->
+        listening, but the idle hop lasts one frame. Only listening <->
+        transcribing and transcripts are published. Synthetic wake events are
+        always dropped (identified by backend, independent of the current
+        flag). The initial idle published by run() carries `_initial`.
+        """
+        if kind == "wake" and ev.get("backend") == ALWAYS_ON_BACKEND:
+            return True
+        if getattr(self, "wake_word_enabled", False):
+            return False
+        if kind == "listen_timeout":
+            return True
+        if kind == "state" and ev.get("state") == IDLE \
+                and not ev.get("_initial"):
+            # The next frame re-arms into listening; track that state so the
+            # published summary never lingers on "transcribing".
+            self._state = LISTENING
+            return True
+        return False
 
     # -- pre-READY runtime (audio chunks, not frames) ------------------------- #
     def prepare_runtime(self):
@@ -367,7 +469,8 @@ class VoiceTranscribeApp(App):
         if verbose:
             print(f"[app:{self.id}] model_dir={md} backend={self.wake_backend} "
                   f"lang={self.language} min_silence={self.min_silence_sec} "
-                  f"max_utt={self.max_utterance_sec} preroll_ms={self.preroll_ms}",
+                  f"max_utt={self.max_utterance_sec} preroll_ms={self.preroll_ms} "
+                  f"wake_word_enabled={self.wake_word_enabled}",
                   flush=True)
 
         # audio source: WAV injection (tests) or live RTSP mic (default) ------- #
@@ -444,6 +547,10 @@ class VoiceTranscribeApp(App):
                 keywords_score=self.kws_score,
             )
 
+        # Always build the real detector; the wrapper gates it per frame so
+        # the live `wake_word_enabled` switch needs no pipeline rebuild.
+        wake = _SwitchableWake(wake, self)
+
         sm = VoiceStateMachine(src, wake, vad, asr,
                                on_event=self._on_voice_event,
                                listen_timeout_sec=self.listen_timeout_sec,
@@ -461,7 +568,8 @@ class VoiceTranscribeApp(App):
                 "voice pipeline is not initialized; call start() first")
         verbose = self.verbose
         # publish the initial idle state so the panel shows something immediately
-        self._on_voice_event({"type": "state", "state": IDLE})
+        self._on_voice_event({"type": "state", "state": IDLE,
+                              "_initial": True})
 
         max_wakes = int(os.environ.get("RECAMERA_VOICE_MAX_WAKES", "0") or 0)
         if verbose:
