@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/mjq2020/inference.git",
+  "ref": "refs/heads/rv1126b",
+  "commit": "9e9bb67c7b4bc98cac47a1a797ac8262a90a920a",
+  "wheel_version": "0.3.8"
+}
