@@ -39,6 +39,10 @@ class InstallError(Exception):
     pass
 
 
+class InsufficientStorageError(InstallError):
+    code = "insufficient_storage"
+
+
 MAX_METADATA_BYTES = 4 * 1024 * 1024
 INSTALL_TRANSACTION_VERSION = 1
 MAX_INSTALL_TRANSACTION_BYTES = 8 * 1024 * 1024
@@ -352,6 +356,34 @@ def extract_vetted(pkg_path: str, dest_dir: str) -> list:
         return extract_vetted_tar(tar, dest_dir)
 
 
+def _vetted_tar_members(tar: tarfile.TarFile, dest_dir: str) -> tuple[list, int]:
+    # Do not call getmembers() before enforcing the count: a multi-GiB archive
+    # can contain enough tiny headers to exhaust RAM before validation starts.
+    members = []
+    total = 0
+    for member in tar:
+        if len(members) >= paths.MAX_MEMBERS:
+            raise InstallError(f"too many members: > {paths.MAX_MEMBERS}")
+        _vet_member(member, dest_dir)
+        total += max(0, member.size)
+        if total > paths.MAX_UNPACKED_BYTES:
+            raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
+        members.append(member)
+    return members, total
+
+
+def _check_extraction_space(dest_dir: str, required: int) -> None:
+    existing = os.path.abspath(dest_dir)
+    while not os.path.exists(existing):
+        existing = os.path.dirname(existing)
+    free = shutil.disk_usage(existing).free
+    reserve = max(0, int(paths.MIN_UPLOAD_FREE_BYTES))
+    if free < required + reserve:
+        raise InsufficientStorageError(
+            "insufficient free space to unpack application while preserving "
+            f"device reserve: need {required + reserve} bytes, available {free}")
+
+
 def extract_vetted_tar(tar: tarfile.TarFile, dest_dir: str) -> list:
     """Member-vetting extraction from an ALREADY-OPEN TarFile into `dest_dir`.
 
@@ -363,15 +395,9 @@ def extract_vetted_tar(tar: tarfile.TarFile, dest_dir: str) -> list:
     the per-member zip-slip/tar-bomb rules still run on every member.
     """
     names = []
-    total = 0
-    members = tar.getmembers()
-    if len(members) > paths.MAX_MEMBERS:
-        raise InstallError(f"too many members: {len(members)} > {paths.MAX_MEMBERS}")
+    members, total = _vetted_tar_members(tar, dest_dir)
+    _check_extraction_space(dest_dir, total)
     for m in members:
-        _vet_member(m, dest_dir)
-        total += max(0, m.size)
-        if total > paths.MAX_UNPACKED_BYTES:
-            raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
         outp = os.path.join(dest_dir, m.name)
         if m.isdir():
             os.makedirs(outp, exist_ok=True)
@@ -381,7 +407,11 @@ def extract_vetted_tar(tar: tarfile.TarFile, dest_dir: str) -> list:
             raise InstallError(f"cannot extract member {m.name!r}")
         os.makedirs(os.path.dirname(outp) or dest_dir, exist_ok=True)
         with f, open(outp, "wb") as w:
-            shutil.copyfileobj(f, w)
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                # Recheck during extraction because uploads and other services
+                # may consume disk after the initial admission check.
+                _check_extraction_space(dest_dir, len(chunk))
+                w.write(chunk)
         os.chmod(outp, 0o644)
         names.append(m.name)
     return names
@@ -593,21 +623,14 @@ def _validate_declared_icon_payload(tar: tarfile.TarFile,
 
 def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
     try:
-        members = tar.getmembers()
+        with tempfile.TemporaryDirectory() as probe:
+            members, total = _vetted_tar_members(tar, probe)
     except (OSError, tarfile.TarError) as exc:
         raise InstallError(f"cannot read package members: {exc}") from exc
-    if len(members) > paths.MAX_MEMBERS:
-        raise InstallError(f"too many members: {len(members)} > {paths.MAX_MEMBERS}")
     names = [member.name for member in members]
     if len(set(names)) != len(names):
         raise InstallError("package contains duplicate member paths")
-    total = 0
-    with tempfile.TemporaryDirectory() as probe:
-        for member in members:
-            _vet_member(member, probe)
-            total += max(0, member.size)
-            if total > paths.MAX_UNPACKED_BYTES:
-                raise InstallError(f"unpacked size exceeds cap {paths.MAX_UNPACKED_BYTES}")
+    _check_extraction_space(paths.APPS_DIR, total)
 
     manifest = _read_manifest_from_tar(tar)
     try:

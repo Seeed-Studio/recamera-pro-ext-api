@@ -142,7 +142,12 @@ enforces the ones that can be checked offline.
 - **Recording:** read [recording.md](references/recording.md) for manifest
   authorization, explicit requests and legacy FRAME compatibility. `OsdSink`
   and `RecordSink` are AppMgr-only despite being exported by the Python module.
-- **DMA:** for synchronous model-only frame consumption, use `hw-direct`,
+- **Multiple inputs:** read [multi-input models and backend selection](references/kit-app-patterns.md#multi-input-models-and-backend-selection)
+  before choosing a runtime. Typed sessions with a complete multi-input contract
+  use RKNNLite in `auto`; ctypes/shared DMA require a single input. The ordinary
+  App Center manifest-to-`self.models` path does not yet carry that full contract;
+  do not promise deployment support from session support alone.
+- **DMA:** for supported single-image models with synchronous model-only frame consumption, use `hw-direct`,
   `model_dma_input = True`, and `infer(prepared)`; read the lifetime and RGB/BGR
   rules in [kit-app-patterns.md](references/kit-app-patterns.md). Keep ndarray
   input and CPU/original-pixel paths where the application needs them.

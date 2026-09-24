@@ -239,8 +239,8 @@ class InferenceStats:
 def _default_runtime_factory():
     # Lazy import keeps package inspection and host-side unit tests independent
     # of the aarch64-only rknnlite wheel.
-    from rknnlite.api import RKNNLite
-    return RKNNLite()
+    from kit.runtime.rknnlite import RknnLiteRuntime
+    return RknnLiteRuntime()
 
 
 def _ctypes_spec_supported(spec: ModelSpec) -> bool:

@@ -88,18 +88,19 @@ def descriptor():
     }
 
 
-def test_scm_rights_multi_fd_roundtrip_and_no_inherited_descriptors(memfd, sockets):
+@pytest.mark.parametrize("count", [3, 16, 17, 32, 64])
+def test_scm_rights_multi_fd_roundtrip_and_no_inherited_descriptors(memfd, sockets, count):
     sender, receiver = sockets
-    original = [memfd(), memfd(), memfd()]
+    original = [memfd() for _ in range(count)]
     for index, fd in enumerate(original):
         os.pwrite(fd, bytes([31 + index]), 0)
         os.set_inheritable(fd, True)
     shared.send_fds(sender, original)
     received = shared.recv_fds(receiver, len(original))
     try:
-        assert len(set(original + received)) == 6
+        assert len(set(original + received)) == 2 * count
         assert all(not os.get_inheritable(fd) for fd in received)
-        assert [os.pread(fd, 1, 0) for fd in received] == [b"\x1f", b"\x20", b"\x21"]
+        assert [os.pread(fd, 1, 0) for fd in received] == [bytes([31 + i]) for i in range(count)]
         os.pwrite(received[1], b"z", 0)
         assert os.pread(original[1], 1, 0) == b"z"
     finally:

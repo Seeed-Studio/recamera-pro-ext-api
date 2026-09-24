@@ -68,7 +68,8 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     assert "/ws/ai/results/v2" in locations
     assert "/api/v1/" not in locations
     assert len(locations) == len(set(locations))
-    assert edge.count("$recamera_appcenter_origin_ok = 0") == 4
+    assert edge.count("$recamera_appcenter_origin_ok = 0") == 5
+    assert "/api/app-center/v1/uploads" in locations
     assert edge.count("$recamera_ai_results_origin_ok = 0") == 1
     assert "proxy_pass http://127.0.0.1:8125;" in edge
     assert "proxy_set_header X-Forwarded-Proto $scheme;" in edge

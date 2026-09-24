@@ -48,6 +48,12 @@ class MultipartError(ValueError):
     pass
 
 
+class UploadSizeError(MultipartError):
+    """Reject oversized request/part bytes with an explicit HTTP 413 code."""
+
+    code = "upload_too_large"
+
+
 class StagingQuotaError(MultipartError):
     """The request is valid, but the bounded upload staging area is full."""
 
@@ -408,7 +414,7 @@ class _LimitedMultipartReader:
             if index >= 0:
                 chunk = bytes(self.buffer[:index])
                 if written + len(chunk) > cap:
-                    raise MultipartError("multipart field exceeds its size limit")
+                    raise UploadSizeError("multipart field exceeds its size limit")
                 output.write(chunk)
                 written += len(chunk)
                 del self.buffer[:index + len(marker)]
@@ -433,7 +439,7 @@ class _LimitedMultipartReader:
             if len(self.buffer) > keep:
                 count = len(self.buffer) - keep
                 if written + count > cap:
-                    raise MultipartError("multipart field exceeds its size limit")
+                    raise UploadSizeError("multipart field exceeds its size limit")
                 output.write(self.buffer[:count])
                 written += count
                 del self.buffer[:count]
@@ -497,7 +503,7 @@ def _request_shape(content_length: int, content_type: str) -> tuple[int, bytes]:
     if length <= 0:
         raise MultipartError("multipart request body is empty")
     if length > maximum:
-        raise MultipartError("multipart request is too large: %d > %d" %
+        raise UploadSizeError("multipart request is too large: %d > %d" %
                              (length, maximum))
     return length, _boundary(content_type)
 

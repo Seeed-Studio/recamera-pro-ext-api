@@ -160,10 +160,13 @@ def launcher_fixture(tmp_path, name):
         port = reservation.getsockname()[1]
     source = (REPO / "market/deploy" / name).read_text()
     source = source.rsplit('\ncase "$1" in', 1)[0]
+    source = source.replace('exec 9>"/run/$NAME.control.lock"',
+                            'exec 9>' + shlex.quote(str(tmp_path / "control.lock")))
     source = source.replace("appmgr --timeout 1", f"appmgr --port {port} --timeout 0.1")
     source += "\n" + "\n".join(
         f"{key}={shlex.quote(str(value))}" for key, value in {
             "PIDFILE": tmp_path / "service.pid",
+            "ENABLED_FILE": tmp_path / "service.enabled",
             "LOGFILE": tmp_path / "service.log",
             "SOCKET": tmp_path / "i.sock",
             "AUTH_DIR": tmp_path / "auth",
@@ -186,6 +189,34 @@ def launcher_fixture(tmp_path, name):
     # existing parent so even root-running tests never touch /run/recamera.
     source = source.replace("mkdir -p /run/recamera", "mkdir -p " + shlex.quote(str(tmp_path)))
     return source, port
+
+
+def test_inferenced_recovery_respects_stop_intent_and_releases_control_lock(tmp_path):
+    source, port = launcher_fixture(tmp_path, "S93inferenced")
+    dispatch = (REPO / "market/deploy/S93inferenced").read_text().rsplit('\ncase "$1" in', 1)[1]
+    script = source + '\ncase "$1" in' + dispatch
+    env = {**os.environ, "TEST_SERVICE_PID": str(tmp_path / "actual.pid"),
+           "TEST_SERVICE_BEHAVIOR": "ready", "TEST_SERVICE_PORT": str(port)}
+    def run(action):
+        return subprocess.run(["sh", "-c", script, "launcher", action], timeout=10,
+                              capture_output=True, text=True, env=env)
+    try:
+        started = run("start")
+        assert started.returncode == 0, started.stderr
+        first = (tmp_path / "service.pid").read_text()
+        assert (tmp_path / "service.enabled").exists()
+        # The long-lived Python child must not inherit launcher fd 9.
+        lock = subprocess.run(["flock", "-n", str(tmp_path / "control.lock"), "true"])
+        assert lock.returncode == 0
+        recovered = run("recover")
+        assert recovered.returncode == 0, recovered.stderr
+        assert (tmp_path / "service.pid").read_text() != first
+        assert run("stop").returncode == 0
+        assert not (tmp_path / "service.enabled").exists()
+        assert run("recover").returncode == 3
+        assert not (tmp_path / "service.pid").exists()
+    finally:
+        run("stop")
 
 
 @pytest.mark.parametrize("name", ["S93inferenced", "S94appmgr"])

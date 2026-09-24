@@ -23,7 +23,9 @@ import numpy as np
 
 PROTOCOL_VERSION = 1
 MAX_HEADER_BYTES = 64 * 1024
-MAX_TENSORS = 16
+# Per-message tensor count, also used for the shared input + output FD set.
+# This is independent of the batch dimension inside an individual tensor.
+MAX_TENSORS = 64
 MAX_TENSOR_RANK = 8
 MAX_TENSOR_BYTES = 64 * 1024 * 1024
 MAX_MESSAGE_BYTES = 96 * 1024 * 1024

@@ -11,10 +11,24 @@
   `legacy` 强制普通 API，`bound` 要求绑定成功。此开关与 `ESK_RKNN_BACKEND` 独立。
 - 多输入、音频等不满足条件的模型保持原 backend。新客户端仅在 hello 声明支持时申请
   DMA 通路；旧服务、旧客户端以及不支持的模型保持原 version-1 张量消息。
+  RKNNLite 兼容路径统一执行输出脱离和循环引用回收，见[推理内存生命周期](inference-memory.md)。
 - `RemoteRknnSession(..., shared_io=False)` 可关闭共享传输做 A/B。
   `session.io_transport` 返回 `rknn-dma-v1` 或 `tensor-v1`。
   `session.last_timings_ms` 包含 queue，DMA 路径另有 driver_wait 和 runtime，单位毫秒。
   runtime 包括绑定、同步、RKNN 调用及厂商输出转换，不等于纯 NPU 执行时间。
+
+### 张量数量上限（Kit 0.3.1）
+
+`MAX_TENSORS = 64` 是通信张量数量上限，不是 batch 大小，也不是应用配置项。
+普通 `tensor-v1` 请求与响应分别最多携带 64 个张量；共享 DMA 的输入与输出
+描述符合计最多 64 个，因此当前单输入通路最多支持 63 个输出。64 个输出的模型
+会回退到普通张量传输；更多输出仍会被协议拒绝。
+
+单张量 64 MiB、普通消息总量 96 MiB，以及共享 DMA 的服务/应用内存预算均保持不变。
+客户端与 `inferenced` 必须使用更新后的 Kit，并重启进程后才会生效。现有握手没有
+协商此数量上限；旧版本仍按 16 检查，不能混用新旧端点来传输超过旧上限的数据。
+固件默认让应用和推理服务共用 `/usr/lib/python3.11/site-packages/kit`，只更新应用
+私有 venv 中的副本不能提高服务端限制。
 
 ## 线格式与所有权
 

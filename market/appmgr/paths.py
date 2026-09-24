@@ -158,15 +158,22 @@ REQUIRE_SIGNATURE = os.environ.get("APPMGR_REQUIRE_SIGNATURE", "1").strip().lowe
 ALLOWED_PKG_ROOTS = tuple(
     p for p in os.environ.get("APPMGR_ALLOWED_ROOTS", "/userdata").split(":") if p
 )
-MAX_PKG_BYTES = int(os.environ.get("APPMGR_MAX_PKG_BYTES", str(200 * 1024 * 1024)))  # 200 MB
-MAX_UNPACKED_BYTES = int(os.environ.get("APPMGR_MAX_UNPACKED_BYTES", str(400 * 1024 * 1024)))
+PACKAGE_SIZE_LIMIT_BYTES = 10 * 1024 ** 3  # 10 GiB per application archive.
+MAX_PKG_BYTES = min(PACKAGE_SIZE_LIMIT_BYTES, int(os.environ.get(
+    "APPMGR_MAX_PKG_BYTES", str(PACKAGE_SIZE_LIMIT_BYTES))))
+MAX_UNPACKED_BYTES = int(os.environ.get(
+    "APPMGR_MAX_UNPACKED_BYTES", str(20 * 1024 ** 3)))
+# Retired raw-body endpoints still materialize bytes in memory. Their smaller
+# compatibility limit must not grow with the streaming v1 upload limit.
+MAX_LEGACY_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_MEMBERS = int(os.environ.get("APPMGR_MAX_MEMBERS", "4096"))
 # Browser uploads are durable only long enough to bridge preflight -> install.
 # Bound the whole staging area as well as each package so retries cannot fill
-# /userdata with individually valid 200 MiB archives.  Keep enough headroom for
-# two maximum-size packages, but reserve space for app code/config and logs.
+# /userdata with individually valid archives. Allow two maximum-size packages
+# plus multipart/metadata overhead; actual free space and concurrent reservations
+# remain authoritative even when the configured quota exceeds the device disk.
 MAX_UPLOAD_STAGING_BYTES = int(os.environ.get(
-    "APPMGR_MAX_UPLOAD_STAGING_BYTES", str(512 * 1024 * 1024)))
+    "APPMGR_MAX_UPLOAD_STAGING_BYTES", str(2 * MAX_PKG_BYTES + 1024 * 1024)))
 MAX_STAGED_UPLOADS = int(os.environ.get("APPMGR_MAX_STAGED_UPLOADS", "8"))
 UPLOAD_TTL_SEC = int(os.environ.get("APPMGR_UPLOAD_TTL_SEC", str(24 * 60 * 60)))
 MIN_UPLOAD_FREE_BYTES = int(os.environ.get(
@@ -177,7 +184,7 @@ MIN_UPLOAD_FREE_BYTES = int(os.environ.get(
 UPLOAD_SOCKET_TIMEOUT_SEC = float(os.environ.get(
     "APPMGR_UPLOAD_SOCKET_TIMEOUT_SEC", "60"))
 UPLOAD_TOTAL_TIMEOUT_SEC = float(os.environ.get(
-    "APPMGR_UPLOAD_TOTAL_TIMEOUT_SEC", "600"))
+    "APPMGR_UPLOAD_TOTAL_TIMEOUT_SEC", "14400"))
 # Keep authenticated UI retries from creating an unbounded backlog of stale
 # lifecycle callbacks or one handler thread per SSE connection.
 MAX_PENDING_OPERATIONS = int(os.environ.get(

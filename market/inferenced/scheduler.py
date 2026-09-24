@@ -216,6 +216,12 @@ class FairScheduler:
                 job.finish(error=exc)
             else:
                 job.finish(result=result)
+            finally:
+                # The worker can now sleep indefinitely. The waiting caller
+                # owns its job/result; do not keep the last tensor payload (or
+                # a failed job's input closure) alive in this thread's frame.
+                result = None
+                job = None
 
 
 __all__ = [

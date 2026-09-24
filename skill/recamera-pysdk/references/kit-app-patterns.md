@@ -159,6 +159,68 @@ incorrect. Ordinary browser box rendering uses `results[].box` plus the strict
 when the user explicitly needs boxes in RTSP or recording streams. Drawing a
 rectangle with OpenCV on an app-owned image is not an official preview overlay.
 
+## Multi-input models and backend selection
+
+Distinguish the typed session API, the selected backend and App Center's model
+loading/authorization path. Session support alone does not prove that a packaged
+App can load the same model through `self.models` on the target firmware.
+
+When the runtime receives a complete `ModelSpec.inputs` contract:
+
+| Backend/path | Multiple inputs | Consequence |
+| --- | --- | --- |
+| `ESK_RKNN_BACKEND=auto` (default) | Selects RKNNLite | Remote sessions use ordinary tensor messages over the Unix socket, without shared DMA IO |
+| `ESK_RKNN_BACKEND=rknnlite` | Supported by typed sessions | Model/operator support still depends on the installed RKNN runtime |
+| `ESK_RKNN_BACKEND=ctypes` | Rejected | Current ctypes backend requires one static image input, supplied as uint8 NHWC |
+| Bound/shared DMA IO and deferred `infer(prepared)` | Single input only | Do not apply this optimization to a multi-input model |
+
+`auto` selects from the declared contract; it is not a universal fallback after
+probing any model graph. A legacy path-only load without input metadata can
+still select ctypes and reject a multi-input graph even in `auto` mode.
+
+For scheduled/brokered inference, backend selection occurs in the inference
+service process. Setting `ESK_RKNN_BACKEND` only in an App's environment does
+not reconfigure the service. Do not change platform settings or open a local
+RKNN runtime to bypass model authorization.
+
+Declare each input's name, shape, dtype and layout, then supply a list/tuple in
+declaration order or a dictionary keyed by those names. For example, a typed
+session contract may contain both
+`TensorSpec("image", (1, 640, 640, 3), "uint8", "NHWC")` and
+`TensorSpec("scale", (1,), "float32", "N")`. These are illustrative model
+contracts, not manifest fields. Preserve the auxiliary tensor's float32 dtype;
+do not cast all inputs to uint8, stack unlike tensors into one array, or treat
+`layout` as an automatic transpose. RGA may still preprocess the image tensor,
+but pass its materialized array alongside the other inputs through the typed
+session; deferred single-image preparation is not a multi-input transport.
+
+**Current ordinary App Center integration needs additional work for multi-input
+models:**
+
+- `App._load_model(path)` constructs the compatibility `RemoteRknnModel` from a
+  path, without input specs. This wrapper uses legacy uint8 conversion; it does
+  not preserve an arbitrary typed multi-input contract.
+- AppMgr's ordinary authorization builder maps `models[].input` to one uint8
+  tensor. Adding an invented `models[].inputs` field does not supply a supported
+  multi-input declaration.
+- The inference service obtains input specs from the platform-authorized model
+  policy, not the client's requested `ModelSpec`. Constructing a typed remote
+  session by itself does not extend that policy.
+
+For such an App, record managed multi-input integration as a prerequisite:
+the manifest/admission contract, trusted service policy and Kit loader must
+carry the same per-input metadata and preserve each dtype. Verify the target
+firmware's implementation and actual AppMgr launch before claiming the package
+can run. Keep generated Apps on the managed invocation path; if this bridge is
+missing, report it instead of silently switching to a direct NPU session.
+
+The repository's `test_declared_input_contract_supports_named_multi_input` in
+`kit/tests/test_rknn_session.py` checks an image plus float32 scale with a fake
+runtime. It verifies ordering and dtype preservation, not device execution or
+App Center authorization. `MAX_TENSORS` is a protocol tensor-count limit, not
+batch size; raising it does not add ctypes or managed-loader multi-input support.
+Older firmware may also have a lower limit, so verify both client and service.
+
 ## Frame cost and throughput
 
 Choose the mode from the pixels and lifetime the app actually needs:
@@ -170,7 +232,8 @@ Choose the mode from the pixels and lifetime the app actually needs:
 | `"hw-direct"` | model letterbox only | synchronous detection/keypoint loops with no original pixel reads |
 | `"hw-roi"` | original NV12 retained for hardware crop | detection-to-ROI cascade via `crop_roi_hw` |
 
-For a synchronous hardware path, add `model_dma_input = True` and pass the
+For a supported single-image model on a synchronous hardware path, add
+`model_dma_input = True` and pass the
 prepared object directly: `x = self.pre(frame); outs = self.models.det.infer(x)`.
 Accessing `x.data` materializes an array and bypasses deferred preparation into
 the model input buffer. `infer(ndarray)` remains supported for old applications,
@@ -263,6 +326,9 @@ Before returning a kit-based implementation, verify:
   package root, with no manual `Path(__file__).parents[...]` root derivation.
 - Each requested model access maps to a declared manifest model ID or an
   unambiguous task alias.
+- For multiple inputs, the typed contract and managed loading/authorization
+  prerequisites above are verified; single-input DMA settings are not assumed
+  to provide multi-input support.
 - Output geometry returns to original-frame coordinates before normalization.
 - Emitted output carries the matching frame PTS when it originated from a frame.
 - A detector manifest declares `output.contract_version: 2`, `output.sink: "ws"`,

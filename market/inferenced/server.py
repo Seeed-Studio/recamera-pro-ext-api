@@ -623,11 +623,18 @@ class InferenceService:
                     request, tensors = recv_message(conn)
                 except EOFError:
                     break
-                response, outputs = self._dispatch(client, request, tensors)
-                fds = response.pop("_send_fds", ())
-                send_message(conn, response, outputs)
-                if fds:
-                    send_fds(conn, fds)
+                try:
+                    response, outputs = self._dispatch(client, request, tensors)
+                    fds = response.pop("_send_fds", ())
+                    send_message(conn, response, outputs)
+                    if fds:
+                        send_fds(conn, fds)
+                finally:
+                    # Authorized model connections may be idle for minutes.
+                    # Drop this request's payload before blocking on the next
+                    # recv, including failed sends. Shared DMA allocations stay
+                    # owned by client.shared_io until unload/disconnect.
+                    request = tensors = response = outputs = fds = None
         except (EOFError, BrokenPipeError, ConnectionResetError):
             pass
         except ProtocolError as exc:
@@ -1077,6 +1084,13 @@ class InferenceService:
                     "priority": item.priority,
                     "max_fps": item.max_fps,
                     "references": len(item.aliases),
+                    "backend": type(item.handle).__name__,
+                    "owners": [
+                        {"app_id": client.app_id, "instance_id": client.instance_id,
+                         "generation": client.generation}
+                        for client in self._clients.values()
+                        if any(alias[0] == client.id for alias in item.aliases)
+                    ],
                     "calls": item.calls,
                     "failures": item.failures,
                     "last_ms": item.last_ms,

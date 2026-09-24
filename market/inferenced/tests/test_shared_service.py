@@ -231,6 +231,37 @@ def test_legacy_or_unsupported_shared_io_keeps_normal_inference(launch, memfd, m
         assert backend.channels == []
 
 
+@pytest.mark.parametrize("output_count", [16, 32, 63, 64])
+def test_many_outputs_use_shared_io_up_to_63_then_fall_back(launch, memfd, output_count):
+    class ManyOutputsBackend(SharedBackend):
+        def open_shared_io(self, handle):
+            input_buffer, outputs = super().open_shared_io(handle)
+            outputs.extend(Buffer(self.factory, "float32") for _ in range(output_count - 1))
+            return input_buffer, outputs
+
+        def infer_shared_io(self, handle, channel):
+            timings = super().infer_shared_io(handle, channel)
+            for index, output in enumerate(channel.outputs[1:], start=2):
+                np.add(channel.input.array, index, out=output.array)
+            return timings
+
+        def infer(self, handle, inputs):
+            return [np.asarray(inputs[0], dtype=np.float32) + index + 1
+                    for index in range(output_count)]
+
+    running, backend, connect = launch(ManyOutputsBackend(memfd))
+    session = connect()
+    expected_transport = shared.SHARED_IO_VERSION if output_count <= 63 else "tensor-v1"
+    assert session.io_transport == expected_transport
+    outputs = session.infer(np.full(SHAPE, 7, np.uint8))
+    assert len(outputs) == output_count
+    for index, output in enumerate(outputs):
+        np.testing.assert_array_equal(output, np.full(SHAPE, 8 + index, np.float32))
+    session.release()
+    assert all(item.closed for pair in backend.channels for item in [pair[0], *pair[1]])
+    assert running.service.status()["shared_io_reserved_bytes"] == 0
+
+
 def test_shared_io_estimate_budget_rejection_only_disables_optimization(launch, memfd):
     backend = SharedBackend(memfd, estimate=40 * 1024 * 1024)
     running, _backend, connect = launch(backend, memory_mb=64)

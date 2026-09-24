@@ -102,6 +102,7 @@ def _app_defaults(app_id: str, *, desired: str = DESIRED_STOPPED) -> dict:
         "resource_owners": [],
         "dependency": None,
         "runtime_guard": None,
+        "memory_protection": None,
         "restart_history": [],
         "next_retry_at": None,
         "started_at": None,

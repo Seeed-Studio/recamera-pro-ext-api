@@ -1,5 +1,7 @@
 # reCamera Pro 扩展 API 部署与运维手册
 
+应用持续内存监控、保护停机与共享推理服务恢复见 [内存保护说明](memory-protection.md)。
+
 > **读者**：把扩展 API / 应用中心部署到设备、或负责设备维护的人（Seeed 内部 / 集成商）。
 > **对象设备**：reCamera Pro（RV1126B / recamera_v2），kernel 6.1.157、rootfs `/` 与 `/oem` ext4 rw、`/userdata` ext4 rw 无 noexec。
 > **依据**：`release/pkg/`（install.sh / rollback.sh / MANIFEST.txt / README.md）、`../../CHANGELOG.md`、`../api/spec.md`、`app-center-publishing.md`，以及真机验证记录（G1-G4 / M1-M3）与踩坑记录。当前固件服务入口见 `market/deploy/` 与本节 §4.2。

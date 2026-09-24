@@ -70,6 +70,9 @@ tree. It cannot prove that every operator compiles on the NPU. For the generic
 helper, export one **float32, static, batch-1, NCHW three-channel image input**.
 Multiple outputs are supported. Dynamic/multiple/non-image inputs and special
 quantization use the selected official recipe instead of guessed defaults.
+For multiple inputs, also read [runtime backend and managed integration prerequisites](kit-app-patterns.md#multi-input-models-and-backend-selection):
+successful conversion does not extend the App Center loader/authorization
+contract, and the single-input ctypes/shared DMA optimization does not apply.
 
 Write `recipe.json` **outside the app tree**. This example applies only to a
 model trained/exported for RGB pixels normalized by 255, with this exact input:

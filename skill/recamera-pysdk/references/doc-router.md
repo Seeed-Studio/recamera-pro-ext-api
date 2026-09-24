@@ -12,6 +12,8 @@ compatibility and platform-only APIs marked with their restrictions.
 
 - Ownership, color/stride, timestamps, coordinates, scheduling, threading,
   permissions, errors and examples: [api/features.md](api/features.md).
+- Multi-input models, auto/RKNNLite/ctypes selection, DMA limits and App Center
+  integration prerequisites: [kit-app-patterns.md](kit-app-patterns.md#multi-input-models-and-backend-selection).
 - All AppMgr HTTP routes and result subscription contracts:
   [api/http.md](api/http.md), [api/http-routes.md](api/http-routes.md).
 - Native types, error codes and lifecycle: [api/c-abi.md](api/c-abi.md).

@@ -79,6 +79,7 @@ from . import workflow_models
 from . import (acousticslab, assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
+               memory_guard, memory_control,
                mqtt as mqttcfg, operations as appoperations, paths,
                recording as apprecording, recording_migration,
                result_hub as canonical_results,
@@ -106,6 +107,7 @@ _upload_finalize_lock = threading.Lock()
 _reconcile_stop = None
 _reconcile_thread = None
 _service_stopping = False
+_memory_controller = None
 
 
 def add_result_observer(callback):
@@ -1349,7 +1351,7 @@ def do_upload(filename: str, data: bytes) -> dict:
     Validation here is defence-in-depth around that:
       * filename must be a bare `<name>.tar.gz` basename (no path separators,
         no traversal) -- prevents writing outside the staging dir.
-      * size 1..MAX_PKG_BYTES -- reject empty and oversized before touching disk.
+      * size is bounded by both the package and legacy in-memory endpoint caps.
     """
     base = os.path.basename(filename or "")
     if not _UPLOAD_NAME_RE.fullmatch(base):
@@ -1359,8 +1361,9 @@ def do_upload(filename: str, data: bytes) -> dict:
     n = len(data)
     if n == 0:
         raise ValueError("empty upload")
-    if n > paths.MAX_PKG_BYTES:
-        raise ValueError(f"upload too large: {n} > {paths.MAX_PKG_BYTES}")
+    cap = min(paths.MAX_PKG_BYTES, paths.MAX_LEGACY_UPLOAD_BYTES)
+    if n > cap:
+        raise ValueError(f"upload too large: {n} > {cap}")
 
     stage = paths.ensure_appstage()
     dest = os.path.join(stage, base)
@@ -1498,6 +1501,7 @@ def do_install(pkg_path: str, signature: str = None, *,
     whole thing back to .prev and restarts the previous version.
     """
     with busy_gate(wait_timeout=_busy_timeout):
+        memory_guard.check_admission()
         info = installer.inspect(
             pkg_path, signature, allow_unsigned=allow_unsigned)
         if expected_preflight is not None:
@@ -2016,6 +2020,7 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     for inferenced and never acquires the direct broker owner.  Old model-backed
     manifests retain the fail-closed direct-NPU compatibility route.
     """
+    memory_guard.check_admission()
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2067,6 +2072,7 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
 
 
 def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
+    memory_guard.check_admission()
     if app_id == acousticslab.AL_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2118,6 +2124,7 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
 
 
 def do_switch(app_id: str) -> dict:
+    memory_guard.check_admission()
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2562,6 +2569,7 @@ def do_resources() -> dict:
     """Resource journal plus a protocol-level inferenced health snapshot."""
     coord = _coordinator()
     snapshot = coord.resources.snapshot()
+    snapshot["memory_guard"] = memory_guard.snapshot()
     snapshot["runtime_admission"] = coord.resources.runtime_status()
     grouped = {}
     for allocation in snapshot.get("allocations") or []:
@@ -2959,6 +2967,7 @@ def do_v1_apps() -> dict:
                 "observed_state": raw.get("observed_state"),
                 "pid": raw.get("pid"),
                 "reason": raw.get("state_reason"),
+                "memory": memory_guard.app_view(app_id, state.get_app(app_id) or {}),
             },
             "instance": {
                 "id": raw.get("instance_id"),
@@ -3070,6 +3079,7 @@ def do_v1_upload(stream, content_length: int, content_type: str, *,
                  source: str = V1_DIRECT_UPLOAD_SOURCE,
                  channel: str = V1_DIRECT_UPLOAD_CHANNEL) -> dict:
     """Receive a package without buffering it, then perform non-mutating preflight."""
+    memory_guard.check_admission()
     upload = appuploads.receive(
         stream, content_length, content_type, source=source, channel=channel)
     return _preflight_v1_upload_record(upload)
@@ -3301,6 +3311,7 @@ def do_v1_install(body: dict) -> dict:
                     "operation")
             return {"operation": existing, "idempotent_replay": True}
 
+        memory_guard.check_admission()
         upload = appuploads.verify(upload_id)
         if upload.get("status") in ("install_queued", "installing", "installed"):
             raise ValueError("upload has already been finalized")
@@ -3495,6 +3506,8 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
     callback = callbacks.get(action)
     if callback is None:
         raise ValueError("unsupported lifecycle action")
+    if action in ("start", "restart"):
+        memory_guard.check_admission()
 
     def lifecycle_job():
         result = callback(
@@ -3674,8 +3687,19 @@ class _Handler(BaseHTTPRequestHandler):
             code = 400
         elif isinstance(exc, appuploads.UploadConflictError):
             code = 409
-        elif isinstance(exc, appuploads.StagingQuotaError):
+        elif isinstance(exc, appuploads.UploadSizeError):
+            return self._send(413, {
+                "code": exc.code,
+                "error": str(exc),
+                "max_package_bytes": int(paths.MAX_PKG_BYTES),
+                "max_request_bytes": int(
+                    paths.MAX_PKG_BYTES + appuploads.MAX_MULTIPART_OVERHEAD),
+            })
+        elif isinstance(exc, (appuploads.StagingQuotaError,
+                              installer.InsufficientStorageError)):
             code = 507
+        elif isinstance(exc, memory_guard.MemoryPressureError):
+            return self._send(503, {"code": exc.code, "error": str(exc)})
         elif isinstance(exc, appoperations.EventCapacityError):
             code = 503
         elif isinstance(exc, appoperations.OperationBusyError):
@@ -3949,8 +3973,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _read_raw_body(self, cap: int = None) -> bytes:
         """Read exactly Content-Length bytes, refusing oversized uploads before
         allocating. Used by /upload (raw package bytes) and /putModel (raw model
-        bytes); `cap` defaults to the package cap."""
-        cap = paths.MAX_PKG_BYTES if cap is None else cap
+        bytes); `cap` defaults to the smaller package/legacy in-memory cap."""
+        cap = min(paths.MAX_PKG_BYTES, paths.MAX_LEGACY_UPLOAD_BYTES) if cap is None else cap
         n = int(self.headers.get("Content-Length", 0) or 0)
         if n <= 0:
             raise ValueError("missing/empty body")
@@ -4604,6 +4628,22 @@ def _boot_restore(stop_event: Optional[threading.Event] = None) -> None:
 
 def _reconcile_once(stop_event: Optional[threading.Event] = None) -> list:
     """Advance desired lifecycle state once; safe to call from host tests."""
+    if _memory_controller is not None and not _lifecycle_stopping(stop_event):
+        try:
+            with busy_gate():
+                try:
+                    if not _lifecycle_stopping(stop_event) and _memory_controller.tick(_coordinator()):
+                        return []  # Reassess pressure on a fresh sample before other work.
+                finally:
+                    # Keep invalidation inside the same gate as stop: a manual
+                    # new generation must not race an app-wide result tombstone.
+                    for app_id, rec in state.app_states().items():
+                        if rec.get("memory_protection"):
+                            _invalidate_result_if_inactive(app_id)
+        except BusyError:
+            pass
+        except Exception as exc:
+            _audit("memory_protection_failed", error=str(exc))
     if _lifecycle_stopping(stop_event) or _queued_mutation_pending():
         return []
     try:
@@ -4735,7 +4775,7 @@ def _start_reconciler(*, restore: bool = False) -> None:
 
 
 def _stop_reconciler() -> None:
-    global _reconcile_stop, _reconcile_thread
+    global _reconcile_stop, _reconcile_thread, _memory_controller
     if _reconcile_stop is not None:
         _reconcile_stop.set()
     thread = _reconcile_thread
@@ -4745,6 +4785,10 @@ def _stop_reconciler() -> None:
         thread.join()
     _reconcile_thread = None
     _reconcile_stop = None
+    _memory_controller = None
+    if memory_guard.active_monitor is not None:
+        memory_guard.active_monitor.close()
+        memory_guard.active_monitor = None
 
 
 def _stop_acousticslab_forwarder() -> None:
@@ -4859,6 +4903,7 @@ def serve(host: str = None, port: int = None) -> None:
 
 
 def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
+    global _memory_controller
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
     global _acousticslab_forwarder
@@ -5002,6 +5047,8 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
         # The worker restores desired apps before its first reconciliation.
         workflow_models.manager.activate = _activate_workflow_models
         workflow_models.manager.start()
+        memory_guard.active_monitor = memory_guard.Monitor().start()
+        _memory_controller = memory_control.Controller(memory_guard.active_monitor)
         _start_reconciler(restore=True)
         httpd.serve_forever()
     except (KeyboardInterrupt, _ServiceShutdown):

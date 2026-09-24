@@ -365,8 +365,8 @@ class RknnSenseVoiceBackend(ASRBackend):
     def _new_runtime(self):
         if self._runtime_factory is not None:
             return self._runtime_factory()
-        from rknnlite.api import RKNNLite
-        return RKNNLite(verbose=False)
+        from kit.runtime.rknnlite import RknnLiteRuntime
+        return RknnLiteRuntime(verbose=False)
 
     def _load_one(self, path: str, *, frames: int):
         """Create/load/init one context while the already-held lease fences it."""

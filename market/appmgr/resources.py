@@ -733,6 +733,11 @@ class ResourceManager:
                         and a.get("state") in ("reserved", "bound")]
             if existing:
                 return [dict(a) for a in existing]
+            from . import memory_guard
+            try:
+                memory_guard.check_admission()
+            except memory_guard.MemoryPressureError as exc:
+                raise ResourceBusy("memory.pressure", [], detail=str(exc)) from exc
             for request in plan.requests:
                 self._check(request, allocations)
             self._check_runtime(plan, allocations)
@@ -837,9 +842,9 @@ class ResourceManager:
         Start admission uses a lower threshold and naturally retries through
         ``waiting_resource``.  This second, higher threshold is a containment
         fence for a workload that heats up after a successful launch.  It is
-        intentionally limited to thermal safety: choosing which process to
-        evict for ordinary memory pressure requires an explicit priority/QoS
-        policy and must not be guessed from manifest maxima.
+        intentionally limited to thermal safety. Memory decisions are global,
+        made once per tick by memory_control with live measurements and an
+        operator priority policy, never guessed from manifest maxima here.
         """
         try:
             sample = self._runtime_probe() or {}

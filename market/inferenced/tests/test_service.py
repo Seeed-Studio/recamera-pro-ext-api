@@ -3,6 +3,7 @@ import os
 import socket
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 
 import numpy as np
@@ -106,6 +107,38 @@ def _wait_for(predicate, timeout=1.0):
             return True
         time.sleep(0.005)
     return bool(predicate())
+
+
+def test_idle_connection_and_worker_release_sent_tensor_payloads(tmp_path):
+    class ObservedBackend(FakeBackend):
+        def infer(self, handle, inputs):
+            output = np.ones((1, 256, 1024), dtype=np.float32)
+            self.input_ref = weakref.ref(inputs[0])
+            self.output_ref = weakref.ref(output)
+            return [output]
+
+    backend = ObservedBackend()
+    running = RunningService(tmp_path, backend=backend)
+    path, digest = model(tmp_path)
+    session = None
+    try:
+        session = RemoteRknnSession(
+            str(path), socket_path=running.socket, model_sha256=digest,
+            app_id="voice", instance_id="idle-asr", generation=1,
+        )
+        output = session.infer(np.zeros((1, 8), dtype=np.float32))
+        # Connection and model stay alive. No second request, unload or GC is
+        # needed to release the daemon's completed request/response arrays.
+        assert _wait_for(lambda: backend.input_ref() is None)
+        assert _wait_for(lambda: backend.output_ref() is None)
+        assert running.service.status()["clients"] == 1
+        assert np.all(output[0] == 1)  # The client's owned copy remains valid.
+        session.release()
+        assert backend.output_ref() is None
+    finally:
+        if session is not None:
+            session.release()
+        running.close()
 
 
 def test_authorized_model_connection_survives_idle_timeout(tmp_path):

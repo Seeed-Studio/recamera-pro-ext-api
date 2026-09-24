@@ -12,6 +12,7 @@ from . import (
     config as appconfig,
     dependencies,
     inference_auth,
+    memory_guard,
     paths,
     resources,
     state,
@@ -219,6 +220,11 @@ class AppCoordinator:
                 )
             return self._result(app_id, current, running, idempotent=True)
 
+        if current and current.get("memory_protection"):
+            # A new, explicit launch acknowledges the protection hold. Automatic
+            # reconciliation never selects desired-stopped protected apps.
+            memory_guard.check_admission()
+            self.state.transition(app_id, current["observed_state"], memory_protection=None)
         plan = resources.plan_manifest(
             manifest, appconfig.effective_values(manifest, app_id))
         frame_stream_contract = supervisor.managed_frame_stream_contract(

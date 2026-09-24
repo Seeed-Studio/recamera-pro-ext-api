@@ -1,5 +1,6 @@
 import threading
 import time
+import weakref
 
 import pytest
 
@@ -9,6 +10,29 @@ from market.inferenced.scheduler import (
     QueueFullError,
     ScheduledJob,
 )
+
+
+def test_idle_worker_does_not_retain_completed_job_or_result():
+    class Payload:
+        pass
+
+    scheduler = FairScheduler()
+    try:
+        job = scheduler.submit(ScheduledJob(
+            client_id="voice", priority=50, deadline=time.monotonic() + 2,
+            execute=Payload,
+        ))
+        output = job.result(1)
+        output_ref, job_ref = weakref.ref(output), weakref.ref(job)
+        del output, job
+        deadline = time.monotonic() + 1
+        while (output_ref() is not None or job_ref() is not None) and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert output_ref() is None
+        assert job_ref() is None
+        assert scheduler._thread.is_alive()
+    finally:
+        scheduler.close()
 
 
 def test_scheduler_serializes_driver_calls_from_multiple_clients():

@@ -20,6 +20,34 @@ editor/tooling representation of the contract.
   `rv1126b-linux-gnu-cp311-rknn232-v1`, and exactly one instance per app.
 - Runtime endpoints are allocated. A fixed `output.port` is rejected.
 
+## Upload and storage limits
+
+App Center accepts one `.tar.gz` application package up to **10 GiB**
+(10,737,418,240 bytes). `GET /api/app-center/v1/policy` reports the device's
+effective `upload.max_package_bytes`; `APPMGR_MAX_PKG_BYTES` can lower this
+limit, but cannot raise it above 10 GiB. The browser waits for that policy,
+checks the selected file before uploading, and displays the applicable limit.
+An unavailable policy can be retried without uploading the file.
+
+The streaming `POST /api/app-center/v1/uploads` endpoint and nginx allow
+256 KiB of multipart overhead beyond the package limit. The nginx
+`/_jwt_verify` subrequest must accept the same request length, even though it
+does not forward the body. Oversized uploads return HTTP 413; insufficient
+staging quota or free space returns HTTP 507. Both errors have readable UI
+messages. Other management routes retain their smaller body limits, and the
+retired raw upload handler retains its 200 MiB in-memory compatibility cap.
+
+The default unpacked archive cap is 20 GiB. Upload staging defaults to two
+maximum-size packages plus 1 MiB of metadata allowance, subject to the existing
+concurrent reservations, upload-count limit and free-space reserve. Uploads
+are streamed to disk in bounded chunks, and extraction checks available space
+before writing and preserves the reserve while writing. A 10 GiB upload limit
+does **not** guarantee that a package fits: the device needs space for its
+staged archive, extracted files, dependencies and existing releases. Upload and
+store-download total timeouts default to four hours; idle socket timeouts still
+apply. Firmware must ship the matching appmgr and both nginx configuration
+changes together with the frontend.
+
 ## Application icon
 
 An installable thumbnail is declared independently of the catalog image:
