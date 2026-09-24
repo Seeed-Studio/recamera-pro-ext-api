@@ -243,17 +243,25 @@ def _default_runtime_factory():
     return RKNNLite()
 
 
+_CTYPES_INPUT_DTYPES = frozenset(("uint8", "int8", "float16", "float32"))
+
+
 def _ctypes_spec_supported(spec: ModelSpec) -> bool:
-    """Return whether the declared contract is safe for the low-level path."""
+    """Return whether the declared contract is safe for the low-level path.
+
+    Eligible: one static input that is either a uint8 NHWC 4D image, or a
+    non-image tensor (not 4D NHWC/NCHW) of uint8/int8/float16/float32 such as
+    a (1, T, F) float32 feature sequence.
+    """
     if len(spec.inputs) != 1:
         return False
     tensor = spec.inputs[0]
-    return (
-        tensor.dtype == "uint8"
-        and tensor.layout == "NHWC"
-        and len(tensor.shape) == 4
-        and all(dim > 0 for dim in tensor.shape)
-    )
+    if not tensor.shape or not all(dim > 0 for dim in tensor.shape):
+        return False
+    image_shaped = len(tensor.shape) == 4 and tensor.layout in ("NHWC", "NCHW")
+    if image_shaped:
+        return tensor.dtype == "uint8" and tensor.layout == "NHWC"
+    return tensor.dtype in _CTYPES_INPUT_DTYPES
 
 
 def _runtime_for_spec(spec: ModelSpec, *, legacy_uint8: bool = False):
@@ -272,7 +280,8 @@ def _runtime_for_spec(spec: ModelSpec, *, legacy_uint8: bool = False):
     if choice == "ctypes":
         if not (eligible or not spec.inputs):
             raise ConfigurationError(
-                "ctypes backend requires one static uint8 NHWC input",
+                "ctypes backend requires one static input: uint8 NHWC image "
+                "or a non-image uint8/int8/float16/float32 tensor",
                 operation="model.backend",
                 code="ctypes_unsupported_model",
             )

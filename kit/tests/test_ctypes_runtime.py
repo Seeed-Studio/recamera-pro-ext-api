@@ -198,7 +198,7 @@ def test_backend_selection_explicit_rknnlite_and_unsupported_contracts(monkeypat
         engine.TensorSpec("a", (1, 2, 2, 3)),
         engine.TensorSpec("b", (1, 2, 2, 3)),
     ))
-    with pytest.raises(ConfigurationError, match="one static uint8 NHWC"):
+    with pytest.raises(ConfigurationError, match="one static input"):
         monkeypatch.setenv("ESK_RKNN_BACKEND", "ctypes")
         engine._runtime_for_spec(multi)
 
@@ -364,3 +364,18 @@ def test_sequence_input_skips_bound_io_without_recreating_context(tmp_path, monk
         strict.init_runtime()
     strict.release()
 
+
+def test_auto_selects_ctypes_for_float32_feature_sequence(monkeypatch):
+    monkeypatch.setenv("ESK_RKNN_BACKEND", "auto")
+    monkeypatch.setattr(ctypes_rknn, "library_path", lambda: "/fake/rt.so")
+    sentinel = object()
+    monkeypatch.setattr(engine, "_default_runtime_factory", lambda: sentinel)
+    spec = engine.ModelSpec("asr.rknn", inputs=(engine.TensorSpec(
+        "speech", (1, 344, 560), "float32", "NTF"),))
+    assert isinstance(engine._runtime_for_spec(spec), ctypes_rknn.CtypesRknnModel)
+    # Image-shaped non-uint8 and dynamic contracts stay on RKNNLite.
+    for tensor in (engine.TensorSpec("x", (1, 2, 2, 3), "float32", "NHWC"),
+                   engine.TensorSpec("x", (1, 3, 2, 2), "uint8", "NCHW"),
+                   engine.TensorSpec("x", (1, -1, 560), "float32", "NTF"),
+                   engine.TensorSpec("x", (1, 344, 560), "float64", "NTF")):
+        assert engine._runtime_for_spec(engine.ModelSpec("x.rknn", inputs=(tensor,))) is sentinel
