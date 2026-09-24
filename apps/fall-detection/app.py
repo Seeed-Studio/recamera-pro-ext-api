@@ -359,6 +359,20 @@ class IoUTracker:
         return sum(1 for tr in self._tracks.values() if tr.visible)
 
 
+# A repeated fall edge counts as the same place when its box centre is within
+# this multiple of the larger box side (either box) of a recent event.
+_LOCATION_RADIUS_SCALE = 0.75
+
+
+def _boxes_near(a: Sequence[float], b: Sequence[float]) -> bool:
+    ax1, ay1, ax2, ay2 = (float(v) for v in a[:4])
+    bx1, by1, bx2, by2 = (float(v) for v in b[:4])
+    side = max(ax2 - ax1, ay2 - ay1, bx2 - bx1, by2 - by1, 0.0)
+    dx = (ax1 + ax2 - bx1 - bx2) * 0.5
+    dy = (ay1 + ay2 - by1 - by2) * 0.5
+    return math.hypot(dx, dy) <= _LOCATION_RADIUS_SCALE * side
+
+
 class FallDetectionApp(App):
     id = "fall-detection"
     name = "Fall Detection"
@@ -393,6 +407,7 @@ class FallDetectionApp(App):
     recovery_aspect_ratio = 1.10
     recovery_window_sec = 2.00
     cooldown_sec = 3.00
+    location_cooldown_sec = 10.0
 
     def _build_fall_config(self):
         """One FallConfig from the already-bound `self.<knob>` attributes.
@@ -446,6 +461,9 @@ class FallDetectionApp(App):
             max_lost_sec=cfg.occlusion_grace_sec,
         )
         self.detectors = {}
+        # (pts, box) of recent fall edges; survives track churn, see
+        # `_location_cooldown_hit()`.
+        self._recent_falls = []
         print(f"[fall] setup conf={self.confidence} "
               f"kpt_thres={self.keypoint_confidence} "
               f"torso>={cfg.torso_angle_threshold_deg} aspect>="
@@ -500,6 +518,27 @@ class FallDetectionApp(App):
             detector = FallDetector(replace(self._fall_config))
             self.detectors[track_id] = detector
         return detector
+
+    def _location_cooldown_hit(self, box, now):
+        """True when a fall edge at ``box`` repeats a recent one nearby.
+
+        The per-detector cooldown dies with its track, and the IoU tracker
+        re-issues ids for the same person (partial boxes, short misses), so a
+        person who is still on the floor would re-alarm on every new id.  Any
+        fall edge whose box centre lies within ``_LOCATION_RADIUS_SCALE`` x the
+        larger box side of an edge from the last ``location_cooldown_sec`` is
+        suppressed.  Every edge, suppressed or not, refreshes the window, so
+        one person lying in place produces one event.
+        """
+        window = max(0.0, float(self.location_cooldown_sec))
+        if window <= 0.0:
+            self._recent_falls = []
+            return False
+        self._recent_falls = [(ts, b) for ts, b in self._recent_falls
+                              if 0.0 <= now - ts <= window]
+        hit = any(_boxes_near(b, box) for _, b in self._recent_falls)
+        self._recent_falls.append((now, list(box)))
+        return hit
 
     def _temporal_for(self, track_id):
         classifier = self.temporal_classifiers.get(track_id)
@@ -611,8 +650,15 @@ class FallDetectionApp(App):
                 person["missed_frames"] = 0
                 person["features"] = events[-1]["features"]
 
-            # Edge event: a fall was just confirmed for THIS identity.
-            if out.fall_event:
+            # Edge event: a fall was just confirmed for THIS identity.  A
+            # repeat at the location of a recent event (same person under a
+            # new track id) is logged but not emitted.
+            if out.fall_event and self._location_cooldown_hit(
+                    track.box, frame.pts):
+                print(f"[fall] suppressed FALL track={track.track_id} "
+                      f"#{out.event_id} at pts={frame.pts:.2f} "
+                      f"(location cooldown)", flush=True)
+            elif out.fall_event:
                 request_configured_recording(self, "fall", frame.pts)
                 events.append({
                     "kind": "fall",

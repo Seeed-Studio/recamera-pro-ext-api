@@ -284,3 +284,74 @@ def test_temporal_positive_while_suspected_needs_current_lying_pose():
                             temporal_available=True, temporal_positive=True,
                             temporal_probability=0.99)
     assert lying.state == "fallen" and lying.fall_event
+
+
+class _EdgeOnFirstUpdate:
+    """Stub detector: reports a fall edge on its first visible update."""
+
+    def __init__(self):
+        from kit.logic.temporal import FallOutput
+
+        self._out = FallOutput
+        self.fired = False
+
+    def update(self, obs, **_kwargs):
+        edge = bool(obs.valid) and not self.fired
+        self.fired = self.fired or edge
+        return self._out(state="fallen" if self.fired else "normal",
+                         fall_detected=self.fired, fall_event=edge,
+                         event_id=1 if self.fired else 0)
+
+
+def test_location_cooldown_survives_track_churn():
+    mod = _load_app_module()
+    app = _make_app(mod, {"occlusion_grace_sec": 0.2,
+                          "location_cooldown_sec": 10.0})
+    assert app.location_cooldown_sec == 10.0
+    detectors = {}
+
+    def detector_for(track_id):
+        return detectors.setdefault(track_id, _EdgeOnFirstUpdate())
+
+    app._detector_for = detector_for
+    frame = SimpleNamespace(w=640, h=480, pts=0.0)
+    here = (100, 300, 300, 380)        # lying person
+    here_jitter = (110, 296, 305, 384)
+    far = (420, 40, 480, 200)
+
+    def step(pts, boxes):
+        frame.pts = pts
+        return [e for e in app._advance_tracks([_pose(b) for b in boxes], frame)
+                if e["kind"] == "fall"]
+
+    falls = step(0.0, [here])
+    assert len(falls) == 1 and falls[0]["event_id"] == 1
+    first_track = falls[0]["track_id"]
+    # Same person re-detected under fresh track ids within the cooldown.
+    for pts in (1.0, 2.0, 3.0):
+        assert step(pts, []) == []           # track lost and expired
+        assert step(pts + 0.5, [here_jitter]) == []
+    assert len(detectors) == 4 and first_track in detectors
+    # A second person far away still alarms, with its own track's event id.
+    falls = step(4.0, [here_jitter, far])
+    assert len(falls) == 1 and falls[0]["event_id"] == 1
+    assert falls[0]["track_id"] not in (first_track,)
+    # Once the location has been quiet for the whole window it may alarm again.
+    step(5.0, [])
+    falls = step(20.0, [here])
+    assert len(falls) == 1
+
+
+def test_location_cooldown_zero_disables_suppression():
+    mod = _load_app_module()
+    app = _make_app(mod, {"occlusion_grace_sec": 0.2,
+                          "location_cooldown_sec": 0.0})
+    app._detector_for = lambda tid, d={}: d.setdefault(tid, _EdgeOnFirstUpdate())
+    frame = SimpleNamespace(w=640, h=480, pts=0.0)
+    count = 0
+    for pts in (0.0, 1.0, 2.0):
+        for p, boxes in ((pts, [(100, 300, 300, 380)]), (pts + 0.5, [])):
+            frame.pts = p
+            count += sum(e["kind"] == "fall" for e in app._advance_tracks(
+                [_pose(b) for b in boxes], frame))
+    assert count == 3
