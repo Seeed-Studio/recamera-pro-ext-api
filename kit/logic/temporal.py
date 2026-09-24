@@ -2,10 +2,28 @@
 Temporal fall state machine, ported from the first-gen C++
 (solutions/fall-detection/main/fall_detector.cpp).
 
-Design faithful to the production first-gen/Jetson detector. Geometry and
-motion arm ``suspected``; by default only a learned temporal-positive result on
-a valid current pose can confirm ``fallen``.  ``temporal_confirmation_required``
-may be set false explicitly for legacy geometry-only bring-up.
+Design faithful to the production first-gen/Jetson detector. Only geometry
+arms ``suspected``, by one of two paths, each followed by a horizontal cue
+(torso angle or box aspect):
+
+* speed: a fast hip drop within ``motion_window_sec`` of the cue;
+* displacement: when the pose was invalid (occluded) between the last upright
+  baseline and the cue, a hip drop of at least ``hip_drop_distance_threshold``
+  below that baseline, with the baseline at most ``motion_window_sec +
+  occlusion_grace_sec`` old.  Speed measured across such a gap is diluted.
+
+A temporal-positive result alone never leaves ``normal``.  By default
+``fallen`` is confirmed only from ``suspected`` when the learned temporal gate
+is positive AND the current valid pose is lying with enough evidence features.
+For confirmation the motion feature counts as met because the candidate was
+motion-armed (latched); the current hip speed of a victim lying still is ~0.
+
+``suspected`` normally ends after ``suspected_timeout_sec``.  If the person is
+still lying at that point, the candidate stays ``suspected`` (a late learned
+positive may still confirm it) until ``suspected_timeout_sec +
+late_confirmation_sec`` after arming, or until the pose is no longer lying.
+``temporal_confirmation_required`` may be set false explicitly for legacy
+geometry-only bring-up.
 
 State: Normal -> Suspected -> Fallen -> Recovering -> Normal.
 No fall is declared from a single feature or a single frame: evidence is scored
@@ -40,6 +58,11 @@ class FallConfig:
     recovery_aspect_ratio: float = 1.10
     recovery_window_sec: float = 2.00
     cooldown_sec: float = 3.00
+    # Extra time after suspected_timeout_sec during which a still-lying
+    # candidate may be confirmed by a late temporal positive.  3.2 s is the
+    # learned gate's window (48 frames at 15 fps): after that the arming drop
+    # has left the classifier's input, so a positive is no longer about it.
+    late_confirmation_sec: float = 3.20
 
     def clamp(self) -> "FallConfig":
         self.hip_drop_speed_threshold = max(0.0, self.hip_drop_speed_threshold)
@@ -55,6 +78,7 @@ class FallConfig:
         self.recovery_aspect_ratio = max(1.0, self.recovery_aspect_ratio)
         self.recovery_window_sec = max(0.0, self.recovery_window_sec)
         self.cooldown_sec = max(0.0, self.cooldown_sec)
+        self.late_confirmation_sec = max(0.0, self.late_confirmation_sec)
         return self
 
 
@@ -62,7 +86,7 @@ class FallConfig:
 class FallOutput:
     state: str = NORMAL
     fall_detected: bool = False   # true while Fallen or Recovering
-    fall_event: bool = False      # edge: Normal/Suspected -> Fallen
+    fall_event: bool = False      # edge: Suspected -> Fallen
     event_id: int = 0
     diagnostics: Dict[str, float] = field(default_factory=dict)
 
@@ -84,7 +108,9 @@ class FallDetector:
         self._prev_ts = 0.0
         self._last_fast_drop = -1.0
         self._baseline_hip_y = 0.0
+        self._baseline_ts = -1.0
         self._have_baseline = False
+        self._gap_since_baseline = False
         self._max_drop = 0.0
         self._suspected_since = -1.0
         self._last_strong_evidence = -1.0
@@ -161,6 +187,8 @@ class FallDetector:
                 "temporal_positive": bool(temporal_positive),
                 "temporal_probability": float(temporal_probability),
             }
+            if self._have_baseline:
+                self._gap_since_baseline = True
             if self._state == SUSPECTED and self._suspected_since >= 0.0:
                 suspected_for = o.timestamp_sec - self._suspected_since
                 recent_strong = (self._last_strong_evidence >= 0.0 and
@@ -171,7 +199,10 @@ class FallDetector:
                         self._max_drop >= c.hip_drop_distance_threshold and
                         suspected_for >= c.confirmation_sec):
                     self._to_fallen(o)
-                elif suspected_for > c.suspected_timeout_sec:
+                elif (suspected_for > c.suspected_timeout_sec and
+                        not (recent_strong and self._in_late_latch(o))):
+                    # A late-confirmation candidate survives only a short
+                    # occlusion right after a lying frame.
                     self._to_normal()
             return self._finish(o)
 
@@ -183,7 +214,9 @@ class FallDetector:
                           o.bbox_aspect_ratio >= c.bbox_aspect_ratio_threshold)
         if self._state == NORMAL and not horizontal_cue:
             self._baseline_hip_y = o.hip_y
+            self._baseline_ts = o.timestamp_sec
             self._have_baseline = True
+            self._gap_since_baseline = False
         if self._state == SUSPECTED and self._have_baseline:
             self._max_drop = max(self._max_drop, o.hip_y - self._baseline_hip_y)
         if hip_speed >= c.hip_drop_speed_threshold:
@@ -194,36 +227,52 @@ class FallDetector:
             # Starting while somebody is already lying is not evidence of a
             # fall. A fresh detector always needs motion/history first.
         else:
-            evidence = int(self._diag["evidence_features"])
             lying = bool(self._diag["lying_posture"])
-            enough = evidence >= c.min_suspected_features
             cooldown = o.timestamp_sec < self._cooldown_until
 
             if self._state == NORMAL:
-                if (not cooldown and temporal_available and temporal_positive):
-                    self._to_fallen(o)
-                elif (not cooldown and self._last_fast_drop >= 0.0 and
-                        o.timestamp_sec - self._last_fast_drop <= c.motion_window_sec and
-                        horizontal_cue):
+                # Geometry is the only way out of NORMAL.  A temporal-positive
+                # window on its own (e.g. somebody sitting down quickly) must
+                # not raise an alarm without the hip-drop + horizontal arming.
+                fast_drop = (self._last_fast_drop >= 0.0 and
+                             o.timestamp_sec - self._last_fast_drop
+                             <= c.motion_window_sec)
+                displaced = (self._have_baseline and self._gap_since_baseline and
+                             o.timestamp_sec - self._baseline_ts
+                             <= c.motion_window_sec + c.occlusion_grace_sec and
+                             o.hip_y - self._baseline_hip_y
+                             >= c.hip_drop_distance_threshold)
+                if not cooldown and horizontal_cue and (fast_drop or displaced):
                     self._state = SUSPECTED
-                    self._suspected_since = self._last_fast_drop
+                    self._suspected_since = (self._last_fast_drop if fast_drop
+                                             else o.timestamp_sec)
                     self._last_strong_evidence = o.timestamp_sec if lying else -1.0
                     self._motion_triggered = True
                     self._max_drop = (max(0.0, o.hip_y - self._baseline_hip_y)
                                       if self._have_baseline else 0.0)
             elif self._state == SUSPECTED:
-                if (not cooldown and temporal_available and temporal_positive):
+                # The motion feature is latched by the arming drop; the
+                # current speed of somebody lying still is ~0.
+                evidence = int(self._diag["confirmation_features"])
+                enough = evidence >= c.min_suspected_features
+                if lying and enough:
+                    self._last_strong_evidence = o.timestamp_sec
+                if (not cooldown and temporal_available and temporal_positive and
+                        lying and enough):
+                    # Learned confirmation also needs the current pose lying.
                     self._to_fallen(o)
                 else:
-                    if lying and enough:
-                        self._last_strong_evidence = o.timestamp_sec
                     if (not c.temporal_confirmation_required and
                             self._motion_triggered and lying and enough and
                             self._max_drop >= c.hip_drop_distance_threshold and
                             o.timestamp_sec - self._suspected_since >= c.confirmation_sec):
                         self._to_fallen(o)
                     elif (self._diag["upright_posture"] or
-                            o.timestamp_sec - self._suspected_since > c.suspected_timeout_sec):
+                            (o.timestamp_sec - self._suspected_since >
+                             c.suspected_timeout_sec and
+                             not (lying and self._in_late_latch(o)))):
+                        # Past the timeout only a still-lying candidate inside
+                        # the bounded late-confirmation latch is kept.
                         self._to_normal()
             elif self._state == FALLEN:
                 if self._diag["upright_posture"]:
@@ -245,6 +294,12 @@ class FallDetector:
         self._have_prev = True
         return self._finish(o)
 
+    def _in_late_latch(self, o: Observation) -> bool:
+        c = self.config
+        return (self._motion_triggered and self._suspected_since >= 0.0 and
+                o.timestamp_sec - self._suspected_since
+                <= c.suspected_timeout_sec + c.late_confirmation_sec)
+
     # -- transitions ----------------------------------------------------- #
     def _to_fallen(self, o: Observation) -> None:
         self._state = FALLEN
@@ -264,6 +319,13 @@ class FallDetector:
 
     def _update_diag(self, o: Observation, hip_speed: float) -> None:
         feat = self._feature_count(o, hip_speed)
+        c = self.config
+        # Confirmation evidence: current posture features plus the motion
+        # feature, which a motion-armed SUSPECTED candidate has latched.
+        motion = (hip_speed >= c.hip_drop_speed_threshold or
+                  (self._state == SUSPECTED and self._motion_triggered))
+        posture = (int(o.torso_angle_deg >= c.torso_angle_threshold_deg) +
+                   int(o.bbox_aspect_ratio >= c.bbox_aspect_ratio_threshold))
         self._diag = {
             "hip_drop_speed": hip_speed,
             "hip_drop_distance": self._max_drop,
@@ -271,6 +333,7 @@ class FallDetector:
             "bbox_aspect_ratio": o.bbox_aspect_ratio,
             "evidence_features": feat,
             "evidence_score": feat / 3.0,
+            "confirmation_features": posture + int(motion),
             "lying_posture": self._is_lying(o),
             "upright_posture": self._is_upright(o),
         }
