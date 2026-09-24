@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/detect.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/detect.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/detect.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/detect.py)；签名由 AST 提取，不导入硬件依赖。
 
 YOLO 检测 DFL/head 解码与 NMS，输出框映回原图；支持配置输入尺寸/类别，不能默认所有模型均为 COCO 640。
 
@@ -45,7 +45,7 @@ def nms(boxes: np.ndarray, scores: np.ndarray, iou_thres: float) -> List[int]
 
 Standard greedy NMS on xyxy boxes. Returns kept indices.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/detect.py#L53)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/detect.py#L53)
 
 ## kit.runtime.postprocess.detect.postprocess
 
@@ -57,4 +57,4 @@ outputs : list of raw RKNN output tensors.
 info    : preprocess.LetterboxInfo (scale + padding for un-letterboxing).
 Returns list of detection dicts, sorted by score descending.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/detect.py#L178)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/detect.py#L178)

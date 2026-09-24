@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/db_ocr.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/db_ocr.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/db_ocr.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/db_ocr.py)；签名由 AST 提取，不导入硬件依赖。
 
 DB OCR 文本检测解码：二值化、轮廓、置信过滤和扩框；依赖 OpenCV。
 
@@ -55,4 +55,4 @@ info    : kit.runtime.preprocess.LetterboxInfo (scale/pad_w/pad_h/orig_w/h).
 Returns a list of {"quad": [[x,y]x4], "score": float}, score-descending,
 each quad ordered TL,TR,BR,BL and clipped to the original frame.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/db_ocr.py#L117)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/db_ocr.py#L117)

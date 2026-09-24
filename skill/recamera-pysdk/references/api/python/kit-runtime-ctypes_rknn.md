@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/ctypes_rknn.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/ctypes_rknn.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py)；签名由 AST 提取，不导入硬件依赖。
 
 平台推理后端实现及 RKNN ABI 结构。服务拥有 context/绑定 IO；普通 scheduled App 通过 self.models 调用，不能直接绕过调度。
 
@@ -10,7 +10,12 @@
 
 ## 模块契约（源码）
 
-Direct ``librknnrt.so`` bindings for a single uint8 NHWC caller input.
+Direct ``librknnrt.so`` bindings for a single static caller input.
+
+Image graphs (4D, NHWC or NCHW) take a uint8 NHWC caller array. Other graphs
+(for example a 3D float32 sequence) take an array whose shape equals the
+graph's declared dims and whose dtype is uint8, int8, float16 or float32; the
+descriptor carries that dtype and the graph's own fmt.
 
 The August 19 legacy-path investigation observed reference cycles retained by
 RKNNLite 2.3.2 and compared direct bindings against that wrapper. Those historical
@@ -239,6 +244,27 @@ LP64 ``rknn_tensor_mem`` from the installed RKNN 2.3.2 header.
 _fields_ = [('virt_addr', ctypes.c_void_p), ('phys_addr', ctypes.c_uint64), ('fd', ctypes.c_int32), ('offset', ctypes.c_int32), ('size', ctypes.c_uint32), ('flags', ctypes.c_uint32), ('priv_data', ctypes.c_void_p)]
 ```
 
+## kit.runtime.ctypes_rknn.CtypesUnsupportedModel
+
+```python
+class CtypesUnsupportedModel(RuntimeError)
+```
+
+The graph's own input contract is outside what this backend handles.
+
+Raised by ``init_runtime`` after the native context exists; the caller
+must ``release()`` it.  RKNNLite may still run such a graph, so callers
+that did not declare an input contract can fall back to it.
+
+## kit.runtime.ctypes_rknn.InputContractError
+
+```python
+class InputContractError(ValueError, TypeError)
+```
+
+A caller tensor does not match the graph input; raised before any
+driver call.  Subclasses TypeError for callers of the older dtype check.
+
 ## kit.runtime.ctypes_rknn.RknnIOBuffer
 
 ```python
@@ -260,7 +286,7 @@ def __init__(self, owner, mem, *, kind, index, shape, strides, dtype)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L159)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L186)
 
 ### kit.runtime.ctypes_rknn.RknnIOBuffer.fd
 
@@ -271,7 +297,7 @@ def fd(self)
 
 返回绑定 IO 的 DMA-BUF 文件描述符；调用方不得自行 close 所属 runtime 的 fd。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L174)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L201)
 
 ### kit.runtime.ctypes_rknn.RknnIOBuffer.offset
 
@@ -282,7 +308,7 @@ def offset(self)
 
 返回该 IO 缓冲的字节偏移。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L179)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L206)
 
 ### kit.runtime.ctypes_rknn.RknnIOBuffer.size
 
@@ -293,7 +319,7 @@ def size(self)
 
 返回该 IO 缓冲的字节大小；不能用逻辑 shape 忽略 native stride。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L184)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L211)
 
 ### kit.runtime.ctypes_rknn.RknnIOBuffer.describe
 
@@ -303,7 +329,7 @@ def describe(self)
 
 返回 IO 缓冲的描述信息，供后端诊断与绑定使用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L188)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L215)
 
 ## kit.runtime.ctypes_rknn.library_path
 
@@ -313,7 +339,7 @@ def library_path() -> str
 
 First existing candidate, or "" -- used to decide whether to even try.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L214)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L241)
 
 ## kit.runtime.ctypes_rknn.CtypesRknnModel
 
@@ -323,7 +349,7 @@ class CtypesRknnModel
 
 One ``rknn_context``, same surface as ``RknnLiteModel``.
 
-``infer(uint8_NHWC) -> list[np.ndarray]`` of dequantized float32 tensors
+``infer(array) -> list[np.ndarray]`` of dequantized float32 tensors
 shaped by the graph's declared output dims.
 
 One ``rknn_input`` array and one ``rknn_output`` array are allocated at
@@ -341,12 +367,12 @@ backend = 'ctypes'
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.__init__
 
 ```python
-def __init__(self, path: str='', core_mask: Optional[int]=None, io_mode: Optional[str]=None)
+def __init__(self, path: str='', core_mask: Optional[int]=None, io_mode: Optional[str]=None, image_inputs: bool=True)
 ```
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L320)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L347)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.load_rknn
 
@@ -356,7 +382,7 @@ def load_rknn(self, path: str) -> int
 
 Record the model path; defer all native work to init_runtime.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L360)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L393)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.init_runtime
 
@@ -366,7 +392,18 @@ def init_runtime(self, *, core_mask: Optional[int]=None, **kwargs) -> int
 
 初始化 native context，并按 io_mode 选择 legacy 或绑定 IO。成功返回 RKNN_SUCC；auto 在绑定能力不足时允许回退，显式 bound 会报错。core_mask 传递给 runtime；本方法不授予 NPU 资源权限。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L369)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L402)
+
+### kit.runtime.ctypes_rknn.CtypesRknnModel.released
+
+```python
+@property
+def released(self)
+```
+
+Whether release() completed and no native context remains.
+
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L559)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.native_cleanup_failed
 
@@ -382,7 +419,7 @@ this model but does not by itself prove that cleanup is uncertain. It
 also covers failures inside allocation rollback, before a buffer can be
 returned to the caller. A later successful release does not clear it.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L495)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L564)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.shared_io_size_bytes
 
@@ -393,7 +430,7 @@ def shared_io_size_bytes(self)
 
 One private IO set's observed size; recheck actual new allocations.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L506)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L575)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.output_specs
 
@@ -404,7 +441,7 @@ def output_specs(self)
 
 Stable caller output contract, including for legacy runtimes.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L513)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L582)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.allocate_input_buffer
 
@@ -414,7 +451,7 @@ def allocate_input_buffer(self)
 
 Allocate private DMA input for one client; caller holds driver lock.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L651)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L720)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.allocate_output_buffers
 
@@ -424,7 +461,7 @@ def allocate_output_buffers(self)
 
 Allocate all float32 outputs for one client; caller holds driver lock.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L662)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L731)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.export_input_buffer
 
@@ -434,7 +471,7 @@ def export_input_buffer(self)
 
 Borrow the private default input descriptor for in-process use only.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L674)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L743)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.release_input_buffer
 
@@ -444,7 +481,7 @@ def release_input_buffer(self, buf)
 
 释放后端分配的绑定输入缓冲，返回 None；必须保证没有在途推理引用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L713)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L782)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.release_output_buffers
 
@@ -454,7 +491,7 @@ def release_output_buffers(self, buffers)
 
 释放后端绑定输出缓冲，返回 None；外部保留的借用视图随后无效。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L723)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L792)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.infer_dma_buffers
 
@@ -468,7 +505,7 @@ External RGA/CPU input writes must have completed and flushed before this
 call. Outputs are cache-synchronized before return. Clients must finish
 reading before reuse; the API never transfers allocation ownership.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L747)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L816)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.infer_dma_into
 
@@ -478,7 +515,7 @@ def infer_dma_into(self, input_buffer, outputs)
 
 要求已初始化 bound IO；使用 DMA 输入执行同步推理，再把内部输出复制到调用者预分配的 outputs，并返回同一个 outputs 容器。目标 shape/dtype 必须匹配；不是输出零拷贝接口，属于平台后端。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L778)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L847)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.infer_bound_into
 
@@ -488,7 +525,7 @@ def infer_bound_into(self, outputs)
 
 Run after filling the private default input; synchronous use only.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L786)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L855)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.infer_into
 
@@ -498,7 +535,7 @@ def infer_into(self, input_uint8, outputs)
 
 Fill caller-owned float32 destinations (including shared memory).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L790)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L859)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.infer
 
@@ -506,9 +543,12 @@ Fill caller-owned float32 destinations (including shared memory).
 def infer(self, input_uint8) -> List[np.ndarray]
 ```
 
-One forward pass. Input is uint8 NHWC; outputs are float32.
+One forward pass; outputs are float32.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L814)
+Image graphs take uint8 NHWC. Other graphs take the declared dims in
+one of the dtypes listed in ``_CALLER_TYPES``.
+
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L893)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.inference
 
@@ -518,7 +558,7 @@ def inference(self, inputs) -> List[np.ndarray]
 
 RKNNLite-compatible sequence API used by sessions and the daemon.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L873)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L956)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.describe
 
@@ -528,7 +568,7 @@ def describe(self) -> dict
 
 返回模型输入输出张量属性及 runtime 能力描述，供诊断使用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L881)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L964)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.release
 
@@ -538,7 +578,7 @@ def release(self) -> None
 
 Destroy all IO and the context; failed native cleanup is retryable.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L925)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L1008)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.__enter__
 
@@ -548,7 +588,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L935)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L1018)
 
 ### kit.runtime.ctypes_rknn.CtypesRknnModel.__exit__
 
@@ -558,4 +598,4 @@ def __exit__(self, *exc)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/ctypes_rknn.py#L938)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/ctypes_rknn.py#L1021)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/voice_sm.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/voice_sm.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py)；签名由 AST 提取，不导入硬件依赖。
 
 唤醒、聆听与识别的语音应用状态机；由给定音源、VAD、wakeword 和 ASR 组成。main 是命令行辅助入口。
 
@@ -69,7 +69,7 @@ def __init__(self, audio_source, wakeword, vad, asr, *, on_event: Optional[Calla
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py#L43)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py#L43)
 
 ### kit.logic.voice_sm.VoiceStateMachine.open
 
@@ -83,7 +83,7 @@ Voice applications call this during their pre-READY transaction.  The
 main loop calls it again defensively, but the second call is a no-op so
 an ALSA/RTSP subprocess is never replaced or opened twice.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py#L64)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py#L64)
 
 ### kit.logic.voice_sm.VoiceStateMachine.close
 
@@ -93,7 +93,7 @@ def close(self) -> None
 
 Close the pre-opened source; repeated calls are harmless.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py#L90)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py#L90)
 
 ### kit.logic.voice_sm.VoiceStateMachine.run
 
@@ -107,7 +107,7 @@ Drive the machine over the audio source until it ends.
 (used by the injection test); 0 runs until the stream ends. Returns the
 number of transcripts emitted.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py#L116)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py#L116)
 
 ## kit.logic.voice_sm.main
 
@@ -117,4 +117,4 @@ def main(argv=None)
 
 本模块独立语音演示/诊断 CLI 入口；不是应用中心的 manifest entry 契约。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/voice_sm.py#L239)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/voice_sm.py#L239)

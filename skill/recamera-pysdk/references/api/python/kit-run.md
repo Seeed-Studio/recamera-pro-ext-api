@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/run.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/run.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/run.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/run.py)；签名由 AST 提取，不导入硬件依赖。
 
 AppMgr 的 Python 入口加载器与 CLI。用于 host smoke／启动契约检查，业务 App 继承 App，不直接重写启动器。
 
@@ -80,7 +80,7 @@ def resolve_entry(target: str) -> Tuple[str, str]
 For a directory we honour the manifest's `entry` field (same contract the
 supervisor uses), defaulting to `app.py`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/run.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/run.py#L68)
 
 ## kit.run.load_app_module
 
@@ -90,7 +90,7 @@ def load_app_module(entry_path: str)
 
 Import the app's entry file with its own directory on sys.path.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/run.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/run.py#L110)
 
 ## kit.run.find_app
 
@@ -106,7 +106,7 @@ Preference order:
   3. the single App subclass visible in it (covers a re-exported class).
 Several leaf candidates is an error, not a coin flip.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/run.py#L132)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/run.py#L132)
 
 ## kit.run.main
 
@@ -116,4 +116,4 @@ def main(argv: Optional[List[str]]=None) -> int
 
 解析应用启动参数并运行 Kit 入口；由 AppMgr/命令行调用，不在 App.run 内重复调用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/run.py#L172)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/run.py#L172)

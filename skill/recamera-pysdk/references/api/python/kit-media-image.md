@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/media/image.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/media/image.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py)；签名由 AST 提取，不导入硬件依赖。
 
 RgaContext/ImageOps：NV12 转 RGB、resize、letterbox、crop。输入可借用 DMA，当前公开输出是 owned CPU RGB，并非端到端零拷贝。
 
@@ -83,7 +83,7 @@ def width(self) -> int
 
 返回 x2-x1 的矩形宽度。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L62)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L62)
 
 ### kit.media.image.Rect.height
 
@@ -94,7 +94,7 @@ def height(self) -> int
 
 返回 y2-y1 的矩形高度。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L66)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L66)
 
 ### kit.media.image.Rect.as_tuple
 
@@ -104,7 +104,7 @@ def as_tuple(self) -> tuple[int, int, int, int]
 
 Return the tuple accepted by the native RGA shim.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L69)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L69)
 
 ## kit.media.image.TransformMapping
 
@@ -137,7 +137,7 @@ def to_source(self, x: float, y: float) -> tuple[float, float]
 
 Map one output-space point to source-camera pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L88)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L88)
 
 ### kit.media.image.TransformMapping.box_to_source
 
@@ -147,7 +147,7 @@ def box_to_source(self, box: Sequence[float]) -> tuple[float, float, float, floa
 
 Map an ``(x1,y1,x2,y2)`` output box to source-camera pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L98)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L98)
 
 ## kit.media.image.TransformResult
 
@@ -231,7 +231,7 @@ def __init__(self, backend: Optional[Any]=None) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L162)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L162)
 
 ### kit.media.image.RgaContext.convert_nv12
 
@@ -241,7 +241,7 @@ def convert_nv12(self, frame: DmaBufFrame) -> ImageBuffer
 
 Convert a borrowed NV12 dma-buf frame to owned RGB pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L359)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L359)
 
 ### kit.media.image.RgaContext.resize_nv12
 
@@ -251,7 +251,7 @@ def resize_nv12(self, frame: DmaBufFrame, size: Size | tuple[int, int]) -> Trans
 
 Resize a full NV12 frame to owned RGB, without preserving aspect.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L389)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L389)
 
 ### kit.media.image.RgaContext.letterbox_nv12
 
@@ -261,7 +261,7 @@ def letterbox_nv12(self, frame: DmaBufFrame, size: Size | tuple[int, int], *, pa
 
 Aspect-preserving NV12 resize into an owned padded RGB canvas.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L443)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L443)
 
 ### kit.media.image.RgaContext.crop_nv12
 
@@ -275,7 +275,7 @@ The current librga shim accepts a square destination.  A non-square
 target is rejected explicitly instead of stretching or silently using
 one dimension.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L490)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L490)
 
 ### kit.media.image.RgaContext.close
 
@@ -285,7 +285,7 @@ def close(self) -> None
 
 Invalidate the context.  Safe to call repeatedly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L588)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L588)
 
 ### kit.media.image.RgaContext.__enter__
 
@@ -295,7 +295,7 @@ def __enter__(self) -> 'RgaContext'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L594)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L594)
 
 ### kit.media.image.RgaContext.__exit__
 
@@ -305,4 +305,4 @@ def __exit__(self, *_exc) -> None
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/image.py#L603)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/image.py#L603)

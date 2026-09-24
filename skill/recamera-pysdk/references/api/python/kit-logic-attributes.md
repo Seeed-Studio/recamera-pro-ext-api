@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/attributes.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/attributes.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py)；签名由 AST 提取，不导入硬件依赖。
 
 人脸属性概率平滑、置信门控及跟踪/时间窗聚合；需对应模型类别与输出头顺序。
 
@@ -107,7 +107,7 @@ def clamp(self) -> 'AttributeConfig'
 
 原地限制配置字段到实现允许范围，并返回自身；字段单位及默认值见配置类。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L90)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L90)
 
 ### kit.logic.attributes.AttributeConfig.temp
 
@@ -117,7 +117,7 @@ def temp(self, head: str) -> float
 
 返回指定分类 head 的温度系数，未配置时为 1.0。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L102)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L102)
 
 ### kit.logic.attributes.AttributeConfig.floor
 
@@ -127,7 +127,7 @@ def floor(self, head: str) -> float
 
 返回指定 head 的最低置信度，未配置时为 0.0。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L105)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L105)
 
 ## kit.logic.attributes.passes_gate
 
@@ -141,7 +141,7 @@ Is this detection worth running an attribute classifier on?
 resolution test, so it must NOT be fed letterboxed or normalised
 coordinates. Called before the crop, so a rejected face costs nothing.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L109)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L109)
 
 ## kit.logic.attributes.TrackAttributes
 
@@ -159,7 +159,7 @@ def __init__(self, cfg: AttributeConfig) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L131)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L131)
 
 ### kit.logic.attributes.TrackAttributes.add
 
@@ -169,7 +169,7 @@ def add(self, head: str, probs: Sequence[float]) -> None
 
 Fold one frame's probability vector for `head` into the evidence.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L138)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L138)
 
 ### kit.logic.attributes.TrackAttributes.bump_frame
 
@@ -179,7 +179,7 @@ def bump_frame(self, t: float) -> None
 
 Count one gate-passing frame. Call once per frame, after `add()`s.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L149)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L149)
 
 ### kit.logic.attributes.TrackAttributes.stable
 
@@ -190,7 +190,7 @@ def stable(self) -> bool
 
 返回累计帧数是否达到 min_track_frames 的 bool。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L157)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L157)
 
 ### kit.logic.attributes.TrackAttributes.verdict
 
@@ -206,7 +206,7 @@ much of the evidence points here", which is what a caller thresholding
 it actually wants. Falls back to a label-less empty verdict when the
 head has no evidence yet.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L160)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L160)
 
 ## kit.logic.attributes.Aggregator
 
@@ -229,7 +229,7 @@ def __init__(self, cfg: Optional[AttributeConfig]=None, heads: Sequence[str]=())
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L194)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L194)
 
 ### kit.logic.attributes.Aggregator.track
 
@@ -239,7 +239,7 @@ def track(self, track_id: int) -> TrackAttributes
 
 取得或创建该 track_id 的 TrackAttributes 状态；ID 只在当前跟踪实例内有意义。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L202)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L202)
 
 ### kit.logic.attributes.Aggregator.sweep
 
@@ -249,7 +249,7 @@ def sweep(self, removed_ids: Sequence[int]) -> None
 
 Forget retired tracks (ids the tracker dropped this frame).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L209)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L209)
 
 ### kit.logic.attributes.Aggregator.reset_window
 
@@ -259,7 +259,7 @@ def reset_window(self, t: float) -> None
 
 重置当前聚合时间窗的计数，不是重新加载模型，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L215)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L215)
 
 ### kit.logic.attributes.Aggregator.note_face_frame
 
@@ -269,7 +269,7 @@ def note_face_frame(self) -> None
 
 记录本帧包含的人脸信息用于时间窗统计，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L221)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L221)
 
 ### kit.logic.attributes.Aggregator.maybe_count
 
@@ -284,7 +284,7 @@ at the moment the evidence FIRST becomes stable, not at track exit, so a
 person who lingers is reported in the window they arrived in rather than
 being withheld until they leave.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L224)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L224)
 
 ### kit.logic.attributes.Aggregator.elapsed
 
@@ -294,7 +294,7 @@ def elapsed(self, t: float) -> float
 
 返回当前统计窗已经经历的秒数。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L245)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L245)
 
 ### kit.logic.attributes.Aggregator.snapshot
 
@@ -304,4 +304,4 @@ def snapshot(self, t: float) -> dict
 
 The demographics event body for the window ending at `t`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/attributes.py#L248)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/attributes.py#L248)

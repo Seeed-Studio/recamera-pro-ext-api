@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/pipeline.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/pipeline.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py)；签名由 AST 提取，不导入硬件依赖。
 
 检测→ROI→第二模型的级联工具；不是 kit.workflow.Pipeline。返回精确 ROI 映射，CPU 路径需 NumPy/PIL 或 OpenCV。
 
@@ -71,7 +71,7 @@ Returns a `SquareGeometry` tuple -- see the constant above for the fields.
 The `roi_map` is `(ix1, iy1, iside/out_size, iside/out_size)`: the full
 integer square's top-left and its (isotropic) frame-px-per-output-px scale.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L57)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L57)
 
 ## kit.pipeline.crop_square_roi
 
@@ -88,7 +88,7 @@ Returns (roi_uint8 [out_size,out_size,3], roi_map for coordinate mapping).
 The square geometry is delegated to `square_roi_geometry` so the numpy crop
 and the hardware dma-buf crop share one contract.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L115)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L115)
 
 ## kit.pipeline.perspective_crop
 
@@ -106,7 +106,7 @@ result to `fit_rec_input` before the rec model.
 cv2 (getPerspectiveTransform/warpPerspective) is used; it is present on the
 device system python (opencv 4.6.0) so no extra dependency is bundled.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L160)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L160)
 
 ## kit.pipeline.fit_rec_input
 
@@ -120,7 +120,7 @@ Scale to height `out_h` keeping aspect ratio, clamp width to `out_w`, then
 right-pad with gray (`pad_value`, maps to ~0 after the baked [-1,1] norm).
 Returns HWC uint8 RGB [out_h, out_w, 3]. Port of TextRecognizer::preprocess.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L223)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L223)
 
 ## kit.pipeline.CascadePipeline
 
@@ -148,7 +148,7 @@ The new app shape (KIT_APP_SHAPE_SPEC §2) preloads every manifest
 `model=self.models.<id>` and this class never loads (nor releases) a
 second copy of the same rknn. Exactly one of the two must be given.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L260)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L260)
 
 ### kit.pipeline.CascadePipeline.process
 
@@ -161,7 +161,7 @@ Run stage-2 on the top-`max_targets` detections.
 Returns a list of {"box","score","decoded","roi_map"} dicts, one per
 processed detection (detections are assumed already score-sorted).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L288)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L288)
 
 ### kit.pipeline.CascadePipeline.release
 
@@ -175,4 +175,4 @@ A pipeline built with `model=<App.models handle>` does NOT own the
 model; `App.finish()` releases it once, and releasing here too would be
 a double free.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/pipeline.py#L309)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/pipeline.py#L309)

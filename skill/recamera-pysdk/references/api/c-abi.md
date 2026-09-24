@@ -5,7 +5,7 @@
 本文件保留该版本完整公开头文件及原始参数、错误码、字段、生命周期说明。
 Python 应用优先使用绑定；`osd`/`record` 入口仅限 AppMgr，不能以导出符号的存在推断应用调用权限。
 
-源码基线：`7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6`，`sdk/include/recamera_ext.h`。
+源码基线：`635ffc3c51d596dd2e8139f297798162e6be62b9`，`sdk/include/recamera_ext.h`。
 
 原始授权声明：[SDK NOTICE 与 BSD-3-Clause 许可证](sdk-license.txt)。
 

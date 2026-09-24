@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/errors.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/errors.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py)；签名由 AST 提取，不导入硬件依赖。
 
 Kit 结构化异常：operation、code、details 与 cause。与 recamera_ext 的 native 错误体系分别处理。
 
@@ -79,7 +79,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.KitError.operation
 
@@ -90,7 +90,7 @@ def operation(self) -> str
 
 Stable operation name associated with the failure.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.KitError.code
 
@@ -101,7 +101,7 @@ def code(self) -> str
 
 Stable error code suitable for application branching.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.KitError.retryable
 
@@ -112,7 +112,7 @@ def retryable(self) -> bool
 
 Whether a later retry may succeed without changing the request.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.KitError.details
 
@@ -123,7 +123,7 @@ def details(self) -> Mapping[str, Any]
 
 Read-only, non-secret backend details.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.KitError.as_dict
 
@@ -133,7 +133,7 @@ def as_dict(self) -> dict[str, Any]
 
 Return a JSON-compatible representation for status endpoints.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.ConfigurationError
 
@@ -161,7 +161,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.ConfigurationError.operation
 
@@ -174,7 +174,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.ConfigurationError.code
 
@@ -187,7 +187,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.ConfigurationError.retryable
 
@@ -200,7 +200,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.ConfigurationError.details
 
@@ -213,7 +213,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.ConfigurationError.as_dict
 
@@ -225,7 +225,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.AdapterError
 
@@ -253,7 +253,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.AdapterError.operation
 
@@ -266,7 +266,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.AdapterError.code
 
@@ -279,7 +279,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.AdapterError.retryable
 
@@ -292,7 +292,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.AdapterError.details
 
@@ -305,7 +305,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.AdapterError.as_dict
 
@@ -317,7 +317,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.ImageOperationError
 
@@ -345,7 +345,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.ImageOperationError.operation
 
@@ -358,7 +358,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.ImageOperationError.code
 
@@ -371,7 +371,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.ImageOperationError.retryable
 
@@ -384,7 +384,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.ImageOperationError.details
 
@@ -397,7 +397,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.ImageOperationError.as_dict
 
@@ -409,7 +409,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.TransportError
 
@@ -437,7 +437,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.TransportError.operation
 
@@ -450,7 +450,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.TransportError.code
 
@@ -463,7 +463,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.TransportError.retryable
 
@@ -476,7 +476,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.TransportError.details
 
@@ -489,7 +489,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.TransportError.as_dict
 
@@ -501,7 +501,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.DeviceControlError
 
@@ -529,7 +529,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.DeviceControlError.operation
 
@@ -542,7 +542,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.DeviceControlError.code
 
@@ -555,7 +555,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.DeviceControlError.retryable
 
@@ -568,7 +568,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.DeviceControlError.details
 
@@ -581,7 +581,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.DeviceControlError.as_dict
 
@@ -593,7 +593,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.CapabilityError
 
@@ -621,7 +621,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.CapabilityError.operation
 
@@ -634,7 +634,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.CapabilityError.code
 
@@ -647,7 +647,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.CapabilityError.retryable
 
@@ -660,7 +660,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.CapabilityError.details
 
@@ -673,7 +673,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.CapabilityError.as_dict
 
@@ -685,7 +685,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.ResourceBusyError
 
@@ -713,7 +713,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.ResourceBusyError.operation
 
@@ -726,7 +726,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.ResourceBusyError.code
 
@@ -739,7 +739,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.ResourceBusyError.retryable
 
@@ -752,7 +752,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.ResourceBusyError.details
 
@@ -765,7 +765,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.ResourceBusyError.as_dict
 
@@ -777,7 +777,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.ResourceTimeoutError
 
@@ -805,7 +805,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.ResourceTimeoutError.operation
 
@@ -818,7 +818,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.ResourceTimeoutError.code
 
@@ -831,7 +831,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.ResourceTimeoutError.retryable
 
@@ -844,7 +844,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.ResourceTimeoutError.details
 
@@ -857,7 +857,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.ResourceTimeoutError.as_dict
 
@@ -869,7 +869,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.InferenceError
 
@@ -897,7 +897,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.InferenceError.operation
 
@@ -910,7 +910,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.InferenceError.code
 
@@ -923,7 +923,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.InferenceError.retryable
 
@@ -936,7 +936,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.InferenceError.details
 
@@ -949,7 +949,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.InferenceError.as_dict
 
@@ -961,7 +961,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.ModelLoadError
 
@@ -989,7 +989,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.ModelLoadError.operation
 
@@ -1002,7 +1002,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.ModelLoadError.code
 
@@ -1015,7 +1015,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.ModelLoadError.retryable
 
@@ -1028,7 +1028,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.ModelLoadError.details
 
@@ -1041,7 +1041,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.ModelLoadError.as_dict
 
@@ -1053,7 +1053,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.InputValidationError
 
@@ -1081,7 +1081,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.InputValidationError.operation
 
@@ -1094,7 +1094,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.InputValidationError.code
 
@@ -1107,7 +1107,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.InputValidationError.retryable
 
@@ -1120,7 +1120,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.InputValidationError.details
 
@@ -1133,7 +1133,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.InputValidationError.as_dict
 
@@ -1145,7 +1145,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.BufferReleasedError
 
@@ -1173,7 +1173,7 @@ def __init__(self, message: str, *, operation: str='unknown', code: Optional[str
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L121)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L121)
 
 ### kit.errors.BufferReleasedError.operation
 
@@ -1186,7 +1186,7 @@ Stable operation name associated with the failure.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L140)
 
 ### kit.errors.BufferReleasedError.code
 
@@ -1199,7 +1199,7 @@ Stable error code suitable for application branching.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L146)
 
 ### kit.errors.BufferReleasedError.retryable
 
@@ -1212,7 +1212,7 @@ Whether a later retry may succeed without changing the request.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L152)
 
 ### kit.errors.BufferReleasedError.details
 
@@ -1225,7 +1225,7 @@ Read-only, non-secret backend details.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L158)
 
 ### kit.errors.BufferReleasedError.as_dict
 
@@ -1237,7 +1237,7 @@ Return a JSON-compatible representation for status endpoints.
 
 此方法定义于基类 `KitError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L163)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L163)
 
 ## kit.errors.wrap_error
 
@@ -1251,4 +1251,4 @@ Use it as ``raise wrap_error(...) from exc``.  Keeping ``__cause__`` gives
 detailed tracebacks to developers without exposing backend-specific types
 as part of the public API.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/errors.py#L248)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/errors.py#L248)

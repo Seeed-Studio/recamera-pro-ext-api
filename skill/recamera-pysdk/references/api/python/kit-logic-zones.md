@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/zones.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/zones.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py)；签名由 AST 提取，不导入硬件依赖。
 
 区域占用、越线、停留与滚动统计；区域坐标归一化，停留速度阈值按名义 640 像素坐标计算。
 
@@ -65,7 +65,7 @@ def __init__(self, polygon: Optional[Sequence[Sequence[float]]]=None) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L44)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L44)
 
 ### kit.logic.zones.ZoneCounter.set_polygon
 
@@ -75,7 +75,7 @@ def set_polygon(self, polygon: Optional[Sequence[Sequence[float]]]) -> None
 
 设置归一化多边形；空值或不足三点代表不限制区域，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L48)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L48)
 
 ### kit.logic.zones.ZoneCounter.enabled
 
@@ -86,7 +86,7 @@ def enabled(self) -> bool
 
 区域是否包含至少三个顶点。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L55)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L55)
 
 ### kit.logic.zones.ZoneCounter.contains
 
@@ -96,7 +96,7 @@ def contains(self, foot: Tuple[float, float]) -> bool
 
 判断归一化 foot 点是否在区域内；区域未启用时返回 True。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L58)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L58)
 
 ### kit.logic.zones.ZoneCounter.inside
 
@@ -106,7 +106,7 @@ def inside(self, tracks: Sequence) -> List
 
 返回 foot 点落在区域内的 Track 列表。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L63)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L63)
 
 ### kit.logic.zones.ZoneCounter.count
 
@@ -116,7 +116,7 @@ def count(self, tracks: Sequence) -> int
 
 返回区域内 Track 数量。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L66)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L66)
 
 ## kit.logic.zones.LineCounter
 
@@ -140,7 +140,7 @@ def __init__(self, a: Optional[Sequence[float]]=None, b: Optional[Sequence[float
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L82)
 
 ### kit.logic.zones.LineCounter.set_line
 
@@ -150,7 +150,7 @@ def set_line(self, a: Sequence[float], b: Sequence[float], ab_in: bool=True) -> 
 
 设置归一化有向线段 a→b 与 ab_in 入方向，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L92)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L92)
 
 ### kit.logic.zones.LineCounter.enabled
 
@@ -161,7 +161,7 @@ def enabled(self) -> bool
 
 是否已经同时设置线段两个端点。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L99)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L99)
 
 ### kit.logic.zones.LineCounter.update
 
@@ -172,7 +172,7 @@ def update(self, tracks: Sequence) -> List[dict]
 Test every track for a crossing this frame. Returns a list of
 {"track_id","dir"} events ("in"/"out") and updates the counters.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L102)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L102)
 
 ## kit.logic.zones.DwellConfig
 
@@ -215,7 +215,7 @@ def __init__(self, config: Optional[DwellConfig]=None) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L155)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L155)
 
 ### kit.logic.zones.Dwell.update
 
@@ -225,7 +225,7 @@ def update(self, track, t: float) -> str
 
 Advance one track's dwell state; returns its current state string.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L167)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L167)
 
 ### kit.logic.zones.Dwell.duration
 
@@ -235,7 +235,7 @@ def duration(self, track_id: int) -> float
 
 返回指定 track 的累计停留秒数。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L196)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L196)
 
 ### kit.logic.zones.Dwell.prune
 
@@ -245,7 +245,7 @@ def prune(self, live_ids: Sequence[int]) -> None
 
 Forget state for tracks that no longer exist (call each frame).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L200)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L200)
 
 ## kit.logic.zones.StateCount
 
@@ -318,7 +318,7 @@ def __init__(self, window_sec: float=60.0) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L238)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L238)
 
 ### kit.logic.zones.RollingWindow.update
 
@@ -328,7 +328,7 @@ def update(self, counts: StateCount, entry_count: int, exit_count: int, t: float
 
 输入 StateCount、累计进入/离开人数及秒级时间 t，更新五点中值平滑和滑动窗口；最多每秒采样一次，并清除过期样本。原地更新状态，返回 None；使用 snapshot() 读取结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L253)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L253)
 
 ### kit.logic.zones.RollingWindow.snapshot
 
@@ -338,4 +338,4 @@ def snapshot(self) -> WindowSnapshot
 
 取得指定时刻的 WindowSnapshot；不会触发模型或网络发送。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/zones.py#L266)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/zones.py#L266)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/asr.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/asr.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py)；签名由 AST 提取，不导入硬件依赖。
 
 语音识别统一接口，结果含文本与时间信息；实际 backend、模型、音源需要匹配目标环境。
 
@@ -101,7 +101,7 @@ def __iter__(self)
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L71)
 
 ## kit.asr.Asr
 
@@ -132,7 +132,7 @@ def __init__(self, model: str=DEFAULT_MODEL, tokens: str=DEFAULT_TOKENS, *, back
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L172)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L172)
 
 ### kit.asr.Asr.close
 
@@ -148,7 +148,7 @@ they remain source compatible.  A cleanup error leaves ``_closed``
 false, allowing a retry while the RK backend retains its lease
 fail-closed.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L222)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L222)
 
 ### kit.asr.Asr.__enter__
 
@@ -158,7 +158,7 @@ def __enter__(self) -> 'Asr'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L244)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L244)
 
 ### kit.asr.Asr.__exit__
 
@@ -168,7 +168,7 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L249)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L249)
 
 ### kit.asr.Asr.backend
 
@@ -179,7 +179,7 @@ def backend(self)
 
 The underlying voxedge `ASRBackend` (for capability introspection).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L258)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L258)
 
 ### kit.asr.Asr.transcribe
 
@@ -194,7 +194,7 @@ Transcribe one utterance of 16k mono PCM through the voxedge backend.
 which also unpacks as `(text, info_dict)`. We keep our own timing
 (elapsed / audio_sec / rtf); voxedge supplies text + language.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L279)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L279)
 
 ### kit.asr.Asr.transcribe_wav
 
@@ -204,4 +204,4 @@ def transcribe_wav(self, path: str) -> AsrResult
 
 Convenience: read a 16k(-ish) WAV file and transcribe it.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr.py#L307)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr.py#L307)

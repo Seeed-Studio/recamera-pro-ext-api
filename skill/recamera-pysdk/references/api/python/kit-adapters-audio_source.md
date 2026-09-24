@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/audio_source.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/audio_source.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py)；签名由 AST 提取，不导入硬件依赖。
 
 PCM 音源与音频帧。默认共享 ai_asr；显式 takeover 会涉及设备音频所有权，不适合作为普通应用默认行为。
 
@@ -120,7 +120,7 @@ def n_samples(self) -> int
 
 返回每声道样本数：len(pcm)/(2*ch)，PCM 为 signed 16-bit little-endian。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L99)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L99)
 
 ## kit.adapters.audio_source.AudioSource
 
@@ -147,7 +147,7 @@ def read(self) -> Optional[PcmFrame]
 
 Return the next PCM chunk, or None at end-of-stream.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L116)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L116)
 
 ### kit.adapters.audio_source.AudioSource.open
 
@@ -157,7 +157,7 @@ def open(self) -> 'AudioSource'
 
 打开所选后端并准备读取；设备忙、依赖缺失或连接失败时可能抛异常。之后按该音源的 read 契约读取，并配对 close。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L120)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L120)
 
 ### kit.adapters.audio_source.AudioSource.close
 
@@ -167,7 +167,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L123)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L123)
 
 ### kit.adapters.audio_source.AudioSource.__enter__
 
@@ -177,7 +177,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L126)
 
 ### kit.adapters.audio_source.AudioSource.__exit__
 
@@ -187,7 +187,7 @@ def __exit__(self, *exc)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L129)
 
 ## kit.adapters.audio_source.AudioDeviceBusy
 
@@ -211,7 +211,7 @@ Returns mean, peak, RMS and a crude dBFS. Silence -> rms ~ 0; a real mic in
 a quiet room -> rms typically > ~30 (‑60 dBFS). Used by the on-device
 verification and by callers wanting a sanity gate before ASR.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L209)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L209)
 
 ## kit.adapters.audio_source.AlsaTakeoverSource
 
@@ -244,7 +244,7 @@ def read(self) -> Optional[PcmFrame]
 
 读取一块独占 ALSA 输入并按配置重采样/混合声道，返回 PcmFrame；无有效数据时返回 None。该后端可能停用原有音频服务，不作为普通共享音频应用默认选择。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L345)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L345)
 
 ### kit.adapters.audio_source.AlsaTakeoverSource.open
 
@@ -254,7 +254,7 @@ def open(self) -> 'AlsaTakeoverSource'
 
 打开所选后端并准备读取；设备忙、依赖缺失或连接失败时可能抛异常。之后按该音源的 read 契约读取，并配对 close。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L295)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L295)
 
 ### kit.adapters.audio_source.AlsaTakeoverSource.close
 
@@ -264,7 +264,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L366)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L366)
 
 ### kit.adapters.audio_source.AlsaTakeoverSource.__enter__
 
@@ -276,7 +276,7 @@ def __enter__(self)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L126)
 
 ### kit.adapters.audio_source.AlsaTakeoverSource.__exit__
 
@@ -288,7 +288,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L129)
 
 ### kit.adapters.audio_source.AlsaTakeoverSource.__init__
 
@@ -298,7 +298,7 @@ def __init__(self, device: str='hw:0,0', *, target_rate: int=16000, target_ch: i
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L247)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L247)
 
 ## kit.adapters.audio_source.RtspAudioSource
 
@@ -329,7 +329,7 @@ def read(self) -> Optional[PcmFrame]
 
 从 FFmpeg 解码 stdout 读取一块目标采样率的 PCM，返回 PcmFrame；流结束返回 None。可能阻塞等待数据。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L478)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L478)
 
 ### kit.adapters.audio_source.RtspAudioSource.open
 
@@ -339,7 +339,7 @@ def open(self) -> 'RtspAudioSource'
 
 打开所选后端并准备读取；设备忙、依赖缺失或连接失败时可能抛异常。之后按该音源的 read 契约读取，并配对 close。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L441)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L441)
 
 ### kit.adapters.audio_source.RtspAudioSource.close
 
@@ -349,7 +349,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L488)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L488)
 
 ### kit.adapters.audio_source.RtspAudioSource.__enter__
 
@@ -361,7 +361,7 @@ def __enter__(self)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L126)
 
 ### kit.adapters.audio_source.RtspAudioSource.__exit__
 
@@ -373,7 +373,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L129)
 
 ### kit.adapters.audio_source.RtspAudioSource.__init__
 
@@ -383,7 +383,7 @@ def __init__(self, url: str='rtsp://admin:admin@127.0.0.1:5554/live/1', *, targe
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L403)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L403)
 
 ## kit.adapters.audio_source.AiAsrAudioSource
 
@@ -480,7 +480,7 @@ def read(self) -> Optional[PcmFrame]
 
 从固件共享 ai_asr ALSA 源读取一块 PCM，返回 PcmFrame；读取结束返回 None。需可访问的音频设备和 arecord。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L730)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L730)
 
 ### kit.adapters.audio_source.AiAsrAudioSource.open
 
@@ -490,7 +490,7 @@ def open(self) -> 'AiAsrAudioSource'
 
 打开所选后端并准备读取；设备忙、依赖缺失或连接失败时可能抛异常。之后按该音源的 read 契约读取，并配对 close。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L659)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L659)
 
 ### kit.adapters.audio_source.AiAsrAudioSource.close
 
@@ -500,7 +500,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L740)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L740)
 
 ### kit.adapters.audio_source.AiAsrAudioSource.__enter__
 
@@ -512,7 +512,7 @@ def __enter__(self)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L126)
 
 ### kit.adapters.audio_source.AiAsrAudioSource.__exit__
 
@@ -524,7 +524,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L129)
 
 ### kit.adapters.audio_source.AiAsrAudioSource.__init__
 
@@ -534,7 +534,7 @@ def __init__(self, device: str='ai_asr', *, target_rate: int=16000, target_ch: i
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L585)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L585)
 
 ## kit.adapters.audio_source.WavFileAudioSource
 
@@ -563,7 +563,7 @@ def read(self) -> Optional[PcmFrame]
 
 读取/转换下一块 WAV 样本，返回 PcmFrame；文件结束且不循环时返回 None，适合可控输入测试。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L808)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L808)
 
 ### kit.adapters.audio_source.WavFileAudioSource.open
 
@@ -573,7 +573,7 @@ def open(self) -> 'WavFileAudioSource'
 
 打开所选后端并准备读取；设备忙、依赖缺失或连接失败时可能抛异常。之后按该音源的 read 契约读取，并配对 close。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L793)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L793)
 
 ### kit.adapters.audio_source.WavFileAudioSource.close
 
@@ -583,7 +583,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L818)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L818)
 
 ### kit.adapters.audio_source.WavFileAudioSource.__enter__
 
@@ -595,7 +595,7 @@ def __enter__(self)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L126)
 
 ### kit.adapters.audio_source.WavFileAudioSource.__exit__
 
@@ -607,7 +607,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `AudioSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L129)
 
 ### kit.adapters.audio_source.WavFileAudioSource.__init__
 
@@ -617,7 +617,7 @@ def __init__(self, path: str, *, target_rate: int=16000, target_ch: int=1, chunk
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L773)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L773)
 
 ## kit.adapters.audio_source.open_audio_source
 
@@ -631,4 +631,4 @@ Factory. Delegates to the capability registry, which returns
 so the ALSA workaround is selected (and will raise `AudioDeviceBusy` on
 shipping firmware -- see module verdict).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/audio_source.py#L823)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/audio_source.py#L823)

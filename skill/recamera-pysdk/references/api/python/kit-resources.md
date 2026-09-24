@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/resources.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/resources.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py)；签名由 AST 提取，不导入硬件依赖。
 
 资源种类、lease 协议与 legacy exclusive NPU broker 租约；scheduled App 不应自行取得 exclusive lease。
 
@@ -84,7 +84,7 @@ def acquire(self, timeout: Optional[float]=None) -> 'ResourceLease'
 
 Acquire ownership or raise a typed resource error.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L60)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L60)
 
 ### kit.resources.ResourceLease.release
 
@@ -94,7 +94,7 @@ def release(self) -> None
 
 Release ownership; the operation must be idempotent.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L63)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L63)
 
 ## kit.resources.ExternalNpuLease
 
@@ -124,7 +124,7 @@ def __init__(self, path: Optional[str]=None, *, app_id: Optional[str]=None, inst
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L249)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L249)
 
 ### kit.resources.ExternalNpuLease.acquired
 
@@ -135,7 +135,7 @@ def acquired(self) -> bool
 
 Whether this lease instance currently holds a local reference.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L309)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L309)
 
 ### kit.resources.ExternalNpuLease.acquire
 
@@ -145,7 +145,7 @@ def acquire(self, timeout: Optional[float]=None) -> 'ExternalNpuLease'
 
 Acquire NPU ownership or raise a typed resource/capability error.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L348)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L348)
 
 ### kit.resources.ExternalNpuLease.ready
 
@@ -155,7 +155,7 @@ def ready(self) -> None
 
 Mark runtime initialization complete; a no-op for legacy locks.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L545)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L545)
 
 ### kit.resources.ExternalNpuLease.alive
 
@@ -165,7 +165,7 @@ def alive(self) -> bool
 
 Check that the ownership fence is still live before inference.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L579)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L579)
 
 ### kit.resources.ExternalNpuLease.release
 
@@ -175,7 +175,7 @@ def release(self) -> None
 
 Release this instance's reference; safe to call repeatedly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L593)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L593)
 
 ### kit.resources.ExternalNpuLease.__enter__
 
@@ -185,7 +185,7 @@ def __enter__(self) -> 'ExternalNpuLease'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L670)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L670)
 
 ### kit.resources.ExternalNpuLease.__exit__
 
@@ -195,4 +195,4 @@ def __exit__(self, exc_type, exc, traceback) -> None
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/resources.py#L673)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/resources.py#L673)

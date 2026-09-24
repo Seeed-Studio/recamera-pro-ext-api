@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[sdk/python/recamera_ext/buffer.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[sdk/python/recamera_ext/buffer.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py)；签名由 AST 提取，不导入硬件依赖。
 
 Native BorrowedBuffer 与平面布局：源 lease 控制有效期，释放后访问报错，跨迭代持有必须 copy。
 
@@ -71,7 +71,7 @@ def __init__(self, owner, *, size: int, width: int, height: int, fourcc: int, pl
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L63)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L63)
 
 ### recamera_ext.buffer.BorrowedBuffer.size
 
@@ -82,7 +82,7 @@ def size(self) -> int
 
 Total mapped byte length reported by the native producer.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L81)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L81)
 
 ### recamera_ext.buffer.BorrowedBuffer.width
 
@@ -93,7 +93,7 @@ def width(self) -> int
 
 Valid image width; plane stride may be larger.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L87)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L87)
 
 ### recamera_ext.buffer.BorrowedBuffer.height
 
@@ -104,7 +104,7 @@ def height(self) -> int
 
 Valid image height; plane vstride may be larger.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L93)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L93)
 
 ### recamera_ext.buffer.BorrowedBuffer.fourcc
 
@@ -115,7 +115,7 @@ def fourcc(self) -> int
 
 Producer-supplied V4L2 fourcc value.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L99)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L99)
 
 ### recamera_ext.buffer.BorrowedBuffer.planes
 
@@ -126,7 +126,7 @@ def planes(self)
 
 Immutable tuple of producer-supplied :class:`PlaneLayout` values.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L105)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L105)
 
 ### recamera_ext.buffer.BorrowedBuffer.released
 
@@ -137,7 +137,7 @@ def released(self) -> bool
 
 Whether the owning frame lease has already been released.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L122)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L122)
 
 ### recamera_ext.buffer.BorrowedBuffer.fd
 
@@ -152,7 +152,7 @@ The fd must not be closed by Python code and must not be cached for use
 after the lease.  Use it synchronously with RGA/GStreamer while the frame
 is alive.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L129)
 
 ### recamera_ext.buffer.BorrowedBuffer.map
 
@@ -162,7 +162,7 @@ def map(self)
 
 Return a zero-copy 1-D ``uint8`` view of the complete buffer.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L139)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L139)
 
 ### recamera_ext.buffer.BorrowedBuffer.plane_array
 
@@ -176,7 +176,7 @@ Plane dimensions come exclusively from the server-provided descriptor;
 they are never inferred from image width/height.  The complete described
 byte range is validated before constructing the strided view.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L144)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L144)
 
 ### recamera_ext.buffer.BorrowedBuffer.copy
 
@@ -186,7 +186,7 @@ def copy(self)
 
 Copy the entire mapped buffer into independently owned memory.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L181)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L181)
 
 ### recamera_ext.buffer.BorrowedBuffer.release
 
@@ -196,7 +196,7 @@ def release(self) -> bool
 
 Release the owning frame; returns ``True`` only on the first release.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L186)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L186)
 
 ### recamera_ext.buffer.BorrowedBuffer.__enter__
 
@@ -206,7 +206,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L192)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L192)
 
 ### recamera_ext.buffer.BorrowedBuffer.__exit__
 
@@ -216,4 +216,4 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/buffer.py#L196)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/buffer.py#L196)

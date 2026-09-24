@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/app.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/app.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py)；签名由 AST 提取，不导入硬件依赖。
 
 应用中心推荐入口：App 子类 owns_loop=True、run(self)，经 AppMgr 生命周期运行。包含模型注册、前处理、emit、显式录像和配置热更新。
 
@@ -78,7 +78,7 @@ def __iter__(self)
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L90)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L90)
 
 ## kit.app.ModelRegistry
 
@@ -101,7 +101,7 @@ def __init__(self) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L197)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L197)
 
 ### kit.app.ModelRegistry.__getitem__
 
@@ -111,7 +111,7 @@ def __getitem__(self, key)
 
 通过整数下标选择声明顺序中的模型，或通过字符串选择 manifest id/唯一别名；越界或未知、歧义别名分别抛 IndexError/AttributeError。属性形式 self.models.<id> 使用同样的别名规则。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L237)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L237)
 
 ### kit.app.ModelRegistry.__len__
 
@@ -121,7 +121,7 @@ def __len__(self) -> int
 
 返回当前注册模型数（manifest 声明顺序），不代表已初始化或可并行推理的数量。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L242)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L242)
 
 ### kit.app.ModelRegistry.__iter__
 
@@ -131,7 +131,7 @@ def __iter__(self)
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L245)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L245)
 
 ## kit.app.resolve_class_names
 
@@ -153,7 +153,7 @@ Returns ``None`` when there is nothing to resolve (``spec`` absent) or when
 resolution FAILS -- failures are logged and the caller keeps its previous
 value, so a typo in a manifest can never stop an app from starting.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L378)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L378)
 
 ## kit.app.effective_render
 
@@ -168,7 +168,7 @@ entirely and the front end keeps its shape-driven fallback (§3, backward
 compatible). A None-valued config item is ignored, same rule as everywhere
 else in the kit: a cleared field must not wipe a declared default.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L519)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L519)
 
 ## kit.app.App
 
@@ -203,7 +203,7 @@ def __init__(self) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L621)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L621)
 
 ### kit.app.App.setup
 
@@ -213,7 +213,7 @@ def setup(self, config: Dict[str, Any]) -> None
 
 Read config_schema parameters. Override + call super().setup(config).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L666)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L666)
 
 ### kit.app.App.prepare_runtime
 
@@ -229,7 +229,7 @@ override this later hook instead.  It is still part of ``start()``'s
 rollback transaction: if it raises, :meth:`finish` runs and appmgr never
 observes a false-ready process.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L672)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L672)
 
 ### kit.app.App.on_config_reload
 
@@ -253,7 +253,7 @@ helpers above. Anything structural (model swap, input_size, backend,
 buffer resize) must NOT be hot-reloaded -- those params are
 apply:"restart" in the manifest and never reach here.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L707)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L707)
 
 ### kit.app.App.on_params_changed
 
@@ -267,7 +267,7 @@ Called after SIGHUP re-bound the apply:"live" params onto `self`.
 when a derived object must be rebuilt (state machine, cached geometry).
 Plain scalar knobs need nothing -- they are already re-bound.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L846)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L846)
 
 ### kit.app.App.start
 
@@ -287,7 +287,7 @@ before the original exception is re-raised.  This includes BaseException
 control flow so SIGTERM/KeyboardInterrupt cannot strand an earlier model
 or source acquired by this same attempt.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L910)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L910)
 
 ### kit.app.App.verbose
 
@@ -301,7 +301,7 @@ The `--quiet`-derived verbosity `start()` was given (True by default).
 Available to any loop-owning `run()`; the removed callback loop took it as an
 argument instead.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1126)
 
 ### kit.app.App.source_url
 
@@ -316,7 +316,7 @@ Frame-driven apps never need it (kit already opened the source with it);
 an app that owns its own input (voice-transcribe's RTSP audio-track
 demux) reads the same CLI knob from here instead of re-parsing argv.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1136)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1136)
 
 ### kit.app.App.finish
 
@@ -331,7 +331,7 @@ the normal shape of a second-model or setup failure.  Runtime state is
 detached before invoking user/vendor cleanup so repeated calls remain
 idempotent even if one cleanup callback raises.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1146)
 
 ### kit.app.App.frames
 
@@ -359,7 +359,7 @@ What it does for you (spec §2, and §8's "say what it hides"):
     emit are measured by kit, the remainder is `app`);
   * stops after `--n` processed frames.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1218)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1218)
 
 ### kit.app.App.pre
 
@@ -374,7 +374,7 @@ Prefers what the frame source already did on RGA -- `frame.model_data`
 only falls back to the Python letterbox. Geometry is identical in every
 case; `.info` always maps back to ORIGINAL camera pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1386)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1386)
 
 ### kit.app.App.crop_roi_hw
 
@@ -404,7 +404,7 @@ the out-of-frame border fill (RGA gray 114 vs numpy edge-replicate), the
 same family of differences documented for "hw" in
 docs/guide/hw-preprocess.md. Perf gain is device-measured; see that doc.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1411)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1411)
 
 ### kit.app.App.request_recording
 
@@ -419,7 +419,7 @@ installed manifest must authorize ``event_kind``. True means queued
 locally, not that Vigil accepted or completed a recording. This never
 publishes a display event and ordinary ``emit`` never requests recording.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1480)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1480)
 
 ### kit.app.App.emit
 
@@ -439,7 +439,7 @@ manifest. `ts` defaults to the current frame's pts.
 
 During the warm-up frame this is a no-op (same as pre-migration).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1502)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1502)
 
 ### kit.app.App.tick
 
@@ -452,7 +452,7 @@ Apply a pending SIGHUP config hot-reload.
 `frames()` already ticks at every frame boundary; only an app that takes
 over the loop entirely (audio chunks, multi-stream) needs to call this.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1568)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1568)
 
 ### kit.app.App.run
 
@@ -469,7 +469,7 @@ the pre-migration callback loop (`run(model_path, ...)` driving
 `run_postproc`/`process_frame`/`on_results`) was removed once all apps
 migrated -- see `kit/tests/legacy_loop.py` for the frozen reference.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1577)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1577)
 
 ## kit.app.run_app
 
@@ -481,4 +481,4 @@ Generic CLI entry an app's app.py calls from __main__.
 
 Wires argparse -> config -> sink -> app.run(). Keeps app.py thin.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/app.py#L1612)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/app.py#L1612)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/asr_rknn_backend.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/asr_rknn_backend.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py)；签名由 AST 提取，不导入硬件依赖。
 
 RKNN SenseVoice ASR 后端装配；需 tokenizer、模型工件和声明的 NPU 资源，不自动提供语音模型。
 
@@ -128,7 +128,7 @@ def __init__(self, rknn_model: str, cmvn_path: str, embedding_path: str, bpe_pat
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L184)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L184)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.name
 
@@ -139,7 +139,7 @@ def name(self) -> str
 
 返回后端名称标识，供能力与诊断报告使用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L254)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L254)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.capabilities
 
@@ -150,7 +150,7 @@ def capabilities(self) -> set
 
 返回后端声明的能力集合；不能用它替代模型实际加载和语音识别验证。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L258)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L258)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.sample_rate
 
@@ -161,7 +161,7 @@ def sample_rate(self) -> int
 
 返回后端要求的 PCM 采样率（Hz）；输入 samples 必须与之匹配。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L266)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L266)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.is_ready
 
@@ -171,7 +171,7 @@ def is_ready(self) -> bool
 
 返回后端是否已具备执行识别的就绪状态；不证明某段音频的识别准确率。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L269)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L269)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.preload
 
@@ -187,7 +187,7 @@ pauses the built-in detector.  The external lease is then acquired
 every required initialization step succeeds (the optional short tier
 may explicitly degrade after its partial context has been released).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L275)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L275)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.unload
 
@@ -201,7 +201,7 @@ Idempotent after success.  A native release failure is deliberately
 fail-closed: the live/uncertain context and lease are retained and the
 exception is surfaced so a later call may retry.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L496)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L496)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.transcribe
 
@@ -211,7 +211,7 @@ def transcribe(self, audio_bytes: bytes, language: str='auto') -> TranscriptionR
 
 One-shot offline transcription of WAV bytes (satisfies the ABC).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L579)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L579)
 
 ### kit.asr_rknn_backend.RknnSenseVoiceBackend.transcribe_array
 
@@ -221,7 +221,7 @@ def transcribe_array(self, samples: np.ndarray, language: str='auto') -> Transcr
 
 对 16 kHz PCM NumPy samples 执行 SenseVoice 识别，language 默认 auto，返回 TranscriptionResult；先 preload()。同一 context 的并发调用串行等待，递归调用或关闭中的 context 被拒绝；模型/权限/推理失败传播异常。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L586)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L586)
 
 ## kit.asr_rknn_backend.build_rknn_backend
 
@@ -234,4 +234,4 @@ Construct + preload the NPU backend. Called by ``kit.asr.Asr(backend='rk')``.
 ``tokens`` (the CPU sherpa tokens path) is ignored -- the NPU decode uses
 the sentencepiece bpe model resolved alongside the rknn model.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/asr_rknn_backend.py#L827)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/asr_rknn_backend.py#L827)

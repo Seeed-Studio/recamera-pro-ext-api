@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/temporal.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/temporal.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py)；签名由 AST 提取，不导入硬件依赖。
 
 跌倒时序状态机：normal/suspected/fallen/recovering；默认需要有效当前姿态与 learned temporal-positive 才确认。
 
@@ -84,7 +84,7 @@ def clamp(self) -> 'FallConfig'
 
 原地限制配置字段到实现允许范围，并返回自身；字段单位及默认值见配置类。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py#L44)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py#L44)
 
 ## kit.logic.temporal.FallOutput
 
@@ -123,7 +123,7 @@ def __init__(self, config: FallConfig | None=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py#L71)
 
 ### kit.logic.temporal.FallDetector.set_config
 
@@ -133,7 +133,7 @@ def set_config(self, config: FallConfig) -> None
 
 校验/截断并替换状态机配置，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py#L75)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py#L75)
 
 ### kit.logic.temporal.FallDetector.reset
 
@@ -143,7 +143,7 @@ def reset(self) -> None
 
 重置时序状态、事件计数、基准姿态和冷却窗口，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py#L78)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py#L78)
 
 ### kit.logic.temporal.FallDetector.update
 
@@ -153,4 +153,4 @@ def update(self, o: Observation, *, temporal_available: bool=False, temporal_pos
 
 消费当前 Observation、秒级时间及可选 temporal-positive 证据，返回 FallOutput；无效/遮挡姿态按配置宽限处理。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/temporal.py#L136)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/temporal.py#L136)

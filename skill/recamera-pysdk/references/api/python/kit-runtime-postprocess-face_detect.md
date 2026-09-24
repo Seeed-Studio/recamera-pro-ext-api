@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/face_detect.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/face_detect.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/face_detect.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/face_detect.py)；签名由 AST 提取，不导入硬件依赖。
 
 人脸检测专用后处理；按该导出的张量形状解析，不能直接代替通用 YOLO decoder。
 
@@ -39,4 +39,4 @@ outputs : list of raw RKNN tensors (3x box-DFL [1,64,g,g] + 3x cls [1,1,g,g]).
 info    : preprocess.LetterboxInfo (scale + padding for un-letterboxing).
 Returns face dicts sorted by score descending, boxes in original-frame px.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/face_detect.py#L28)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/face_detect.py#L28)

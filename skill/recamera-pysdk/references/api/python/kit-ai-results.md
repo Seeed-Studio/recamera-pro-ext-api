@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/ai/results.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/ai/results.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py)；签名由 AST 提取，不导入硬件依赖。
 
 检测、分类、关键点、姿态、跟踪、分割及批量结果；构造时校验有限数值、坐标空间和置信度，支持规范与 legacy 字典互转。
 
@@ -72,7 +72,7 @@ def parse(cls, value: 'CoordinateSpace | str') -> 'CoordinateSpace'
 
 Return a coordinate-space enum or raise ``ConfigurationError``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L187)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L187)
 
 ## kit.ai.results.Box
 
@@ -109,7 +109,7 @@ def width(self) -> float
 
 Rectangle width in this box's declared space.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L233)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L233)
 
 ### kit.ai.results.Box.height
 
@@ -120,7 +120,7 @@ def height(self) -> float
 
 Rectangle height in this box's declared space.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L239)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L239)
 
 ### kit.ai.results.Box.is_empty
 
@@ -131,7 +131,7 @@ def is_empty(self) -> bool
 
 Whether either rectangle dimension is zero.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L245)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L245)
 
 ### kit.ai.results.Box.to_dict
 
@@ -141,7 +141,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return the canonical JSON-compatible box representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L250)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L250)
 
 ### kit.ai.results.Box.from_dict
 
@@ -152,7 +152,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Box'
 
 Decode a canonical box mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L262)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L262)
 
 ### kit.ai.results.Box.from_legacy
 
@@ -163,7 +163,7 @@ def from_legacy(cls, coordinates: Sequence[Any], *, space: CoordinateSpace | str
 
 Decode a historical ``[x1, y1, x2, y2]`` sequence.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L275)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L275)
 
 ### kit.ai.results.Box.to_legacy
 
@@ -173,7 +173,7 @@ def to_legacy(self) -> list[float]
 
 Return the historical four-element ``xyxy`` list.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L288)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L288)
 
 ## kit.ai.results.Detection
 
@@ -209,7 +209,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a canonical JSON-compatible detection mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L328)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L328)
 
 ### kit.ai.results.Detection.from_dict
 
@@ -220,7 +220,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Detection'
 
 Decode the canonical detection representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L341)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L341)
 
 ### kit.ai.results.Detection.from_legacy_dict
 
@@ -231,7 +231,7 @@ def from_legacy_dict(cls, data: Mapping[str, Any], *, space: CoordinateSpace | s
 
 Decode and retain a legacy detection dictionary losslessly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L354)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L354)
 
 ### kit.ai.results.Detection.to_legacy_dict
 
@@ -241,7 +241,7 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original legacy mapping or an equivalent flat mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L381)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L381)
 
 ## kit.ai.results.Classification
 
@@ -276,7 +276,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a canonical JSON-compatible classification mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L421)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L421)
 
 ### kit.ai.results.Classification.from_dict
 
@@ -287,7 +287,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Classification'
 
 Decode the canonical classification representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L434)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L434)
 
 ### kit.ai.results.Classification.from_legacy_dict
 
@@ -298,7 +298,7 @@ def from_legacy_dict(cls, data: Mapping[str, Any], *, space: CoordinateSpace | s
 
 Decode and retain a legacy classification dictionary losslessly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L448)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L448)
 
 ### kit.ai.results.Classification.to_legacy_dict
 
@@ -308,7 +308,7 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original legacy mapping or an equivalent flat mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L474)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L474)
 
 ## kit.ai.results.Keypoint
 
@@ -344,7 +344,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a canonical JSON-compatible landmark mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L518)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L518)
 
 ### kit.ai.results.Keypoint.from_dict
 
@@ -355,7 +355,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Keypoint'
 
 Decode a canonical landmark mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L530)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L530)
 
 ### kit.ai.results.Keypoint.to_legacy
 
@@ -365,7 +365,7 @@ def to_legacy(self) -> list[float]
 
 Return the historical ``[x, y, confidence]`` representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L542)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L542)
 
 ## kit.ai.results.Pose
 
@@ -403,7 +403,7 @@ def space(self) -> CoordinateSpace
 
 The common coordinate space of the instance's points and box.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L593)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L593)
 
 ### kit.ai.results.Pose.to_dict
 
@@ -413,7 +413,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a canonical JSON-compatible pose mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L598)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L598)
 
 ### kit.ai.results.Pose.from_dict
 
@@ -424,7 +424,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Pose'
 
 Decode the canonical pose representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L612)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L612)
 
 ### kit.ai.results.Pose.from_legacy_dict
 
@@ -435,7 +435,7 @@ def from_legacy_dict(cls, data: Mapping[str, Any], *, space: CoordinateSpace | s
 
 Decode legacy ``keypoints`` arrays and retain all original fields.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L628)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L628)
 
 ### kit.ai.results.Pose.to_legacy_dict
 
@@ -445,7 +445,7 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original mapping or the app-compatible keypoint shape.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L693)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L693)
 
 ## kit.ai.results.Track
 
@@ -481,7 +481,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a canonical JSON-compatible tracking mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L739)
 
 ### kit.ai.results.Track.from_dict
 
@@ -492,7 +492,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Track'
 
 Decode the canonical tracking representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L753)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L753)
 
 ### kit.ai.results.Track.from_legacy_dict
 
@@ -503,7 +503,7 @@ def from_legacy_dict(cls, data: Mapping[str, Any], *, space: CoordinateSpace | s
 
 Decode and retain a legacy tracking event losslessly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L767)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L767)
 
 ### kit.ai.results.Track.to_legacy_dict
 
@@ -513,7 +513,7 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original tracking event or an equivalent flat mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L797)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L797)
 
 ## kit.ai.results.Segmentation
 
@@ -553,7 +553,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return a JSON-safe mapping with the mask encoded as base64.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L915)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L915)
 
 ### kit.ai.results.Segmentation.from_dict
 
@@ -564,7 +564,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'Segmentation'
 
 Decode a canonical base64 segmentation representation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L932)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L932)
 
 ### kit.ai.results.Segmentation.from_legacy_dict
 
@@ -575,7 +575,7 @@ def from_legacy_dict(cls, data: Mapping[str, Any], *, space: CoordinateSpace | s
 
 Decode bytes or nested legacy masks and retain the mapping exactly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L959)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L959)
 
 ### kit.ai.results.Segmentation.to_legacy_dict
 
@@ -585,7 +585,7 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original mapping or the SDK-compatible flat mask shape.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L997)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L997)
 
 ## kit.ai.results.ResultBatch
 
@@ -630,7 +630,7 @@ def to_dict(self) -> dict[str, Any]
 
 Return the versioned, JSON-compatible canonical batch mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1158)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1158)
 
 ### kit.ai.results.ResultBatch.from_dict
 
@@ -641,7 +641,7 @@ def from_dict(cls, data: Mapping[str, Any]) -> 'ResultBatch'
 
 Decode a canonical batch and reject unknown schema versions.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1172)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1172)
 
 ### kit.ai.results.ResultBatch.to_json
 
@@ -651,7 +651,7 @@ def to_json(self, **json_kwargs: Any) -> str
 
 Serialize the canonical representation with :func:`json.dumps`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1191)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1191)
 
 ### kit.ai.results.ResultBatch.from_json
 
@@ -662,7 +662,7 @@ def from_json(cls, payload: str | bytes | bytearray) -> 'ResultBatch'
 
 Deserialize JSON text into a validated batch.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1197)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1197)
 
 ### kit.ai.results.ResultBatch.from_legacy_dict
 
@@ -678,7 +678,7 @@ in batch attributes because many are temporal state transitions rather
 than inference results; callers may convert track events explicitly
 with :meth:`Track.from_legacy_dict`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1208)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1208)
 
 ### kit.ai.results.ResultBatch.to_legacy_dict
 
@@ -688,4 +688,4 @@ def to_legacy_dict(self) -> dict[str, Any]
 
 Return the original payload or an explicit app-compatible payload.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/results.py#L1249)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/results.py#L1249)

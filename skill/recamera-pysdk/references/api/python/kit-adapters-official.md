@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/official.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/official.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py)；签名由 AST 提取，不导入硬件依赖。
 
 Native SDK 适配层。OfficialFrameSource/OfficialResultSink 已实现；OfficialPcmSource、OfficialControl 是未实现占位，不能据此宣称设备有统一音频/control socket API。
 
@@ -151,7 +151,7 @@ def __init__(self, url: Optional[str]=None, sock: str=OFFICIAL_FRAME_SOCK, width
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L133)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L133)
 
 ### kit.adapters.official.OfficialFrameSource.frames
 
@@ -161,7 +161,7 @@ def frames(self) -> Iterator[Frame]
 
 把 native lease 适配为 Kit Frame；按 model_frame 配置走原图、hw-direct 或 hw-roi。借用数组不得跨迭代保存。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L477)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L477)
 
 ### kit.adapters.official.OfficialFrameSource.close
 
@@ -171,7 +171,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L590)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L590)
 
 ## kit.adapters.official.OfficialResultSink
 
@@ -261,7 +261,7 @@ def __init__(self, host: Optional[str]=None, port: Optional[int]=None, app_id: s
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L726)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L726)
 
 ### kit.adapters.official.OfficialResultSink.set_frame_size
 
@@ -278,7 +278,7 @@ so a pixel value like 240 collapses to a 1px box). Our postprocess emits
 ORIGINAL full-res-frame PIXELS, so we must divide by this frame size
 before sending. We store it here and apply it in the per-item mappers.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L763)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L763)
 
 ### kit.adapters.official.OfficialResultSink.emit
 
@@ -288,7 +288,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 Legacy best-effort publish; failures are logged and counted.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L898)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L898)
 
 ### kit.adapters.official.OfficialResultSink.emit_checked
 
@@ -298,7 +298,7 @@ def emit_checked(self, payload: dict, pts: float) -> None
 
 Publish while surfacing native open/send failures to typed callers.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L903)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L903)
 
 ### kit.adapters.official.OfficialResultSink.stats
 
@@ -312,7 +312,7 @@ ResultSink's authoritative wire counters under `wire`. Local only --
 a frame accepted by the socket that the server later drops is not
 reflected until the server-ACK protocol lands (docs/guide/result-push.md).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1007)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1007)
 
 ### kit.adapters.official.OfficialResultSink.emit_meta
 
@@ -322,7 +322,7 @@ def emit_meta(self, payload: dict) -> None
 
 按该 sink 的能力处理配置/元信息；不是一次模型推理，也不证明前端已经收到配置。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1025)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1025)
 
 ### kit.adapters.official.OfficialResultSink.close
 
@@ -332,7 +332,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1035)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1035)
 
 ## kit.adapters.official.OfficialPcmSource
 
@@ -357,7 +357,7 @@ def __init__(self, sock: str=OFFICIAL_AUDIO_SOCK, **_ignored)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1066)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1066)
 
 ### kit.adapters.official.OfficialPcmSource.read
 
@@ -367,7 +367,7 @@ def read(self) -> Optional[PcmFrame]
 
 当前明确抛 NotImplementedError；类名存在不代表 audio.sock 已实现，请用共享 ALSA ai_asr 路径。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1069)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1069)
 
 ### kit.adapters.official.OfficialPcmSource.close
 
@@ -377,7 +377,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1075)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1075)
 
 ## kit.adapters.official.ControlPlane
 
@@ -398,7 +398,7 @@ def set_inference(self, *, enable: bool, model: Optional[str]=None, fps: Optiona
 
 控制面协议占位：配置内置推理 enable/model/fps，实际后端实现决定支持程度。不是取得 NPU lease 的接口。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1086)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1086)
 
 ### kit.adapters.official.ControlPlane.snapshot
 
@@ -409,7 +409,7 @@ def snapshot(self) -> bytes
 
 控制面协议占位：请求一幅 JPEG；返回值由实现提供。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1091)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1091)
 
 ## kit.adapters.official.OfficialControl
 
@@ -428,7 +428,7 @@ def set_inference(self, *, enable: bool, model: Optional[str]=None, fps: Optiona
 
 当前抛 NotImplementedError；现有固件兼容实现是 CgiControl。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1102)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1102)
 
 ### kit.adapters.official.OfficialControl.snapshot
 
@@ -438,7 +438,7 @@ def snapshot(self) -> bytes
 
 当前抛 NotImplementedError；使用 CgiControl 的取帧编码实现，不能编造 native snapshot RPC。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1109)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1109)
 
 ### kit.adapters.official.OfficialControl.__init__
 
@@ -448,4 +448,4 @@ def __init__(self, **_ignored)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/official.py#L1099)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/official.py#L1099)

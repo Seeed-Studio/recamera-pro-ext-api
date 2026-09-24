@@ -62,7 +62,8 @@
     "kit.workflow.runtime": "同步 Pipeline 的组合、运行、统计与逆序清理；Stage 所有权只能转移一次，关闭等待在途任务。",
     "recamera_ext": "Native Python SDK：帧/probe 借用、五类结果注入、硬件 mask、exclusive NPU 租约。OsdSink/RecordSink 仅限 AppMgr。",
     "recamera_ext.buffer": "Native BorrowedBuffer 与平面布局：源 lease 控制有效期，释放后访问报错，跨迭代持有必须 copy。",
-    "recamera_ext.errors": "native 返回码到 Python typed errors 的映射；保留 operation/detail，区分超时、权限、背压、格式与 capability 缺失。"
+    "recamera_ext.errors": "native 返回码到 Python typed errors 的映射；保留 operation/detail，区分超时、权限、背压、格式与 capability 缺失。",
+    "kit.runtime.rknnlite": "平台 RKNNLite 兼容包装器：复制输出为独立 NumPy 数组，在初始化、推理返回/异常及释放时回收厂商循环缓冲；ctypes 后端不执行这些操作。普通应用使用 App 模型工厂，不直接实例化本后端。"
   },
   "common": {
     "__init__": "构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。",
@@ -233,6 +234,10 @@
     "recamera_ext.RecordSink.send_segmentation": "明确拒绝：segmentation 不受当前录像通道支持。",
     "recamera_ext.RecordSink.reset": "AppMgr-only：有序清除 app_id 的排队结果，返回成功才说明收到 ACK；不取消已消费事件或正在进行的录像。错误后关闭并重开 handle。",
     "recamera_ext.ProbeSample.released": "此 probe sample 的借用是否已释放/失效。",
-    "recamera_ext.ProbeSample.release_reason": "返回借用失效原因，供生命周期诊断使用。"
+    "recamera_ext.ProbeSample.release_reason": "返回借用失效原因，供生命周期诊断使用。",
+    "kit.runtime.rknnlite.RknnLiteRuntime.__init__": "在目标设备导入并构造厂商 RKNNLite；参数原样传递。本类不取得 NPU 租约，必须由平台后端或受管 session 持有所有权。",
+    "kit.runtime.rknnlite.RknnLiteRuntime.init_runtime": "原样调用厂商初始化并返回其结果；无论成功或异常都会执行完整循环回收。初始化失败的清理与隔离仍由上层 session 负责。",
+    "kit.runtime.rknnlite.RknnLiteRuntime.inference": "同步调用厂商推理，返回独立拥有内存的 NumPy 输出列表，保持 dtype、shape、数值和次序；非数组元数据原样传递，None 原样返回。返回或异常时丢弃厂商输出引用并回收循环缓冲，有额外复制和 GC 开销。",
+    "kit.runtime.rknnlite.RknnLiteRuntime.release": "调用厂商释放；仅成功后清除保留的模型字节，失败时保留上下文供上层隔离/重试。无论结果均执行循环回收；不会使此前返回的独立输出失效。"
   }
 }

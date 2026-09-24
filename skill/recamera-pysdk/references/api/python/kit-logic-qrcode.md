@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/qrcode.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/qrcode.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/qrcode.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/qrcode.py)；签名由 AST 提取，不导入硬件依赖。
 
 二维码 CPU 解码器，运行时后端可用性决定支持范围；decode 输入为图像，返回业务结果。
 
@@ -54,7 +54,7 @@ def __init__(self, model_dir: Optional[str]=None, isolate: Optional[bool]=None) 
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/qrcode.py#L211)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/qrcode.py#L211)
 
 ### kit.logic.qrcode.QrDecoder.decode
 
@@ -64,7 +64,7 @@ def decode(self, frame: np.ndarray) -> List[Dict[str, Any]]
 
 使用已选择的可用后端解码图像，返回二维码结果列表；未检测到或当前无可用解码结果时返回空列表。后端依赖可能为 OpenCV 或 zxing。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/qrcode.py#L247)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/qrcode.py#L247)
 
 ### kit.logic.qrcode.QrDecoder.crashes
 
@@ -75,7 +75,7 @@ def crashes(self) -> int
 
 How many native decoder crashes were absorbed (isolated backend).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/qrcode.py#L257)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/qrcode.py#L257)
 
 ### kit.logic.qrcode.QrDecoder.close
 
@@ -85,4 +85,4 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/qrcode.py#L261)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/qrcode.py#L261)

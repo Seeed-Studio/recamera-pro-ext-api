@@ -29,7 +29,7 @@ defaults, descriptions and [interface characteristics](references/api/features.m
 Its source revision is recorded in `scripts/api-reference-lock.json`;
 it is independent of the builder revision. For default packaging this skill bundles the
 fixed official builder from public commit
-`60e0f2ade601152c3dd7bf7e228297cc8203a2ed` under `scripts/sdk-builder/` and
+`635ffc3c51d596dd2e8139f297798162e6be62b9` under `scripts/sdk-builder/` and
 verifies its three SDK files by SHA-256, so no local SDK checkout is required.
 A complete local checkout is only an explicit override via `--sdk-root` or
 `RECAMERA_SDK_ROOT`. Never embed a host, account, password, private path, or

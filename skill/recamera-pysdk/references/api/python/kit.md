@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/__init__.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/__init__.py)；签名由 AST 提取，不导入硬件依赖。
 
 Kit 顶层惰性导出。下表列出所有公共名称及定义位置；导入本身不启动摄像头或 NPU。
 

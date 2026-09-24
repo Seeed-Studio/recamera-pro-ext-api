@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/mqtt_sink.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/mqtt_sink.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py)；签名由 AST 提取，不导入硬件依赖。
 
 MQTT 结果与 Home Assistant Discovery；依赖 paho、可达 broker 及匹配的应用权限。
 
@@ -58,7 +58,7 @@ Stable per-device id for the HA `device.identifiers` grouping.
 RECAMERA_SN env (set by the platform) wins; else the U-Boot `sn`; else the
 hostname. Sanitised to [a-z0-9_] so it is topic/entity-id safe.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L170)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L170)
 
 ## kit.adapters.mqtt_sink.ha_discovery_topic
 
@@ -68,7 +68,7 @@ def ha_discovery_topic(discovery_prefix: str, node: str, app_id: str, ent: dict)
 
 `<prefix>/<component>/recamera_<node>_<app>/<object_id>/config`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L196)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L196)
 
 ## kit.adapters.mqtt_sink.ha_discovery_payload
 
@@ -82,7 +82,7 @@ Availability (`availability_topic`/`payload_available`/`payload_not_available`)
 and a stable `unique_id` are always emitted so HA marks the entity
 online/offline off the LWT and never creates duplicates on reconnect.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L205)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L205)
 
 ## kit.adapters.mqtt_sink.MqttSink
 
@@ -103,7 +103,7 @@ def __init__(self, *, host: str, port: int=1883, app_id: str='app', base_topic: 
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L243)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L243)
 
 ### kit.adapters.mqtt_sink.MqttSink.set_frame_size
 
@@ -113,7 +113,7 @@ def set_frame_size(self, w: int, h: int) -> None
 
 设置后续结果的原始画面宽、高（像素），供坐标换算/消息封装使用；本身不发送结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L449)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L449)
 
 ### kit.adapters.mqtt_sink.MqttSink.emit
 
@@ -123,7 +123,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 将业务 payload 与秒级 pts 封装后发布到配置的 MQTT topic，返回 None；本地调用完成不等于 broker/订阅者已消费。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L533)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L533)
 
 ### kit.adapters.mqtt_sink.MqttSink.client_count
 
@@ -133,7 +133,7 @@ def client_count(self) -> int
 
 返回此 sink/channel 当前可报告的客户端数；零或非零都不证明某条业务结果已被远端消费。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L547)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L547)
 
 ### kit.adapters.mqtt_sink.MqttSink.close
 
@@ -143,4 +143,4 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/mqtt_sink.py#L551)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/mqtt_sink.py#L551)

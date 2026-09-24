@@ -9,8 +9,9 @@
   输入及 FLOAT32 输出，保持普通 API 的逻辑输出形状。不支持的布局或绑定操作会销毁
   该 context，再建立普通 API context；不能在同一 context 混用两套 API。
   `legacy` 强制普通 API，`bound` 要求绑定成功。此开关与 `ESK_RKNN_BACKEND` 独立。
-- 多输入、音频等不满足条件的模型保持原 backend。新客户端仅在 hello 声明支持时申请
-  DMA 通路；旧服务、旧客户端以及不支持的模型保持原 version-1 张量消息。
+- 多输入、非图像特征等不满足共享 DMA 条件的模型使用普通张量传输；单个静态
+  float32 音频特征输入仍可由 ctypes 普通 IO 执行。新客户端仅在 hello 声明支持时
+  申请 DMA 通路；旧服务、旧客户端以及不支持的模型保持原 version-1 张量消息。
   RKNNLite 兼容路径统一执行输出脱离和循环引用回收，见[推理内存生命周期](inference-memory.md)。
 - `RemoteRknnSession(..., shared_io=False)` 可关闭共享传输做 A/B。
   `session.io_transport` 返回 `rknn-dma-v1` 或 `tensor-v1`。

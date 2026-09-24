@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/remote.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/remote.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py)；签名由 AST 提取，不导入硬件依赖。
 
 scheduled 推理服务 client。支持共享 IO/兼容传输及 DMA prepared input，模型授权来自 AppMgr 分配身份和 manifest 工件。
 
@@ -46,7 +46,7 @@ so developer images made during the API transition continue to run.
 Merely having the default socket on disk never opts a hand-launched process
 into the service.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L42)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L42)
 
 ## kit.runtime.remote.RemoteRknnSession
 
@@ -77,7 +77,7 @@ def __init__(self, model: str | ModelSpec, core_mask: Optional[int]=None, *, soc
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L141)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L141)
 
 ### kit.runtime.remote.RemoteRknnSession.released
 
@@ -88,7 +88,7 @@ def released(self) -> bool
 
 返回 client session 是否已释放。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L358)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L358)
 
 ### kit.runtime.remote.RemoteRknnSession.stats
 
@@ -99,7 +99,7 @@ def stats(self) -> InferenceStats
 
 返回 InferenceStats 快照，包含 calls/failures/total_ms/last_ms；总调用耗时包含 client/service 交互，不能当作纯 NPU 时间。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L362)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L362)
 
 ### kit.runtime.remote.RemoteRknnSession.io_transport
 
@@ -110,7 +110,7 @@ def io_transport(self)
 
 返回协商出的共享 IO 版本或 tensor-v1 兼容传输标识。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L372)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L372)
 
 ### kit.runtime.remote.RemoteRknnSession.last_timings_ms
 
@@ -121,7 +121,7 @@ def last_timings_ms(self)
 
 返回最近一次调用的阶段耗时字典副本，单位毫秒；字段以实际 backend 返回为准。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L376)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L376)
 
 ### kit.runtime.remote.RemoteRknnSession.infer
 
@@ -131,7 +131,7 @@ def infer(self, inputs: Any, *, timeout: float=30.0) -> list[np.ndarray]
 
 同步执行一次推理并返回输出数组列表；输入可为普通张量或支持的 prepared DMA 对象，timeout 为秒。保持借用输入有效直到返回。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L466)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L466)
 
 ### kit.runtime.remote.RemoteRknnSession.infer_prepared
 
@@ -145,7 +145,7 @@ Internal Kit hook: prepare this call's private input while locked.
 True, or returns False without submitting work to request the ndarray
 fallback. No borrowed camera FD crosses the process boundary.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L469)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L469)
 
 ### kit.runtime.remote.RemoteRknnSession.release
 
@@ -155,7 +155,7 @@ def release(self) -> None
 
 释放该 client session 及本地共享 IO/连接资源，返回 None；不会赋予应用停止其他模型/服务的权限。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L576)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L576)
 
 ### kit.runtime.remote.RemoteRknnSession.__enter__
 
@@ -165,7 +165,7 @@ def __enter__(self) -> 'RemoteRknnSession'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L609)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L609)
 
 ### kit.runtime.remote.RemoteRknnSession.__exit__
 
@@ -175,7 +175,7 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L618)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L618)
 
 ## kit.runtime.remote.RemoteRknnModel
 
@@ -193,7 +193,7 @@ def __init__(self, path: str, core_mask: Optional[int]=None, **kwargs) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L636)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L636)
 
 ### kit.runtime.remote.RemoteRknnModel.released
 
@@ -206,7 +206,7 @@ def released(self) -> bool
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L358)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L358)
 
 ### kit.runtime.remote.RemoteRknnModel.stats
 
@@ -219,7 +219,7 @@ def stats(self) -> InferenceStats
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L362)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L362)
 
 ### kit.runtime.remote.RemoteRknnModel.io_transport
 
@@ -232,7 +232,7 @@ def io_transport(self)
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L372)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L372)
 
 ### kit.runtime.remote.RemoteRknnModel.last_timings_ms
 
@@ -245,7 +245,7 @@ def last_timings_ms(self)
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L376)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L376)
 
 ### kit.runtime.remote.RemoteRknnModel.infer
 
@@ -257,7 +257,7 @@ def infer(self, inputs: Any, *, timeout: float=30.0) -> list[np.ndarray]
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L466)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L466)
 
 ### kit.runtime.remote.RemoteRknnModel.infer_prepared
 
@@ -273,7 +273,7 @@ fallback. No borrowed camera FD crosses the process boundary.
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L469)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L469)
 
 ### kit.runtime.remote.RemoteRknnModel.release
 
@@ -285,7 +285,7 @@ def release(self) -> None
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L576)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L576)
 
 ### kit.runtime.remote.RemoteRknnModel.__enter__
 
@@ -297,7 +297,7 @@ def __enter__(self) -> 'RemoteRknnSession'
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L609)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L609)
 
 ### kit.runtime.remote.RemoteRknnModel.__exit__
 
@@ -309,4 +309,4 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 此方法定义于基类 `RemoteRknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/remote.py#L618)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/remote.py#L618)

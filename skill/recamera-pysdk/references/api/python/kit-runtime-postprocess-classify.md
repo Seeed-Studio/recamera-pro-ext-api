@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/classify.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/classify.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py)；签名由 AST 提取，不导入硬件依赖。
 
 分类 softmax、top-k、多头属性与表情解码；不要对已归一化概率重复 softmax。
 
@@ -73,7 +73,7 @@ distribution, <1 sharpens it, and 1.0 (the default) is the plain softmax.
 The calibration POLICY -- which temperature each head gets -- lives in
 `kit.logic.attributes.AttributeConfig`; this layer only does the arithmetic.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L45)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L45)
 
 ## kit.runtime.postprocess.classify.argmax
 
@@ -83,7 +83,7 @@ def argmax(logits: Sequence[float]) -> int
 
 将 logits 展平，返回最大值的整数索引；空输入返回 -1。不返回分数，不执行 softmax。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L63)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L63)
 
 ## kit.runtime.postprocess.classify.topk
 
@@ -93,7 +93,7 @@ def topk(logits: Sequence[float], k: int=3, labels: Optional[Sequence[str]]=None
 
 Return the top-k (label_or_index, probability) pairs, prob-descending.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L68)
 
 ## kit.runtime.postprocess.classify.classify_head
 
@@ -109,7 +109,7 @@ systematically overconfident, so a deployment that thresholds `confidence`
 needs the correction fitted on a held-out set; see `kit.logic.attributes`,
 which owns the per-head calibration policy.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L84)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L84)
 
 ## kit.runtime.postprocess.classify.split_heads
 
@@ -125,7 +125,7 @@ temperature : optional {name: float} per-head softmax temperature; a head
               absent from the dict keeps 1.0 (plain softmax).
 Returns {name: classify_head(...)}.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L108)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L108)
 
 ## kit.runtime.postprocess.classify.logits_from
 
@@ -138,7 +138,7 @@ Extract the classifier logit vector from a list of raw RKNN outputs.
 If `size` is given, prefer the tensor whose element count matches it;
 otherwise fall back to the largest tensor (single-output models).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L130)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L130)
 
 ## kit.runtime.postprocess.classify.fairface_decode
 
@@ -151,7 +151,7 @@ def fairface_decode(outputs, temperature: Optional[dict]=None) -> dict
 `temperature` is an optional {"race"/"gender"/"age": float} calibration map;
 omitted or 1.0 reproduces the plain softmax exactly.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L147)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L147)
 
 ## kit.runtime.postprocess.classify.emotion_decode
 
@@ -161,4 +161,4 @@ def emotion_decode(outputs, temperature: float=1.0) -> dict
 
 (1,8) emotion head -> single classify_head dict.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/classify.py#L160)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/classify.py#L160)

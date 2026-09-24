@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/engine.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/engine.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py)；签名由 AST 提取，不导入硬件依赖。
 
 TensorSpec/ModelSpec、推理统计及 legacy 本地 RKNN session；布局是契约，不会隐式转置。scheduled 托管进程禁止直接本地 session。
 
@@ -51,7 +51,7 @@ def validate(self, value: np.ndarray, operation: str) -> np.ndarray
 
 Validate one array and return it unchanged.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L123)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L123)
 
 ## kit.runtime.engine.ModelSpec
 
@@ -107,7 +107,7 @@ def average_ms(self) -> float
 
 Mean successful/failed call duration, or zero before the first call.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L233)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L233)
 
 ## kit.runtime.engine.RknnSession
 
@@ -139,7 +139,7 @@ def __init__(self, model: str | ModelSpec, core_mask: Optional[int]=None, *, lea
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L306)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L315)
 
 ### kit.runtime.engine.RknnSession.released
 
@@ -150,7 +150,7 @@ def released(self) -> bool
 
 Whether the native runtime and lease have been released.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L407)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L416)
 
 ### kit.runtime.engine.RknnSession.stats
 
@@ -161,7 +161,7 @@ def stats(self) -> InferenceStats
 
 Return an immutable snapshot of inference timing/counters.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L414)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L423)
 
 ### kit.runtime.engine.RknnSession.infer
 
@@ -176,7 +176,7 @@ model, or a mapping keyed by ``TensorSpec.name``.  Driver exceptions are
 wrapped as :class:`InferenceError` with the original exception retained
 as ``__cause__``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L519)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L528)
 
 ### kit.runtime.engine.RknnSession.release
 
@@ -186,7 +186,7 @@ def release(self) -> None
 
 Destroy the RKNN context and release the NPU guard exactly once.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L688)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L697)
 
 ### kit.runtime.engine.RknnSession.__enter__
 
@@ -196,7 +196,7 @@ def __enter__(self) -> 'RknnSession'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L786)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L795)
 
 ### kit.runtime.engine.RknnSession.__exit__
 
@@ -206,7 +206,7 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L795)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L804)
 
 ## kit.runtime.engine.RknnModel
 
@@ -228,7 +228,7 @@ def __init__(self, path: str, core_mask: Optional[int]=None, **kwargs) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L838)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L847)
 
 ### kit.runtime.engine.RknnModel.released
 
@@ -241,7 +241,7 @@ Whether the native runtime and lease have been released.
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L407)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L416)
 
 ### kit.runtime.engine.RknnModel.stats
 
@@ -254,7 +254,7 @@ Return an immutable snapshot of inference timing/counters.
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L414)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L423)
 
 ### kit.runtime.engine.RknnModel.infer
 
@@ -271,7 +271,7 @@ as ``__cause__``.
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L519)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L528)
 
 ### kit.runtime.engine.RknnModel.release
 
@@ -283,7 +283,7 @@ Destroy the RKNN context and release the NPU guard exactly once.
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L688)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L697)
 
 ### kit.runtime.engine.RknnModel.__enter__
 
@@ -295,7 +295,7 @@ def __enter__(self) -> 'RknnSession'
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L786)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L795)
 
 ### kit.runtime.engine.RknnModel.__exit__
 
@@ -307,4 +307,4 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 此方法定义于基类 `RknnSession`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/engine.py#L795)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/engine.py#L804)

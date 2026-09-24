@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/geometry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/geometry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py)；签名由 AST 提取，不导入硬件依赖。
 
 规范绘制图元与 GeometryBuilder；严格校验形状、style 和 JSON 数据。图元通过 manifest 输出契约选择 renderer。
 
@@ -87,7 +87,7 @@ Hub ingress uses ``strict=False`` so one malformed optional style cannot
 erase otherwise valid geometry; application builders use ``strict=True``
 and fail early.  Unknown keys are never copied.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L91)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L91)
 
 ## kit.geometry.primitive
 
@@ -97,7 +97,7 @@ def primitive(kind: str, points: Sequence[Sequence[float]], *, style: Optional[M
 
 Build one validated canonical primitive.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L140)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L140)
 
 ## kit.geometry.point
 
@@ -107,7 +107,7 @@ def point(x: float, y: float, **kwargs: Any) -> dict[str, Any]
 
 构造点图元，输入点坐标和可选样式/标签，返回经过校验的规范 geometry 字典。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L170)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L170)
 
 ## kit.geometry.line
 
@@ -117,7 +117,7 @@ def line(a: Sequence[float], b: Sequence[float], **kwargs: Any) -> dict[str, Any
 
 构造恰有两个端点的线段图元并校验，返回规范 geometry 字典。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L174)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L174)
 
 ## kit.geometry.polyline
 
@@ -127,7 +127,7 @@ def polyline(points: Sequence[Sequence[float]], **kwargs: Any) -> dict[str, Any]
 
 构造连续折线图元并校验点数、有限坐标及样式，返回规范字典。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L178)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L178)
 
 ## kit.geometry.polygon
 
@@ -137,7 +137,7 @@ def polygon(points: Sequence[Sequence[float]], **kwargs: Any) -> dict[str, Any]
 
 构造闭合多边形图元并校验，返回规范字典；坐标空间由输出字段声明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L182)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L182)
 
 ## kit.geometry.box
 
@@ -147,7 +147,7 @@ def box(xyxy: Sequence[float], **kwargs: Any) -> dict[str, Any]
 
 Compatibility adapter: ``[x1,y1,x2,y2]`` -> polygon.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L186)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L186)
 
 ## kit.geometry.quad
 
@@ -157,7 +157,7 @@ def quad(points: Sequence[Sequence[float]], **kwargs: Any) -> dict[str, Any]
 
 Compatibility adapter: four OCR/OBB points -> polygon.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L197)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L197)
 
 ## kit.geometry.keypoints
 
@@ -170,7 +170,7 @@ Compatibility adapter: keypoint tuples -> point primitives.
 Input points may be ``[x,y]`` or ``[x,y,score]``.  Scores below
 ``conf_min`` are omitted.  IDs remain stable by input index.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L204)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L204)
 
 ## kit.geometry.pose
 
@@ -180,7 +180,7 @@ def pose(points: Sequence[Sequence[float]], skeleton: Iterable[Sequence[int]], *
 
 Compatibility adapter: pose keypoints+skeleton -> lines then points.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L234)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L234)
 
 ## kit.geometry.sanitize_geometry
 
@@ -194,7 +194,7 @@ Invalid primitives are omitted independently.  Unknown keys/styles are
 discarded.  Pixel coordinates are bounded by ``frame_size`` when available;
 without reference dimensions they remain diagnostic with ``space=unknown``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L277)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L277)
 
 ## kit.geometry.GeometryBuilder
 
@@ -212,7 +212,7 @@ def __init__(self) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L354)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L354)
 
 ### kit.geometry.GeometryBuilder.add
 
@@ -222,7 +222,7 @@ def add(self, item: Mapping[str, Any]) -> 'GeometryBuilder'
 
 校验并追加一个已构造图元，返回 builder 本身以便链式调用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L358)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L358)
 
 ### kit.geometry.GeometryBuilder.primitive
 
@@ -232,7 +232,7 @@ def primitive(self, kind: str, points: Sequence[Sequence[float]], **kwargs: Any)
 
 按显式 kind 和参数构造/追加图元，返回 builder；非法 kind 或字段抛 GeometryError。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L380)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L380)
 
 ### kit.geometry.GeometryBuilder.point
 
@@ -242,7 +242,7 @@ def point(self, x: float, y: float, **kwargs: Any) -> 'GeometryBuilder'
 
 追加点图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L384)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L384)
 
 ### kit.geometry.GeometryBuilder.line
 
@@ -252,7 +252,7 @@ def line(self, a: Sequence[float], b: Sequence[float], **kwargs: Any) -> 'Geomet
 
 追加线段图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L387)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L387)
 
 ### kit.geometry.GeometryBuilder.polyline
 
@@ -262,7 +262,7 @@ def polyline(self, points: Sequence[Sequence[float]], **kwargs: Any) -> 'Geometr
 
 追加折线图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L390)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L390)
 
 ### kit.geometry.GeometryBuilder.polygon
 
@@ -272,7 +272,7 @@ def polygon(self, points: Sequence[Sequence[float]], **kwargs: Any) -> 'Geometry
 
 追加多边形图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L393)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L393)
 
 ### kit.geometry.GeometryBuilder.box
 
@@ -282,7 +282,7 @@ def box(self, xyxy: Sequence[float], **kwargs: Any) -> 'GeometryBuilder'
 
 追加 xyxy 矩形图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L396)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L396)
 
 ### kit.geometry.GeometryBuilder.quad
 
@@ -292,7 +292,7 @@ def quad(self, points: Sequence[Sequence[float]], **kwargs: Any) -> 'GeometryBui
 
 追加四边形图元并返回 builder，保留点序。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L399)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L399)
 
 ### kit.geometry.GeometryBuilder.keypoints
 
@@ -302,7 +302,7 @@ def keypoints(self, points: Sequence[Sequence[float]], **kwargs: Any) -> 'Geomet
 
 追加关键点及可选连接关系图元并返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L402)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L402)
 
 ### kit.geometry.GeometryBuilder.pose
 
@@ -312,7 +312,7 @@ def pose(self, points: Sequence[Sequence[float]], skeleton: Iterable[Sequence[in
 
 追加姿态图元并返回 builder；索引和连接关系必须与模型一致。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L406)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L406)
 
 ### kit.geometry.GeometryBuilder.extend
 
@@ -322,7 +322,7 @@ def extend(self, items: Iterable[Mapping[str, Any]]) -> 'GeometryBuilder'
 
 逐项校验并追加图元序列，返回 builder。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L411)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L411)
 
 ### kit.geometry.GeometryBuilder.build
 
@@ -332,7 +332,7 @@ def build(self) -> list[dict[str, Any]]
 
 返回规范图元列表，可交给 App.emit(geometry=...)；构造结果本身不会触发渲染。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L416)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L416)
 
 ### kit.geometry.GeometryBuilder.__iter__
 
@@ -342,7 +342,7 @@ def __iter__(self)
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L426)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L426)
 
 ### kit.geometry.GeometryBuilder.__len__
 
@@ -352,4 +352,4 @@ def __len__(self) -> int
 
 返回当前构建器中的基础图元数量。复合 box/pose 等可能展开为多个基础图元。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/geometry.py#L429)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/geometry.py#L429)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/device.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/device.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py)；签名由 AST 提取，不导入硬件依赖。
 
 资源工厂与生命周期聚合；按创建逆序关闭。rknn_session 在受管 scheduled 模式选择远端服务，不接管相机媒体管线。
 
@@ -48,7 +48,7 @@ def ok(self) -> bool
 
 Whether every registered resource closed successfully.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L24)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L24)
 
 ## kit.device.Device
 
@@ -74,7 +74,7 @@ def __init__(self, capability_snapshot: Capabilities, *, factories: Optional[Map
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L47)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L47)
 
 ### kit.device.Device.open
 
@@ -90,7 +90,7 @@ presence remains ``UNKNOWN`` rather than verified.  Passing a name in
 ``require_verified`` therefore fails closed until a native handshake
 reports that capability.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L65)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L65)
 
 ### kit.device.Device.frame_source
 
@@ -104,7 +104,7 @@ On extension firmware this is the dma-buf broker.  The existing RTSP
 decoder remains a compatibility fallback and is reported through the
 capability snapshot rather than disguised as zero-copy.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L130)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L130)
 
 ### kit.device.Device.result_publisher
 
@@ -117,7 +117,7 @@ Create a result publisher.
 ``kind="osd"`` explicitly selects native result ingress; merely seeing
 its socket never changes the existing software-overlay default.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L152)
 
 ### kit.device.Device.result_batch_publisher
 
@@ -132,7 +132,7 @@ be closed with it.  The wrapper converts explicit coordinate spaces and
 uses the sink's checked path, so synchronous native rejection cannot be
 reported as a successful :class:`~kit.ai.PublishReport`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L174)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L174)
 
 ### kit.device.Device.image_ops
 
@@ -142,7 +142,7 @@ def image_ops(self, **kwargs)
 
 Open the public RGA image-operation context.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L195)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L195)
 
 ### kit.device.Device.rknn_session
 
@@ -156,7 +156,7 @@ appmgr injects the service endpoint only for a manifest-v2 scheduled
 NPU application.  Direct/developer callers keep the existing guarded
 local RKNN session unless they pass an explicit factory.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L212)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L212)
 
 ### kit.device.Device.control
 
@@ -169,7 +169,7 @@ Create the device-settings control plane.
 Control is the only compatibility surface that may use entry.cgi.  It
 is not used for frame transport, RGA, inference, or result delivery.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L241)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L241)
 
 ### kit.device.Device.close
 
@@ -179,7 +179,7 @@ def close(self) -> CloseReport
 
 Close every owned resource in reverse order; never stop midway.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L262)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L262)
 
 ### kit.device.Device.close_report
 
@@ -195,7 +195,7 @@ value for exception suppression.  Applications that use ``with`` can
 inspect this property after the block to detect best-effort cleanup
 failures.  It is ``None`` until closing begins.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L329)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L329)
 
 ### kit.device.Device.__enter__
 
@@ -205,7 +205,7 @@ def __enter__(self) -> 'Device'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L341)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L341)
 
 ### kit.device.Device.__exit__
 
@@ -215,4 +215,4 @@ def __exit__(self, exc_type, exc, traceback) -> None
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/device.py#L345)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/device.py#L345)

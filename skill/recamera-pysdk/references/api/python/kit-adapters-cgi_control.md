@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/cgi_control.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/cgi_control.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/cgi_control.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/cgi_control.py)；签名由 AST 提取，不导入硬件依赖。
 
 现有固件的控制面兼容适配器：设置内置推理和抓 JPEG。snapshot 是取帧编码，不是 CGI 原生抓图接口。
 
@@ -76,7 +76,7 @@ def __init__(self, host: str='127.0.0.1', port: int=443, use_tls: bool=True, mod
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/cgi_control.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/cgi_control.py#L82)
 
 ### kit.adapters.cgi_control.CgiControl.set_inference
 
@@ -90,7 +90,7 @@ Maps to POST /model/inference?id=<model_id> with a JSON body carrying
 only the fields actually supplied (the handler treats each key as an
 independent optional update).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/cgi_control.py#L267)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/cgi_control.py#L267)
 
 ### kit.adapters.cgi_control.CgiControl.get_inference
 
@@ -103,7 +103,7 @@ Read current inference state (helper for verification / callers).
 Returns the handler payload, e.g.
 {"iEnable","sModel","iFPS","iActualFPS","sStatus", ...}.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/cgi_control.py#L315)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/cgi_control.py#L315)
 
 ### kit.adapters.cgi_control.CgiControl.snapshot
 
@@ -117,4 +117,4 @@ entry.cgi has no frame-grab endpoint, so this proxies a single frame
 through whichever FrameSource the capability registry selects (official
 broker or ffmpeg RTSP workaround), then JPEG-encodes it with OpenCV.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/cgi_control.py#L323)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/cgi_control.py#L323)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/buffer.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/buffer.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py)；签名由 AST 提取，不导入硬件依赖。
 
 CPU／DMA-BUF／其他后端图像缓冲描述与所有权。borrowed 不能跨源 lease 保存；owned copy 才能独立持有。
 
@@ -104,7 +104,7 @@ def __iter__(self)
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L79)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L79)
 
 ## kit.buffer.BufferBackend
 
@@ -123,7 +123,7 @@ def map(self) -> Any
 
 Map the current lease and return a buffer-protocol object.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L88)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L88)
 
 ### kit.buffer.BufferBackend.release
 
@@ -133,7 +133,7 @@ def release(self) -> None
 
 Release the lease; the operation must be idempotent.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L91)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L91)
 
 ### kit.buffer.BufferBackend.released
 
@@ -144,7 +144,7 @@ def released(self) -> bool
 
 Whether the producer has invalidated this borrowed buffer.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L95)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L95)
 
 ## kit.buffer.ImageBuffer
 
@@ -172,7 +172,7 @@ def __init__(self, *, width: int, height: int, format: PixelFormat | str, memory
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L139)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L139)
 
 ### kit.buffer.ImageBuffer.from_numpy
 
@@ -187,7 +187,7 @@ Create an owned CPU buffer from an array.
 it does not imply a native borrowed lease.  Use ``copy=True`` when the
 producer may mutate or free the original array.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L198)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L198)
 
 ### kit.buffer.ImageBuffer.from_backend
 
@@ -201,7 +201,7 @@ Create a borrowed buffer around a native lease.
 ``planes`` is mandatory and is copied verbatim.  The high-level API
 never guesses an aligned plane layout.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L247)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L247)
 
 ### kit.buffer.ImageBuffer.released
 
@@ -212,7 +212,7 @@ def released(self) -> bool
 
 Whether this object or its native producer invalidated the lease.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L282)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L282)
 
 ### kit.buffer.ImageBuffer.owned
 
@@ -223,7 +223,7 @@ def owned(self) -> bool
 
 Whether this object owns its storage.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L302)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L302)
 
 ### kit.buffer.ImageBuffer.numpy
 
@@ -237,7 +237,7 @@ Native backends may expose a one-dimensional mapped byte view; format-
 specific reshaping remains the backend's responsibility.  Requesting a
 copy is the portable way to keep data after the lease is released.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L320)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L320)
 
 ### kit.buffer.ImageBuffer.copy
 
@@ -253,7 +253,7 @@ guessing its format/stride, so the owned copy deliberately preserves
 the original dimensions and producer plane descriptors while keeping
 the copied NumPy array in its backend-provided shape.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L348)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L348)
 
 ### kit.buffer.ImageBuffer.release
 
@@ -263,7 +263,7 @@ def release(self) -> None
 
 Invalidate this object and release a native lease exactly once.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L372)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L372)
 
 ### kit.buffer.ImageBuffer.__enter__
 
@@ -273,7 +273,7 @@ def __enter__(self) -> 'ImageBuffer'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L421)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L421)
 
 ### kit.buffer.ImageBuffer.__exit__
 
@@ -283,4 +283,4 @@ def __exit__(self, exc_type, exc, traceback) -> bool
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/buffer.py#L425)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/buffer.py#L425)

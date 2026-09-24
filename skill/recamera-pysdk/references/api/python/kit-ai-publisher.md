@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/ai/publisher.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/ai/publisher.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py)；签名由 AST 提取，不导入硬件依赖。
 
 将 typed ResultBatch 转为旧 sink 的原图像素协议。PublishReport 证明本地接受，不是远端确认或录像成功。
 
@@ -62,7 +62,7 @@ def emit(self, payload: dict[str, Any], pts: float) -> None
 
 Publish one legacy result payload at a timestamp in seconds.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L73)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L73)
 
 ### kit.ai.publisher.LegacyResultSink.set_frame_size
 
@@ -72,7 +72,7 @@ def set_frame_size(self, w: int, h: int) -> None
 
 Set the original-frame pixel extent before ``emit``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L76)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L76)
 
 ### kit.ai.publisher.LegacyResultSink.emit_checked
 
@@ -82,7 +82,7 @@ def emit_checked(self, payload: dict[str, Any], pts: float) -> None
 
 Optional strict counterpart that surfaces local delivery failures.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L79)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L79)
 
 ### kit.ai.publisher.LegacyResultSink.set_frame_size_checked
 
@@ -92,7 +92,7 @@ def set_frame_size_checked(self, w: int, h: int) -> None
 
 Optional strict counterpart for frame geometry.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L82)
 
 ## kit.ai.publisher.PublishReport
 
@@ -140,7 +140,7 @@ def converted_pairs(self) -> int
 
 Total normalized/model coordinate pairs converted to pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L114)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L114)
 
 ### kit.ai.publisher.PublishReport.as_dict
 
@@ -150,7 +150,7 @@ def as_dict(self) -> dict[str, Any]
 
 Return JSON-compatible structured telemetry for health endpoints.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L119)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L119)
 
 ## kit.ai.publisher.to_legacy_payload
 
@@ -164,7 +164,7 @@ This function is side-effect free and is useful for inspection or custom
 transport integration.  It applies exactly the same strict coordinate and
 metadata rules as :class:`ResultBatchPublisher` but does not call a sink.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L482)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L482)
 
 ## kit.ai.publisher.ResultBatchPublisher
 
@@ -198,7 +198,7 @@ def __init__(self, sink: LegacyResultSink, *, model_to_pixel: ModelToPixel | Non
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L518)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L518)
 
 ### kit.ai.publisher.ResultBatchPublisher.sink_type
 
@@ -209,7 +209,7 @@ def sink_type(self) -> str
 
 Concrete sink class name used in reports, logs and error context.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L535)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L535)
 
 ### kit.ai.publisher.ResultBatchPublisher.publish
 
@@ -219,7 +219,7 @@ def publish(self, batch: ResultBatch) -> PublishReport
 
 Convert and synchronously publish one batch, returning its report.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L601)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L601)
 
 ## kit.ai.publisher.publish_result_batch
 
@@ -229,4 +229,4 @@ def publish_result_batch(sink: LegacyResultSink, batch: ResultBatch, *, model_to
 
 One-shot convenience wrapper around :class:`ResultBatchPublisher`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/ai/publisher.py#L661)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/ai/publisher.py#L661)

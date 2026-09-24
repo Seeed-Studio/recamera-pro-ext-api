@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/preprocess.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/preprocess.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/preprocess.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/preprocess.py)；签名由 AST 提取，不导入硬件依赖。
 
 CPU 图像读取、letterbox 与模型输入构造；返回映射信息，RGB/BGR 和归一化由模型约定决定。
 
@@ -45,7 +45,7 @@ def load_image(path: str) -> np.ndarray
 
 Load an image file as an HWC uint8 RGB numpy array.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/preprocess.py#L35)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/preprocess.py#L35)
 
 ## kit.runtime.preprocess.letterbox
 
@@ -58,7 +58,7 @@ Resize + pad an HWC uint8 RGB image to `new_shape`, preserving aspect ratio.
 Returns (padded_uint8_HWC, LetterboxInfo). Pure numpy nearest/bilinear-free
 resize via PIL when available (higher quality), else numpy nearest-neighbour.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/preprocess.py#L43)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/preprocess.py#L43)
 
 ## kit.runtime.preprocess.preprocess
 
@@ -71,4 +71,4 @@ Convenience: load (if a path) + letterbox.
 Returns (input_uint8_1HWC, LetterboxInfo). The array is shaped [1, H, W, 3]
 ready to hand to RknnModel.infer().
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/preprocess.py#L83)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/preprocess.py#L83)

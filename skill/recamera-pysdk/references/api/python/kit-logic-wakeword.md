@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/wakeword.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/wakeword.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py)；签名由 AST 提取，不导入硬件依赖。
 
 KWS 或 ASR 关键词唤醒接口；Sherpa 后端依赖额外 runtime/模型，不能假定固件默认包含。
 
@@ -93,7 +93,7 @@ def accept(self, frame: Union[bytes, 'object']) -> Optional[WakeEvent]
 
 Consume one chunk; return a WakeEvent iff the wake word just fired.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L69)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L69)
 
 ### kit.logic.wakeword.WakeWord.reset
 
@@ -103,7 +103,7 @@ def reset(self) -> None
 
 Re-arm / drop partial state (state machine calls on entering idle).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L73)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L73)
 
 ## kit.logic.wakeword.SherpaKwsWakeWord
 
@@ -121,7 +121,7 @@ def accept(self, frame: Union[bytes, 'object']) -> Optional[WakeEvent]
 
 输入音频采样与采样率，推进 Sherpa 在线关键词识别；返回唤醒事件或无事件结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L106)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L106)
 
 ### kit.logic.wakeword.SherpaKwsWakeWord.reset
 
@@ -131,7 +131,7 @@ def reset(self) -> None
 
 重置在线 KWS 流状态，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L120)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L120)
 
 ### kit.logic.wakeword.SherpaKwsWakeWord.__init__
 
@@ -141,7 +141,7 @@ def __init__(self, keywords_file: str=f'{DEFAULT_KWS_DIR}/keywords.txt', *, toke
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L81)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L81)
 
 ## kit.logic.wakeword.AsrKeywordWakeWord
 
@@ -163,7 +163,7 @@ def accept(self, frame: Union[bytes, 'object']) -> Optional[WakeEvent]
 
 消费音频块，按 ASR 结果匹配关键词并返回 WakeEvent 或 None；时延取决于 ASR 分段。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L146)
 
 ### kit.logic.wakeword.AsrKeywordWakeWord.reset
 
@@ -173,7 +173,7 @@ def reset(self) -> None
 
 清空累计音频/关键词状态，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L157)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L157)
 
 ### kit.logic.wakeword.AsrKeywordWakeWord.__init__
 
@@ -183,4 +183,4 @@ def __init__(self, asr, keywords: Union[str, List[str]], *, vad: Optional[VadSeg
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/wakeword.py#L133)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/wakeword.py#L133)

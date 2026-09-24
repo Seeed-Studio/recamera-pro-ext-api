@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/ctc.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/ctc.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/ctc.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/ctc.py)；签名由 AST 提取，不导入硬件依赖。
 
 OCR CTC 字典加载、blank/重复折叠与置信度解码；字典顺序必须匹配模型。
 
@@ -47,7 +47,7 @@ list length equals the model's number of output classes (6625 for the ch
 PP-OCRv3 rec model). Only \r/\n are stripped per line (spaces preserved),
 matching PaddleOCR.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/ctc.py#L26)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/ctc.py#L26)
 
 ## kit.runtime.postprocess.ctc.decode
 
@@ -66,4 +66,4 @@ raw output value at each emitted (non-blank, non-repeat) time-step -- the
 same quantity the first-gen C++ ctcDecode averaged (best_val). We do NOT
 re-softmax (that would flatten a peaked 6625-way distribution to ~1/6625).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/ctc.py#L54)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/ctc.py#L54)

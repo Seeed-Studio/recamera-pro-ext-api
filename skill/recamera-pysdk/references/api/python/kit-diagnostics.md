@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/diagnostics.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/diagnostics.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py)；签名由 AST 提取，不导入硬件依赖。
 
 结构化日志、敏感 URL 脱敏及重复告警限流；日志级别不等同于应用健康状态。
 
@@ -41,7 +41,7 @@ Return a namespaced logger without changing global logging state.
 ``get_logger("media.rga")`` returns ``recamera.media.rga``.  Passing an
 already-qualified name is also supported.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L45)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L45)
 
 ## kit.diagnostics.configure_logging
 
@@ -55,7 +55,7 @@ The function is idempotent: a handler previously created by this function
 is updated rather than duplicated.  Other handlers installed by the host
 application are left untouched.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L69)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L69)
 
 ## kit.diagnostics.redact_url
 
@@ -69,7 +69,7 @@ The scheme, host, port, path, and non-secret query parameters are retained
 so the resulting diagnostic remains actionable.  Malformed/non-URL text is
 handled conservatively by masking ``user:password@`` patterns.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L103)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L103)
 
 ## kit.diagnostics.WarningLimiter
 
@@ -91,7 +91,7 @@ def __init__(self, logger: logging.Logger, limit: int=3) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L144)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L144)
 
 ### kit.diagnostics.WarningLimiter.warning
 
@@ -101,7 +101,7 @@ def warning(self, key: str, message: str, *args, **kwargs) -> int
 
 Record and conditionally log one occurrence; return total count.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L152)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L152)
 
 ### kit.diagnostics.WarningLimiter.count
 
@@ -111,4 +111,4 @@ def count(self, key: str) -> int
 
 Return the total number of occurrences recorded for ``key``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/diagnostics.py#L169)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/diagnostics.py#L169)

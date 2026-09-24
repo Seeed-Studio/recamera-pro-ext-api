@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/workflow/queue.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/workflow/queue.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py)；签名由 AST 提取，不导入硬件依赖。
 
 线程安全有界 FIFO；block/drop_oldest/drop_newest 均有明确结果，丢弃项由调用者释放。
 
@@ -166,7 +166,7 @@ def accepted(self) -> bool
 
 Whether the offered item entered the queue.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L87)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L87)
 
 ### kit.workflow.queue.PutResult.dropped
 
@@ -177,7 +177,7 @@ def dropped(self) -> bool
 
 Whether either an old or the offered item was discarded.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L93)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L93)
 
 ## kit.workflow.queue.QueueStats
 
@@ -226,7 +226,7 @@ def dropped(self) -> int
 
 Total items discarded by either drop policy.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L128)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L128)
 
 ### kit.workflow.queue.QueueStats.accepted
 
@@ -237,7 +237,7 @@ def accepted(self) -> int
 
 Alias for the total number of successfully enqueued items.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L134)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L134)
 
 ### kit.workflow.queue.QueueStats.as_dict
 
@@ -247,7 +247,7 @@ def as_dict(self) -> dict[str, Any]
 
 Return a JSON-compatible metrics mapping.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L139)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L139)
 
 ## kit.workflow.queue.InputQueue
 
@@ -282,7 +282,7 @@ def __init__(self, capacity: int, policy: DropPolicy | str=DropPolicy.BLOCK, *, 
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L195)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L195)
 
 ### kit.workflow.queue.InputQueue.closed
 
@@ -293,7 +293,7 @@ def closed(self) -> bool
 
 Whether no further items may be put.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L237)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L237)
 
 ### kit.workflow.queue.InputQueue.qsize
 
@@ -303,7 +303,7 @@ def qsize(self) -> int
 
 Return the current item count under the queue lock.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L243)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L243)
 
 ### kit.workflow.queue.InputQueue.empty
 
@@ -313,7 +313,7 @@ def empty(self) -> bool
 
 Whether the queue currently contains no items.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L249)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L249)
 
 ### kit.workflow.queue.InputQueue.full
 
@@ -323,7 +323,7 @@ def full(self) -> bool
 
 Whether the queue is currently at capacity.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L254)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L254)
 
 ### kit.workflow.queue.InputQueue.stats
 
@@ -333,7 +333,7 @@ def stats(self) -> QueueStats
 
 Return one internally consistent snapshot of all counters.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L280)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L280)
 
 ### kit.workflow.queue.InputQueue.put
 
@@ -343,7 +343,7 @@ def put(self, item: T, timeout: float | None=None) -> PutResult[T]
 
 Put one item according to policy, or raise a typed blocking failure.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L300)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L300)
 
 ### kit.workflow.queue.InputQueue.put_nowait
 
@@ -353,7 +353,7 @@ def put_nowait(self, item: T) -> PutResult[T]
 
 Put without waiting; a full BLOCK queue raises backpressure.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L386)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L386)
 
 ### kit.workflow.queue.InputQueue.get
 
@@ -363,7 +363,7 @@ def get(self, timeout: float | None=None) -> T
 
 Remove and return the oldest item, waiting up to ``timeout``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L391)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L391)
 
 ### kit.workflow.queue.InputQueue.get_nowait
 
@@ -373,7 +373,7 @@ def get_nowait(self) -> T
 
 Get without waiting; an empty open queue raises ``QueueTimeoutError``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L432)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L432)
 
 ### kit.workflow.queue.InputQueue.close
 
@@ -383,7 +383,7 @@ def close(self) -> QueueStats
 
 Prevent puts, wake every waiter and return the resulting snapshot.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L437)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L437)
 
 ### kit.workflow.queue.InputQueue.__len__
 
@@ -393,7 +393,7 @@ def __len__(self) -> int
 
 返回当前 qsize() 快照；并发生产/消费可立即改变长度，不应以 len(queue) 代替 get()/put() 的原子结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L446)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L446)
 
 ### kit.workflow.queue.InputQueue.__iter__
 
@@ -403,4 +403,4 @@ def __iter__(self) -> Iterator[T]
 
 Drain items until the closed queue becomes empty.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/queue.py#L449)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/queue.py#L449)

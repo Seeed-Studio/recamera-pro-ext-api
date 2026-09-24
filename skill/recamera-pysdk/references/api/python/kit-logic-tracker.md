@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/tracker.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/tracker.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py)；签名由 AST 提取，不导入硬件依赖。
 
 轻量 IoU 跟踪；track ID 为此跟踪器生命周期内身份，不能当永久人员身份。
 
@@ -66,7 +66,7 @@ def clamp(self) -> 'TrackerConfig'
 
 原地限制配置字段到实现允许范围，并返回自身；字段单位及默认值见配置类。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L49)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L49)
 
 ## kit.logic.tracker.Track
 
@@ -111,7 +111,7 @@ def xyxy_norm(self) -> List[float]
 
 返回当前跟踪框的归一化 xyxy 坐标；不同于 App.emit 常用的原图像素框。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L87)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L87)
 
 ## kit.logic.tracker.Tracker
 
@@ -129,7 +129,7 @@ def __init__(self, config: Optional[TrackerConfig]=None) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L99)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L99)
 
 ### kit.logic.tracker.Tracker.update
 
@@ -148,7 +148,7 @@ frame_w/h : original frame size, to normalise boxes.
 Returns the list of currently-VISIBLE tracks (lost_frames == 0), each
 carrying a stable `track_id`, velocity and current/previous foot point.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L207)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L207)
 
 ### kit.logic.tracker.Tracker.active_tracks
 
@@ -158,7 +158,7 @@ def active_tracks(self) -> List[Track]
 
 返回当前活跃 Track 列表，生命周期由跟踪器管理。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L288)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L288)
 
 ### kit.logic.tracker.Tracker.track_count
 
@@ -169,4 +169,4 @@ def track_count(self) -> int
 
 返回当前跟踪状态中记录的数量。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/tracker.py#L292)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/tracker.py#L292)

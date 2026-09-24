@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/result_sink.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/result_sink.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py)；签名由 AST 提取，不导入硬件依赖。
 
 旧字典结果协议、严格发送、输出网关及兼容 WS。emit 的 pts 为秒，box 为原图像素；受管应用使用 App.emit。
 
@@ -96,7 +96,7 @@ loopback/local all resolve to 127.0.0.1. An explicit routable address
 (e.g. "0.0.0.0") is honoured for the documented LAN-direct case, but that
 exposes UNAUTHENTICATED results and must be opted into on purpose.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L94)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L94)
 
 ## kit.adapters.result_sink.offer_latest_wins
 
@@ -110,7 +110,7 @@ Returns True if an old item had to be dropped to make room. A live-video
 overlay wants the freshest frame, never a backlog, so a slow reader loses
 stale frames instead of the producer blocking (C10).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L111)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L111)
 
 ## kit.adapters.result_sink.admit_reason
 
@@ -123,7 +123,7 @@ Return None if a new client may be admitted, else a short refusal reason.
 Two independent caps (C10): a global fd budget, and a per-IP cap so one peer
 cannot consume the whole budget by itself.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L134)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L134)
 
 ## kit.adapters.result_sink.ResultSink
 
@@ -142,7 +142,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 Publish one frame's structured result payload.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L216)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L216)
 
 ### kit.adapters.result_sink.ResultSink.emit_meta
 
@@ -159,7 +159,7 @@ MqttSink deliberately ignores it (an empty HA state doc every second is
 noise). This keeps metrics strictly additive: existing results/events/
 MQTT behaviour is untouched.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L220)
 
 ### kit.adapters.result_sink.ResultSink.emit_checked
 
@@ -175,7 +175,7 @@ callers that must not mistake a local rejection for success use this
 additive method.  The default delegates to ``emit``; sinks that hide
 native/fan-out failures override it.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L232)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L232)
 
 ### kit.adapters.result_sink.ResultSink.request_recording
 
@@ -185,7 +185,7 @@ def request_recording(self, event_kind: str, pts: float) -> bool
 
 Only a managed gateway implements recording; telemetry sinks do not.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L244)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L244)
 
 ### kit.adapters.result_sink.ResultSink.set_frame_size
 
@@ -202,7 +202,7 @@ the extension-API OSD renderer requires. Default: no-op, so the
 WS/stdout/MQTT workaround sinks (which keep their own pixel/JSON
 convention and wire format) are completely unaffected.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L248)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L248)
 
 ### kit.adapters.result_sink.ResultSink.set_frame_size_checked
 
@@ -212,7 +212,7 @@ def set_frame_size_checked(self, w: int, h: int) -> None
 
 Set geometry while surfacing synchronous backend failures.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L260)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L260)
 
 ### kit.adapters.result_sink.ResultSink.on_config_reload
 
@@ -228,7 +228,7 @@ re-read effective config, so a sink whose behaviour is config-driven
 apply:"live" changes without a restart -- for EVERY app, whatever loop
 shape it uses. Default: no-op; sinks with no config react to nothing.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L265)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L265)
 
 ### kit.adapters.result_sink.ResultSink.stats
 
@@ -245,7 +245,7 @@ Local counters only: a frame accepted locally that the server later
 drops is not reflected here until the server-ACK protocol lands
 (docs/guide/result-push.md).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L276)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L276)
 
 ### kit.adapters.result_sink.ResultSink.close
 
@@ -255,7 +255,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L287)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L287)
 
 ### kit.adapters.result_sink.ResultSink.__enter__
 
@@ -265,7 +265,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L290)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L290)
 
 ### kit.adapters.result_sink.ResultSink.__exit__
 
@@ -275,7 +275,7 @@ def __exit__(self, *exc)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L293)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L293)
 
 ## kit.adapters.result_sink.StdoutSink
 
@@ -293,7 +293,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 把带时间戳的结果输出到 stdout，返回 None；适合调试，不会自动出现在官方预览。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L309)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L309)
 
 ### kit.adapters.result_sink.StdoutSink.emit_meta
 
@@ -303,7 +303,7 @@ def emit_meta(self, payload: dict) -> None
 
 按该 sink 的能力处理配置/元信息；不是一次模型推理，也不证明前端已经收到配置。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L314)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L314)
 
 ### kit.adapters.result_sink.StdoutSink.emit_checked
 
@@ -321,7 +321,7 @@ native/fan-out failures override it.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L232)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L232)
 
 ### kit.adapters.result_sink.StdoutSink.request_recording
 
@@ -333,7 +333,7 @@ Only a managed gateway implements recording; telemetry sinks do not.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L244)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L244)
 
 ### kit.adapters.result_sink.StdoutSink.set_frame_size
 
@@ -352,7 +352,7 @@ convention and wire format) are completely unaffected.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L248)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L248)
 
 ### kit.adapters.result_sink.StdoutSink.set_frame_size_checked
 
@@ -364,7 +364,7 @@ Set geometry while surfacing synchronous backend failures.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L260)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L260)
 
 ### kit.adapters.result_sink.StdoutSink.on_config_reload
 
@@ -382,7 +382,7 @@ shape it uses. Default: no-op; sinks with no config react to nothing.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L265)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L265)
 
 ### kit.adapters.result_sink.StdoutSink.stats
 
@@ -401,7 +401,7 @@ drops is not reflected here until the server-ACK protocol lands
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L276)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L276)
 
 ### kit.adapters.result_sink.StdoutSink.close
 
@@ -413,7 +413,7 @@ def close(self) -> None
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L287)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L287)
 
 ### kit.adapters.result_sink.StdoutSink.__enter__
 
@@ -425,7 +425,7 @@ def __enter__(self)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L290)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L290)
 
 ### kit.adapters.result_sink.StdoutSink.__exit__
 
@@ -437,7 +437,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L293)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L293)
 
 ### kit.adapters.result_sink.StdoutSink.__init__
 
@@ -447,7 +447,7 @@ def __init__(self, only_nonempty: bool=False)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L306)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L306)
 
 ## kit.adapters.result_sink.WsResultSink
 
@@ -470,7 +470,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 将结果提交到该独立 WS sink，返回 None。托管 App 使用 App.emit/平台网关，不自行监听保留端口。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L502)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L502)
 
 ### kit.adapters.result_sink.WsResultSink.emit_meta
 
@@ -482,7 +482,7 @@ Broadcast a metrics/meta message on the SAME WS channel as results.
 Tagged with its own `type` (e.g. "metrics") so the panel can demux; it
 does NOT advance the results `seq` counter.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L521)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L521)
 
 ### kit.adapters.result_sink.WsResultSink.emit_checked
 
@@ -500,7 +500,7 @@ native/fan-out failures override it.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L232)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L232)
 
 ### kit.adapters.result_sink.WsResultSink.request_recording
 
@@ -512,7 +512,7 @@ Only a managed gateway implements recording; telemetry sinks do not.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L244)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L244)
 
 ### kit.adapters.result_sink.WsResultSink.set_frame_size
 
@@ -525,7 +525,7 @@ per frame). Unlike OfficialResultSink -- which DIVIDES coords by this to
 normalize -- WsResultSink keeps pixel coords verbatim and just ANNOUNCES
 the reference size in the wire message so the overlay maps 1:1.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L384)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L384)
 
 ### kit.adapters.result_sink.WsResultSink.set_frame_size_checked
 
@@ -537,7 +537,7 @@ Set geometry while surfacing synchronous backend failures.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L260)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L260)
 
 ### kit.adapters.result_sink.WsResultSink.on_config_reload
 
@@ -555,7 +555,7 @@ shape it uses. Default: no-op; sinks with no config react to nothing.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L265)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L265)
 
 ### kit.adapters.result_sink.WsResultSink.stats
 
@@ -574,7 +574,7 @@ drops is not reflected here until the server-ACK protocol lands
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L276)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L276)
 
 ### kit.adapters.result_sink.WsResultSink.close
 
@@ -584,7 +584,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L535)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L535)
 
 ### kit.adapters.result_sink.WsResultSink.__enter__
 
@@ -596,7 +596,7 @@ def __enter__(self)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L290)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L290)
 
 ### kit.adapters.result_sink.WsResultSink.__exit__
 
@@ -608,7 +608,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L293)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L293)
 
 ### kit.adapters.result_sink.WsResultSink.__init__
 
@@ -618,7 +618,7 @@ def __init__(self, host: str='127.0.0.1', port: int=8124, app_id: str='app', pre
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L343)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L343)
 
 ### kit.adapters.result_sink.WsResultSink.publish_envelope
 
@@ -629,7 +629,7 @@ def publish_envelope(self, envelope: dict) -> None
 Broadcast a pre-built canonical envelope verbatim (used by
 ConfigurableSink's WsChannel). No second seq/timestamp/frame stamp.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L495)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L495)
 
 ### kit.adapters.result_sink.WsResultSink.client_count
 
@@ -639,7 +639,7 @@ def client_count(self) -> int
 
 返回此 sink/channel 当前可报告的客户端数；零或非零都不证明某条业务结果已被远端消费。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L530)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L530)
 
 ## kit.adapters.result_sink.GatewayResultSink
 
@@ -666,7 +666,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 将 legacy payload 与秒级 pts 封装并排队交给 AppMgr，返回 None；生产者不要靠自建 socket 绕过此路由。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L762)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L762)
 
 ### kit.adapters.result_sink.GatewayResultSink.emit_meta
 
@@ -676,7 +676,7 @@ def emit_meta(self, payload: dict) -> None
 
 按该 sink 的能力处理配置/元信息；不是一次模型推理，也不证明前端已经收到配置。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L776)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L776)
 
 ### kit.adapters.result_sink.GatewayResultSink.emit_checked
 
@@ -694,7 +694,7 @@ native/fan-out failures override it.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L232)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L232)
 
 ### kit.adapters.result_sink.GatewayResultSink.request_recording
 
@@ -704,7 +704,7 @@ def request_recording(self, event_kind: str, pts: float) -> bool
 
 提交 recording_request（event_kind、秒级 pts、递增 seq）并返回本地队列是否接受的 bool；AppMgr 仍会校验录像授权。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L711)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L711)
 
 ### kit.adapters.result_sink.GatewayResultSink.set_frame_size
 
@@ -714,7 +714,7 @@ def set_frame_size(self, w: int, h: int) -> None
 
 设置后续结果的原始画面宽、高（像素），供坐标换算/消息封装使用；本身不发送结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L753)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L753)
 
 ### kit.adapters.result_sink.GatewayResultSink.set_frame_size_checked
 
@@ -726,7 +726,7 @@ Set geometry while surfacing synchronous backend failures.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L260)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L260)
 
 ### kit.adapters.result_sink.GatewayResultSink.on_config_reload
 
@@ -744,7 +744,7 @@ shape it uses. Default: no-op; sinks with no config react to nothing.
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L265)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L265)
 
 ### kit.adapters.result_sink.GatewayResultSink.stats
 
@@ -754,7 +754,7 @@ def stats(self) -> dict
 
 返回 sent/dropped/send_error/queued/backend 统计字典；sent 是本地传输计数，不是消费者确认。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L782)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L782)
 
 ### kit.adapters.result_sink.GatewayResultSink.close
 
@@ -764,7 +764,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L787)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L787)
 
 ### kit.adapters.result_sink.GatewayResultSink.__enter__
 
@@ -776,7 +776,7 @@ def __enter__(self)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L290)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L290)
 
 ### kit.adapters.result_sink.GatewayResultSink.__exit__
 
@@ -788,7 +788,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L293)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L293)
 
 ### kit.adapters.result_sink.GatewayResultSink.__init__
 
@@ -798,7 +798,7 @@ def __init__(self, host: str='127.0.0.1', port: int=8124, app_id: str='app', pre
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L573)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L573)
 
 ### kit.adapters.result_sink.GatewayResultSink.publish_envelope
 
@@ -808,7 +808,7 @@ def publish_envelope(self, envelope: dict) -> None
 
 把已构造的完整结果 envelope 排入受管网关发送队列；不得伪造 AppMgr 注入的身份字段。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L757)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L757)
 
 ## kit.adapters.result_sink.MultiSink
 
@@ -832,7 +832,7 @@ def emit(self, payload: dict, pts: float) -> None
 
 向组合的各个 sink 分发 payload 和 pts，返回 None；每条下游的可用性/错误处理遵循其自身契约。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L829)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L829)
 
 ### kit.adapters.result_sink.MultiSink.emit_meta
 
@@ -842,7 +842,7 @@ def emit_meta(self, payload: dict) -> None
 
 按该 sink 的能力处理配置/元信息；不是一次模型推理，也不证明前端已经收到配置。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L884)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L884)
 
 ### kit.adapters.result_sink.MultiSink.emit_checked
 
@@ -852,7 +852,7 @@ def emit_checked(self, payload: dict, pts: float) -> None
 
 Attempt every child and report any synchronous failure.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L861)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L861)
 
 ### kit.adapters.result_sink.MultiSink.request_recording
 
@@ -862,7 +862,7 @@ def request_recording(self, event_kind: str, pts: float) -> bool
 
 将显式录像请求委托给支持此能力的下游，返回是否有下游接受的 bool；不表示磁盘已生成录像。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L875)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L875)
 
 ### kit.adapters.result_sink.MultiSink.set_frame_size
 
@@ -872,7 +872,7 @@ def set_frame_size(self, w: int, h: int) -> None
 
 设置后续结果的原始画面宽、高（像素），供坐标换算/消息封装使用；本身不发送结果。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L891)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L891)
 
 ### kit.adapters.result_sink.MultiSink.set_frame_size_checked
 
@@ -882,7 +882,7 @@ def set_frame_size_checked(self, w: int, h: int) -> None
 
 Attempt every child geometry update and aggregate failures.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L899)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L899)
 
 ### kit.adapters.result_sink.MultiSink.on_config_reload
 
@@ -892,7 +892,7 @@ def on_config_reload(self, config: dict) -> None
 
 把配置热更新传递给支持回调的下游 sink，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L913)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L913)
 
 ### kit.adapters.result_sink.MultiSink.stats
 
@@ -904,7 +904,7 @@ Per-child stats keyed by child class name (only children that report
 anything). Lets an app read delivery diagnostics through the fan-out
 without knowing which concrete sinks are behind it.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L934)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L934)
 
 ### kit.adapters.result_sink.MultiSink.close
 
@@ -914,7 +914,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L951)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L951)
 
 ### kit.adapters.result_sink.MultiSink.__enter__
 
@@ -926,7 +926,7 @@ def __enter__(self)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L290)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L290)
 
 ### kit.adapters.result_sink.MultiSink.__exit__
 
@@ -938,7 +938,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L293)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L293)
 
 ### kit.adapters.result_sink.MultiSink.__init__
 
@@ -948,7 +948,7 @@ def __init__(self, sinks: List[ResultSink])
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L826)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L826)
 
 ### kit.adapters.result_sink.MultiSink.client_count
 
@@ -958,7 +958,7 @@ def client_count(self) -> int
 
 返回此 sink/channel 当前可报告的客户端数；零或非零都不证明某条业务结果已被远端消费。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L923)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L923)
 
 ## kit.adapters.result_sink.OutputMessage
 
@@ -1010,7 +1010,7 @@ def publish(self, message: 'OutputMessage') -> None
 
 输出通道基类协议，具体子类负责传输 OutputMessage；不要直接把基类当作可用通道。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1000)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1000)
 
 ### kit.adapters.result_sink.OutputChannel.client_count
 
@@ -1020,7 +1020,7 @@ def client_count(self) -> int
 
 返回此 sink/channel 当前可报告的客户端数；零或非零都不证明某条业务结果已被远端消费。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1003)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1003)
 
 ### kit.adapters.result_sink.OutputChannel.close
 
@@ -1030,7 +1030,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1006)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1006)
 
 ## kit.adapters.result_sink.OutputFormatter
 
@@ -1049,7 +1049,7 @@ def format(self, envelope: dict, *, channel: str) -> List['OutputMessage']
 
 将规范结果 envelope 按此 formatter 规则编码为 OutputMessage 列表（含 body/topic 等通道负载）；channel 可用于通道筛选。格式化本身不建立网络连接。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1014)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1014)
 
 ### kit.adapters.result_sink.OutputFormatter.on_channel_ready
 
@@ -1060,7 +1060,7 @@ def on_channel_ready(self, channel: 'OutputChannel') -> List['OutputMessage']
 Messages to publish when a channel (re)connects -- e.g. HA discovery
 + retained `online`. Default: nothing.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1017)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1017)
 
 ## kit.adapters.result_sink.open_result_sink
 
@@ -1076,4 +1076,4 @@ firmware there is no official ingress, so the registry falls back to the
 workaround sink selected by `kind` and behaviour is unchanged. The "stdout"
 debug sink is always honoured verbatim.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/result_sink.py#L1023)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/result_sink.py#L1023)

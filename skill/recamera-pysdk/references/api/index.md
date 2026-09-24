@@ -2,7 +2,7 @@
 
 按任务只读需要的模块。以下文件随 skill 安装，可离线查阅。
 
-源码基线：`7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6`；打包器版本仍由 `sdk-contract-lock.json` 单独固定。
+源码基线：`635ffc3c51d596dd2e8139f297798162e6be62b9`；打包器版本仍由 `sdk-contract-lock.json` 单独固定。
 
 先读 [接口特性、权限、生命周期及示例](features.md)。
 
@@ -64,6 +64,7 @@
 | [kit.runtime.postprocess.pose](python/kit-runtime-postprocess-pose.md) | YOLO pose 框和关键点解码；关键点数量/索引与模型一致。 |
 | [kit.runtime.preprocess](python/kit-runtime-preprocess.md) | CPU 图像读取、letterbox 与模型输入构造；返回映射信息，RGB/BGR 和归一化由模型约定决定。 |
 | [kit.runtime.remote](python/kit-runtime-remote.md) | scheduled 推理服务 client。支持共享 IO/兼容传输及 DMA prepared input，模型授权来自 AppMgr 分配身份和 manifest 工件。 |
+| [kit.runtime.rknnlite](python/kit-runtime-rknnlite.md) | 平台 RKNNLite 兼容包装器：复制输出为独立 NumPy 数组，在初始化、推理返回/异常及释放时回收厂商循环缓冲；ctypes 后端不执行这些操作。普通应用使用 App 模型工厂，不直接实例化本后端。 |
 | [kit.workflow](python/kit-workflow.md) | 同步 typed workflow 与有界队列公共导出；组合阶段不自动创建线程，也不自动仲裁 NPU。 |
 | [kit.workflow.node](python/kit-workflow-node.md) | Stage、WorkflowContext 与协作取消/超时。资源声明只是显式对象依赖，超时在阶段边界检查，不能强制打断 native 调用。 |
 | [kit.workflow.queue](python/kit-workflow-queue.md) | 线程安全有界 FIFO；block/drop_oldest/drop_newest 均有明确结果，丢弃项由调用者释放。 |

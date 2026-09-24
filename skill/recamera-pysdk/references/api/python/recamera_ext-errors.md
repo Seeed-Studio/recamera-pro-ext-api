@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[sdk/python/recamera_ext/errors.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[sdk/python/recamera_ext/errors.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py)；签名由 AST 提取，不导入硬件依赖。
 
 native 返回码到 Python typed errors 的映射；保留 operation/detail，区分超时、权限、背压、格式与 capability 缺失。
 
@@ -91,7 +91,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.RecameraError.code_value
 
@@ -102,7 +102,7 @@ def code_value(self) -> Optional[int]
 
 Numeric error code, including unknown native return values.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.RecameraError.retryable
 
@@ -116,7 +116,7 @@ Whether retrying later is generally reasonable.
 This is a hint, not a retry policy.  Backpressure requires releasing old
 leases first, and an internal error may still be permanent.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.RecameraRuntimeError
 
@@ -136,7 +136,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.RecameraRuntimeError.code_value
 
@@ -149,7 +149,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.RecameraRuntimeError.retryable
 
@@ -165,7 +165,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.VersionError
 
@@ -185,7 +185,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.VersionError.code_value
 
@@ -198,7 +198,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.VersionError.retryable
 
@@ -214,7 +214,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.AuthenticationError
 
@@ -234,7 +234,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.AuthenticationError.code_value
 
@@ -247,7 +247,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.AuthenticationError.retryable
 
@@ -263,7 +263,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.BusyError
 
@@ -283,7 +283,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.BusyError.code_value
 
@@ -296,7 +296,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.BusyError.retryable
 
@@ -312,7 +312,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.FormatError
 
@@ -332,7 +332,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.FormatError.code_value
 
@@ -345,7 +345,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.FormatError.retryable
 
@@ -361,7 +361,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.BackpressureError
 
@@ -381,7 +381,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.BackpressureError.code_value
 
@@ -394,7 +394,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.BackpressureError.retryable
 
@@ -410,7 +410,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.RateLimitError
 
@@ -430,7 +430,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.RateLimitError.code_value
 
@@ -443,7 +443,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.RateLimitError.retryable
 
@@ -459,7 +459,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.InternalError
 
@@ -479,7 +479,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.InternalError.code_value
 
@@ -492,7 +492,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.InternalError.retryable
 
@@ -508,7 +508,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.UnknownNativeError
 
@@ -528,7 +528,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.UnknownNativeError.code_value
 
@@ -541,7 +541,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.UnknownNativeError.retryable
 
@@ -557,7 +557,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.CapabilityUnavailableError
 
@@ -577,7 +577,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.CapabilityUnavailableError.code_value
 
@@ -590,7 +590,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.CapabilityUnavailableError.retryable
 
@@ -606,7 +606,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.BufferReleasedError
 
@@ -626,7 +626,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.BufferReleasedError.code_value
 
@@ -639,7 +639,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.BufferReleasedError.retryable
 
@@ -655,7 +655,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.HandleClosedError
 
@@ -675,7 +675,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.HandleClosedError.code_value
 
@@ -688,7 +688,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.HandleClosedError.retryable
 
@@ -704,7 +704,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.AcquireTimeoutError
 
@@ -724,7 +724,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.AcquireTimeoutError.code_value
 
@@ -737,7 +737,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.AcquireTimeoutError.retryable
 
@@ -753,7 +753,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.LibraryLoadError
 
@@ -773,7 +773,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.LibraryLoadError.code_value
 
@@ -786,7 +786,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.LibraryLoadError.retryable
 
@@ -802,7 +802,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.ResultTooLarge
 
@@ -822,7 +822,7 @@ def __init__(self, message: Optional[str]=None, *, operation: Optional[str]=None
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L82)
 
 ### recamera_ext.errors.ResultTooLarge.code_value
 
@@ -835,7 +835,7 @@ Numeric error code, including unknown native return values.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L100)
 
 ### recamera_ext.errors.ResultTooLarge.retryable
 
@@ -851,7 +851,7 @@ leases first, and an internal error may still be permanent.
 
 此方法定义于基类 `RecameraError`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L110)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L110)
 
 ## recamera_ext.errors.error_from_rc
 
@@ -866,4 +866,4 @@ negative value returned by an operation.  Zero is rejected because it means
 success and converting it into an exception almost certainly masks a wrapper
 bug.  Unknown values remain available through ``exc.rc``/``code_value``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/errors.py#L221)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/errors.py#L221)

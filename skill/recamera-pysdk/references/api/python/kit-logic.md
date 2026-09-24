@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/__init__.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/__init__.py)；签名由 AST 提取，不导入硬件依赖。
 
 应用侧 CPU 业务逻辑组件命名空间；状态机依赖正确模型输出、坐标与时间戳，不替代模型。
 

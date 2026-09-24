@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/drowsiness.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/drowsiness.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py)；签名由 AST 提取，不导入硬件依赖。
 
 FaceMesh 468 点疲劳指标、打哈欠计数与 PERCLOS 状态机；使用单调帧时间（秒），仅为应用启发式逻辑。
 
@@ -87,7 +87,7 @@ def compute_metrics(landmarks, ear_threshold: float=EAR_THRESHOLD, mar_threshold
 
 landmarks: indexable of >=468 (x, y, ...) points (original-frame px).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L80)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L80)
 
 ## kit.logic.drowsiness.YawnState
 
@@ -126,7 +126,7 @@ def __init__(self, mar_threshold: float=MAR_THRESHOLD, consecutive_frames: int=5
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L113)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L113)
 
 ### kit.logic.drowsiness.YawnTracker.reset
 
@@ -136,7 +136,7 @@ def reset(self) -> None
 
 清空打哈欠状态及历史时间窗，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L122)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L122)
 
 ### kit.logic.drowsiness.YawnTracker.update
 
@@ -146,7 +146,7 @@ def update(self, mar: float, t: float) -> Tuple[YawnState, bool]
 
 输入当前口部 MAR 和单调秒级时间 t，更新持续/去抖状态并返回 YawnState。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L127)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L127)
 
 ## kit.logic.drowsiness.DrowsinessConfig
 
@@ -213,7 +213,7 @@ def __init__(self, cfg: DrowsinessConfig=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L176)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L176)
 
 ### kit.logic.drowsiness.DrowsinessTracker.reset
 
@@ -223,7 +223,7 @@ def reset(self) -> None
 
 清空眼部时间窗与疲劳累计状态，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L186)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L186)
 
 ### kit.logic.drowsiness.DrowsinessTracker.update
 
@@ -233,7 +233,7 @@ def update(self, ear: float, t: float, yawn_count_5min: int) -> DrowsinessState
 
 输入 EAR、秒级时间 t 和 yawn_count，更新闭眼持续/PERCLOS 并返回 DrowsinessState。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L189)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L189)
 
 ## kit.logic.drowsiness.DrowsinessLogic
 
@@ -255,7 +255,7 @@ def __init__(self, drowsy_cfg: DrowsinessConfig=None, mar_threshold: float=MAR_T
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L270)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L270)
 
 ### kit.logic.drowsiness.DrowsinessLogic.update
 
@@ -265,4 +265,4 @@ def update(self, landmarks, t: float)
 
 Returns (FaceMetrics, YawnState, DrowsinessState, yawn_event:bool).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/drowsiness.py#L280)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/drowsiness.py#L280)

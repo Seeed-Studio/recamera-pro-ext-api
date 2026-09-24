@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/geometry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/geometry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py)；签名由 AST 提取，不导入硬件依赖。
 
 姿态和区域几何工具；区分归一化跟踪坐标与原图像素输入，阈值/可见性随模型契约配置。
 
@@ -129,7 +129,7 @@ def visible(kpts: Sequence[Sequence[float]], j: int, thres: float) -> bool
 
 判断给定关键点置信度是否满足门限，返回 bool；输入关键点布局必须匹配调用约定。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L37)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L37)
 
 ## kit.logic.geometry.midpoint
 
@@ -140,7 +140,7 @@ def midpoint(kpts: Sequence[Sequence[float]], a: int, b: int, thres: float) -> O
 Midpoint of joints a,b. If both visible -> average; if only one -> that
 one; if neither -> None. Mirrors the first-gen `midpoint()` helper.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L41)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L41)
 
 ## kit.logic.geometry.torso_angle_deg
 
@@ -153,7 +153,7 @@ Angle of the torso away from vertical, in degrees (0 upright, 90 flat).
 atan2(|dx|, |dy|) where d = hips - shoulders. Returns None if the two
 midpoints coincide (would be a meaningless angle).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L56)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L56)
 
 ## kit.logic.geometry.Observation
 
@@ -174,7 +174,7 @@ def __init__(self, timestamp_sec: float)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L80)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L80)
 
 ## kit.logic.geometry.make_observation
 
@@ -188,7 +188,7 @@ Build an Observation from a pose result dict (box + keypoints in pixels).
 subject was detected (-> invalid observation, lets a suspicion expire).
 `frame_h` is the ORIGINAL frame height (pixels) used to normalise hip_y.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L89)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L89)
 
 ## kit.logic.geometry.joint_angle
 
@@ -203,7 +203,7 @@ Returns None ( == the C++ NaN) when either limb has zero length
 (coincident keypoints) or an input is missing -- callers MUST treat that as
 "no reading" rather than as 0 degrees.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L125)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L125)
 
 ## kit.logic.geometry.point
 
@@ -213,7 +213,7 @@ def point(kpts: Sequence[Sequence[float]], j: int) -> Optional[Point]
 
 (x, y) of joint j, or None if the index is out of range.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L147)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L147)
 
 ## kit.logic.geometry.side_score
 
@@ -226,7 +226,7 @@ Mean confidence over `joints`; 0.0 when ANY joint is below `thres`.
 Ported from first-gen `Pose::sideScore` -- used to pick the better-facing
 side of a two-sided exercise.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L154)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L154)
 
 ## kit.logic.geometry.point_in_polygon
 
@@ -239,7 +239,7 @@ polygons. Points exactly on an edge may fall on either side -- acceptable
 for occupancy counting. `poly` is a sequence of (x, y). <3 points -> False.
 Faithful port of retail_vision::geom::point_in_polygon.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L175)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L175)
 
 ## kit.logic.geometry.line_side
 
@@ -250,7 +250,7 @@ def line_side(ax: float, ay: float, bx: float, by: float, px: float, py: float) 
 Signed side of point p relative to the directed line a -> b (2-D cross
 product). > 0 : p is LEFT of a->b, < 0 : RIGHT, == 0 : collinear.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L196)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L196)
 
 ## kit.logic.geometry.segment_crossing
 
@@ -266,7 +266,7 @@ other, so touching an endpoint or moving parallel past the line does not
 count. Faithful port of retail_vision::geom::segment_crossing -- the sign
 convention (left->right = +1) is what LineCounter's `ab_in` keys off.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L203)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L203)
 
 ## kit.logic.geometry.iou_xyxy
 
@@ -277,4 +277,4 @@ def iou_xyxy(a: Sequence[float], b: Sequence[float]) -> float
 IoU of two axis-aligned boxes in [x1,y1,x2,y2] form (any consistent
 unit). Returns 0.0 for non-overlapping or degenerate boxes.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/geometry.py#L224)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/geometry.py#L224)

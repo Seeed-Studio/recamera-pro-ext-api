@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/events.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/events.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py)；签名由 AST 提取，不导入硬件依赖。
 
 生成 legacy 检测、文本、跟踪、属性与指标字典；构造字典不负责发送、叠加或录像。
 
@@ -44,7 +44,7 @@ in ``on_results()`` before the migration:
 ``box`` is passed through untouched -- post-processing has already
 un-letterboxed it into ORIGINAL-frame xyxy pixels.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L28)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L28)
 
 ## kit.events.text
 
@@ -76,7 +76,7 @@ app's business decisions:
     blanked out. This helper never compares ``rec_conf`` against anything;
     the app decides that and hands over the string it wants published.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L49)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L49)
 
 ## kit.events.track
 
@@ -103,7 +103,7 @@ It holds no state, applies no threshold, and never decides whether an event
 is emitted -- the app calls it once per track it has already decided to
 report.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L84)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L84)
 
 ## kit.events.face_attributes
 
@@ -141,7 +141,7 @@ What it does NOT do -- the app owns all of it:
 It holds no state, applies no threshold, and never decides whether an event
 is produced.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L119)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L119)
 
 ## kit.events.drowsiness_metrics
 
@@ -167,7 +167,7 @@ What it does NOT do -- the app (and ``kit.logic.drowsiness``) owns it:
   * when to publish -- the app calls this once per frame it has already
     decided to report.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L170)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L170)
 
 ## kit.events.metrics
 
@@ -185,4 +185,4 @@ The app decides WHAT the snapshot contains and WHEN to publish it (which
 frames feed the rolling window, what counts as occupancy); this helper only
 flattens the object it is handed.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/events.py#L208)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/events.py#L208)

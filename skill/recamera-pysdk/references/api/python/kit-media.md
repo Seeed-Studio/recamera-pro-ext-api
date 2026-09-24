@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/media/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/media/__init__.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/media/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/media/__init__.py)；签名由 AST 提取，不导入硬件依赖。
 
 RGA 图像操作、尺寸、矩形与精确映射的公共导出。
 

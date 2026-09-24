@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/workflow/node.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/workflow/node.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py)；签名由 AST 提取，不导入硬件依赖。
 
 Stage、WorkflowContext 与协作取消/超时。资源声明只是显式对象依赖，超时在阶段边界检查，不能强制打断 native 调用。
 
@@ -166,7 +166,7 @@ def __init__(self) -> None
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L107)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L107)
 
 ### kit.workflow.node.CancellationToken.cancelled
 
@@ -177,7 +177,7 @@ def cancelled(self) -> bool
 
 Whether cancellation has been requested.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L113)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L113)
 
 ### kit.workflow.node.CancellationToken.reason
 
@@ -188,7 +188,7 @@ def reason(self) -> str
 
 Stable first cancellation reason, or an empty string.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L119)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L119)
 
 ### kit.workflow.node.CancellationToken.cancel
 
@@ -198,7 +198,7 @@ def cancel(self, reason: str='') -> bool
 
 Request cancellation; return ``True`` only for the first request.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L125)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L125)
 
 ### kit.workflow.node.CancellationToken.wait
 
@@ -208,7 +208,7 @@ def wait(self, timeout: float | None=None) -> bool
 
 Wait for cancellation using :class:`threading.Event` semantics.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L141)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L141)
 
 ### kit.workflow.node.CancellationToken.raise_if_cancelled
 
@@ -218,7 +218,7 @@ def raise_if_cancelled(self, *, stage: str | None=None, item_index: int | None=N
 
 Raise :class:`WorkflowCancelled` with machine-readable context.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L148)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L148)
 
 ## kit.workflow.node.WorkflowContext
 
@@ -256,7 +256,7 @@ def for_item(self, *, item_index: int, deadline: float | None) -> 'WorkflowConte
 
 Return a context view for one item, sharing resources and token.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L228)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L228)
 
 ### kit.workflow.node.WorkflowContext.get_resource
 
@@ -266,7 +266,7 @@ def get_resource(self, kind: ResourceKind | str, default: Any=None) -> Any
 
 Return an explicitly supplied resource without acquiring anything.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L238)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L238)
 
 ### kit.workflow.node.WorkflowContext.require_resource
 
@@ -276,7 +276,7 @@ def require_resource(self, kind: ResourceKind | str) -> Any
 
 Return one resource or fail closed with ``WorkflowResourceError``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L249)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L249)
 
 ### kit.workflow.node.WorkflowContext.remaining
 
@@ -286,7 +286,7 @@ def remaining(self, clock: Callable[[], float]=time.monotonic) -> float | None
 
 Return non-negative seconds remaining, or ``None`` without deadline.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L269)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L269)
 
 ### kit.workflow.node.WorkflowContext.raise_if_cancelled
 
@@ -296,7 +296,7 @@ def raise_if_cancelled(self, *, stage: str | None=None, elapsed_ms: float=0.0) -
 
 Delegate a contextual cooperative-cancellation check to the token.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L276)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L276)
 
 ## kit.workflow.node.Stage
 
@@ -333,7 +333,7 @@ def invoke(self, item: Any, context: WorkflowContext) -> Any
 
 Invoke the transform using its prevalidated context calling mode.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L391)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L391)
 
 ### kit.workflow.node.Stage.close
 
@@ -347,7 +347,7 @@ Once a stage is placed in a :class:`Pipeline`, that pipeline owns its
 lifetime and direct closure is rejected.  This avoids a second
 pipeline or caller invalidating a resource during execution.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L429)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L429)
 
 ### kit.workflow.node.Stage.__or__
 
@@ -357,4 +357,4 @@ def __or__(self, other: Any)
 
 Compose ``Stage | Stage`` or ``Stage | Pipeline`` in order.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/node.py#L454)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/node.py#L454)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/capabilities.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/capabilities.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py)；签名由 AST 提取，不导入硬件依赖。
 
 能力状态与发现：AVAILABLE/UNAVAILABLE/UNKNOWN/DEGRADED。当前文件系统探测一般只能证明 UNKNOWN，不能替代协议握手。
 
@@ -72,7 +72,7 @@ def usable(self) -> bool
 
 Whether the capability has been positively verified.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L53)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L53)
 
 ## kit.capabilities.Capabilities
 
@@ -109,7 +109,7 @@ def get(self, name: str) -> Capability
 
 Return a capability, or an explicit ``UNKNOWN`` record.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L101)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L101)
 
 ### kit.capabilities.Capabilities.require
 
@@ -123,7 +123,7 @@ A filesystem-only ``UNKNOWN`` result is rejected.  This fail-closed
 behavior prevents applications from treating a stale socket file as a
 valid frame broker or NPU lease service.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L115)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L115)
 
 ## kit.capabilities.frame_socket_path
 
@@ -133,7 +133,7 @@ def frame_socket_path() -> str
 
 Frame-broker path used for diagnostics (native routing is fixed).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L160)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L160)
 
 ## kit.capabilities.result_socket_path
 
@@ -143,7 +143,7 @@ def result_socket_path() -> str
 
 Result-ingress path used for diagnostics (native routing is fixed).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L166)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L166)
 
 ## kit.capabilities.audio_socket_path
 
@@ -153,7 +153,7 @@ def audio_socket_path() -> str
 
 Audio-broker path used for diagnostics (native routing is fixed).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L172)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L172)
 
 ## kit.capabilities.probe_socket_path
 
@@ -163,7 +163,7 @@ def probe_socket_path() -> str
 
 Observability path used for diagnostics (native routing is fixed).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L178)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L178)
 
 ## kit.capabilities.probe_capabilities
 
@@ -178,7 +178,7 @@ socket is recorded as ``UNKNOWN`` rather than ``AVAILABLE``.  A future
 native capability getter can replace these records with negotiated version
 and limit data without changing the public Python API.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L223)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L223)
 
 ## kit.capabilities.capabilities
 
@@ -193,7 +193,7 @@ adapter registry.  New application code should import
 :func:`get_capabilities`; unlike the old top-level ``kit.capabilities()``
 spelling, it cannot collide with Python's ``kit.capabilities`` submodule.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L277)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L277)
 
 ## kit.capabilities.get_capabilities
 
@@ -208,4 +208,4 @@ cannot safely share the name ``capabilities`` with its Python submodule:
 importing another public class that depends on the submodule would replace
 ``kit.capabilities`` with that module object.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/capabilities.py#L292)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/capabilities.py#L292)

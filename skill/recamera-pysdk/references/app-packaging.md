@@ -12,7 +12,7 @@ build contract, not an installation or device-modification procedure.
 - The SDK's `market/packaging/build.py` is the authority for archive layout,
   deterministic tar creation, `release.lock.json`, and `files.sha256`.
 - The skill bundles the fixed official builder files from public commit
-  `60e0f2ade601152c3dd7bf7e228297cc8203a2ed` under `scripts/sdk-builder/`;
+  `635ffc3c51d596dd2e8139f297798162e6be62b9` under `scripts/sdk-builder/`;
   their SHA-256 values are checked before every default build.
 - Device AppMgr verifies the detached signature according to device policy,
   safely extracts the archive, and builds a per-App/per-release environment. It

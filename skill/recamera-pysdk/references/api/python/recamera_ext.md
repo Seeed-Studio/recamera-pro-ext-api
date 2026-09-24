@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[sdk/python/recamera_ext/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[sdk/python/recamera_ext/__init__.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py)；签名由 AST 提取，不导入硬件依赖。
 
 Native Python SDK：帧/probe 借用、五类结果注入、硬件 mask、exclusive NPU 租约。OsdSink/RecordSink 仅限 AppMgr。
 
@@ -192,7 +192,7 @@ def __init__(self, id, x, y, w, h)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L433)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L433)
 
 ## recamera_ext.InferenceState
 
@@ -262,7 +262,7 @@ def __init__(self, width=0, height=0, fourcc=0, fps_divisor=0)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L558)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L558)
 
 ## recamera_ext.InferenceLease
 
@@ -301,7 +301,7 @@ def close(self)
 
 Release broker ownership and close the native handle once.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L991)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L991)
 
 ### recamera_ext.InferenceLease.closed
 
@@ -314,7 +314,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.InferenceLease.__enter__
 
@@ -326,7 +326,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.InferenceLease.__exit__
 
@@ -338,7 +338,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.InferenceLease.__init__
 
@@ -348,7 +348,7 @@ def __init__(self, app_id='python', instance_id=None, timeout_ms=0, fallback_bui
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L811)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L811)
 
 ### recamera_ext.InferenceLease.acquired
 
@@ -362,7 +362,7 @@ Whether this process still owns an open local lease handle.
 This is local lifecycle state.  Use :meth:`alive` for an authoritative
 non-blocking connection check.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L861)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L861)
 
 ### recamera_ext.InferenceLease.ready
 
@@ -372,7 +372,7 @@ def ready(self)
 
 Mark successful external model/runtime initialization at rkipc.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L888)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L888)
 
 ### recamera_ext.InferenceLease.set_fallback
 
@@ -382,7 +382,7 @@ def set_fallback(self, fallback_builtin)
 
 Change whether built-in inference is restored on disconnect.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L931)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L931)
 
 ### recamera_ext.InferenceLease.status
 
@@ -392,7 +392,7 @@ def status(self)
 
 Fetch an immutable authoritative broker status snapshot.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L941)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L941)
 
 ### recamera_ext.InferenceLease.alive
 
@@ -402,7 +402,7 @@ def alive(self)
 
 Return whether the live connection still fences this generation.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L971)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L971)
 
 ### recamera_ext.InferenceLease.release
 
@@ -412,7 +412,7 @@ def release(self)
 
 Compatibility alias for :meth:`close`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1013)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1013)
 
 ## recamera_ext.ResultSink
 
@@ -440,7 +440,7 @@ def close(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L739)
 
 ### recamera_ext.ResultSink.closed
 
@@ -453,7 +453,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.ResultSink.__enter__
 
@@ -465,7 +465,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.ResultSink.__exit__
 
@@ -477,7 +477,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.ResultSink.__init__
 
@@ -487,7 +487,7 @@ def __init__(self, source_id, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1165)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1165)
 
 ### recamera_ext.ResultSink.stats
 
@@ -502,7 +502,7 @@ rc. These are LOCAL only: a `sent` frame the server later drops
 (rate-limit / auth / decode) is not visible until the server-ACK
 protocol lands (docs/guide/result-push.md).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1430)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1430)
 
 ### recamera_ext.ResultSink.send_detections
 
@@ -517,7 +517,7 @@ a fraction of frame width/height). The OSD renderer clamps to [0,1] and
 multiplies by frame size, so pixel values collapse to a 1px box -- always
 send fractions, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, "person").
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1441)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1441)
 
 ### recamera_ext.ResultSink.send_classification
 
@@ -533,7 +533,7 @@ a source ROI to the entry (e.g. per-face attributes). When present, the
 box coordinates are normalized [0,1] (fraction of frame width/height),
 e.g. (0.30, 0.20, 0.55, 0.60).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1470)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1470)
 
 ### recamera_ext.ResultSink.send_segmentation
 
@@ -548,7 +548,7 @@ width/height), e.g. (0.05, 0.07, 0.62, 0.94). mask_bytes is raw
 row-major bytes (not coordinates) and may be None/empty (with
 mask_w=mask_h=0).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1502)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1502)
 
 ### recamera_ext.ResultSink.send_tracking
 
@@ -562,7 +562,7 @@ Coordinates are normalized [0,1] (fraction of frame width/height), same
 contract as send_detections, e.g. (0.05, 0.07, 0.62, 0.94, 0.92, 0,
 "person", 7).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1548)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1548)
 
 ### recamera_ext.ResultSink.send_keypoints
 
@@ -581,7 +581,7 @@ normalized [0,1] (fraction of frame width/height), same contract as
 send_detections. A missing "box" leaves the whole object_info group
 unset on the wire.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1576)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1576)
 
 ## recamera_ext.OsdSink
 
@@ -615,7 +615,7 @@ def close(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L739)
 
 ### recamera_ext.OsdSink.closed
 
@@ -628,7 +628,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.OsdSink.__enter__
 
@@ -640,7 +640,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.OsdSink.__exit__
 
@@ -652,7 +652,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.OsdSink.__init__
 
@@ -662,7 +662,7 @@ def __init__(self, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1661)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1661)
 
 ### recamera_ext.OsdSink.stats
 
@@ -679,7 +679,7 @@ protocol lands (docs/guide/result-push.md).
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1430)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1430)
 
 ### recamera_ext.OsdSink.send_detections
 
@@ -689,7 +689,7 @@ def send_detections(self, pts_us, boxes)
 
 AppMgr-only：发送最多 64 个归一化检测框；空列表清屏。仅更新 OSD，不进入录像或通知路径。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1683)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1683)
 
 ### recamera_ext.OsdSink.send_classification
 
@@ -699,7 +699,7 @@ def send_classification(self, pts_us, items)
 
 明确拒绝：OSD-only ABI 不支持 classification。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1703)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1703)
 
 ### recamera_ext.OsdSink.send_segmentation
 
@@ -709,7 +709,7 @@ def send_segmentation(self, pts_us, items)
 
 明确拒绝：OSD-only ABI 不支持 segmentation。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1706)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1706)
 
 ### recamera_ext.OsdSink.send_tracking
 
@@ -719,7 +719,7 @@ def send_tracking(self, pts_us, items)
 
 明确拒绝：OSD-only ABI 不支持 tracking。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1709)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1709)
 
 ### recamera_ext.OsdSink.send_keypoints
 
@@ -729,7 +729,7 @@ def send_keypoints(self, pts_us, instances)
 
 明确拒绝：OSD-only ABI 不支持 keypoints。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1712)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1712)
 
 ## recamera_ext.RecordSink
 
@@ -755,7 +755,7 @@ def close(self)
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1945)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1945)
 
 ### recamera_ext.RecordSink.closed
 
@@ -768,7 +768,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.RecordSink.__enter__
 
@@ -780,7 +780,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.RecordSink.__exit__
 
@@ -792,7 +792,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.RecordSink.__init__
 
@@ -802,7 +802,7 @@ def __init__(self, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1738)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1738)
 
 ### recamera_ext.RecordSink.stats
 
@@ -819,7 +819,7 @@ protocol lands (docs/guide/result-push.md).
 
 此方法定义于基类 `ResultSink`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1430)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1430)
 
 ### recamera_ext.RecordSink.send_detections
 
@@ -829,7 +829,7 @@ def send_detections(self, app_id, pts_us, boxes)
 
 Send detection triggers for ``app_id`` using ResultSink tuples.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1818)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1818)
 
 ### recamera_ext.RecordSink.send_classification
 
@@ -839,7 +839,7 @@ def send_classification(self, app_id, pts_us, classes)
 
 Singular-name alias for :meth:`send_classifications`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1900)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1900)
 
 ### recamera_ext.RecordSink.send_segmentation
 
@@ -850,7 +850,7 @@ def send_segmentation(app_id, pts_us, items)
 
 明确拒绝：segmentation 不受当前录像通道支持。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1924)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1924)
 
 ### recamera_ext.RecordSink.send_tracking
 
@@ -860,7 +860,7 @@ def send_tracking(self, app_id, pts_us, items)
 
 AppMgr-only：按 app_id 发送归一化跟踪结果到录像专用通道；不会向 UI/OSD/通知发布。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1905)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1905)
 
 ### recamera_ext.RecordSink.send_keypoints
 
@@ -870,7 +870,7 @@ def send_keypoints(self, app_id, pts_us, instances)
 
 AppMgr-only：按 app_id 发送关键点及可选对象框到录像专用通道。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1914)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1914)
 
 ### recamera_ext.RecordSink.send_classifications
 
@@ -880,7 +880,7 @@ def send_classifications(self, app_id, pts_us, classes)
 
 Send ``(score, label[, class_id[, box]])`` trigger tuples.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1829)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1829)
 
 ### recamera_ext.RecordSink.send_events
 
@@ -895,7 +895,7 @@ Entries use the same ``(score, label[, class_id[, box]])`` shape as
 produces ONE payload-free EVENT; labels/scores/ROI are not rule filters.
 An empty call is a no-op. The caller already decided to request recording.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1861)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1861)
 
 ### recamera_ext.RecordSink.reset
 
@@ -905,7 +905,7 @@ def reset(self, app_id)
 
 AppMgr-only：有序清除 app_id 的排队结果，返回成功才说明收到 ACK；不取消已消费事件或正在进行的录像。错误后关闭并重开 handle。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1935)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1935)
 
 ## recamera_ext.FrameLease
 
@@ -939,7 +939,7 @@ def __init__(self, src, cbuf)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1970)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1970)
 
 ### recamera_ext.FrameLease.released
 
@@ -950,7 +950,7 @@ def released(self)
 
 Whether the source has returned this native frame buffer.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2056)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2056)
 
 ### recamera_ext.FrameLease.release_reason
 
@@ -961,7 +961,7 @@ def release_reason(self)
 
 Diagnostic reason for release (explicit, source close, next frame…).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2062)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2062)
 
 ### recamera_ext.FrameLease.fd
 
@@ -972,7 +972,7 @@ def fd(self)
 
 Borrowed dma-buf fd; never close or retain it beyond this lease.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2100)
 
 ### recamera_ext.FrameLease.plane_array
 
@@ -982,7 +982,7 @@ def plane_array(self, i)
 
 Plane ``i`` as a checked zero-copy ``(vstride, stride)`` view.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2147)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2147)
 
 ### recamera_ext.FrameLease.array
 
@@ -996,7 +996,7 @@ Zero-copy valid Y pixels as ``(height, width)`` uint8.
 The property rechecks the lease even when the view was previously cached,
 so accessing ``frame.array`` after automatic/explicit release is rejected.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2153)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2153)
 
 ### recamera_ext.FrameLease.copy
 
@@ -1006,7 +1006,7 @@ def copy(self)
 
 Return an owned copy of the valid Y plane that survives release.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2173)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2173)
 
 ### recamera_ext.FrameLease.to_bgr
 
@@ -1016,7 +1016,7 @@ def to_bgr(self)
 
 Return an owned contiguous BGR image using OpenCV NV12 conversion.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2178)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2178)
 
 ### recamera_ext.FrameLease.release
 
@@ -1026,7 +1026,7 @@ def release(self)
 
 Return this frame to its source; idempotent and exception-safe.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2214)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2214)
 
 ### recamera_ext.FrameLease.__enter__
 
@@ -1036,7 +1036,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2221)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2221)
 
 ### recamera_ext.FrameLease.__exit__
 
@@ -1046,7 +1046,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2225)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2225)
 
 ## recamera_ext.Frame
 
@@ -1070,7 +1070,7 @@ def __init__(self, src, cbuf)
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1970)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1970)
 
 ### recamera_ext.Frame.released
 
@@ -1083,7 +1083,7 @@ Whether the source has returned this native frame buffer.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2056)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2056)
 
 ### recamera_ext.Frame.release_reason
 
@@ -1096,7 +1096,7 @@ Diagnostic reason for release (explicit, source close, next frame…).
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2062)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2062)
 
 ### recamera_ext.Frame.fd
 
@@ -1109,7 +1109,7 @@ Borrowed dma-buf fd; never close or retain it beyond this lease.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2100)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2100)
 
 ### recamera_ext.Frame.plane_array
 
@@ -1121,7 +1121,7 @@ Plane ``i`` as a checked zero-copy ``(vstride, stride)`` view.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2147)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2147)
 
 ### recamera_ext.Frame.array
 
@@ -1137,7 +1137,7 @@ so accessing ``frame.array`` after automatic/explicit release is rejected.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2153)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2153)
 
 ### recamera_ext.Frame.copy
 
@@ -1149,7 +1149,7 @@ Return an owned copy of the valid Y plane that survives release.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2173)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2173)
 
 ### recamera_ext.Frame.to_bgr
 
@@ -1161,7 +1161,7 @@ Return an owned contiguous BGR image using OpenCV NV12 conversion.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2178)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2178)
 
 ### recamera_ext.Frame.release
 
@@ -1173,7 +1173,7 @@ Return this frame to its source; idempotent and exception-safe.
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2214)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2214)
 
 ### recamera_ext.Frame.__enter__
 
@@ -1185,7 +1185,7 @@ def __enter__(self)
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2221)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2221)
 
 ### recamera_ext.Frame.__exit__
 
@@ -1197,7 +1197,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `FrameLease`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2225)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2225)
 
 ## recamera_ext.FrameSource
 
@@ -1220,7 +1220,7 @@ def close(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L739)
 
 ### recamera_ext.FrameSource.closed
 
@@ -1233,7 +1233,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.FrameSource.__enter__
 
@@ -1245,7 +1245,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.FrameSource.__exit__
 
@@ -1257,7 +1257,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.FrameSource.__iter__
 
@@ -1269,7 +1269,7 @@ def __iter__(self)
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1080)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1080)
 
 ### recamera_ext.FrameSource.acquire
 
@@ -1287,7 +1287,7 @@ ownership model.
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1108)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1108)
 
 ### recamera_ext.FrameSource.__next__
 
@@ -1305,7 +1305,7 @@ needs to distinguish protocol/backpressure/internal failures should use
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1128)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1128)
 
 ### recamera_ext.FrameSource.__init__
 
@@ -1315,7 +1315,7 @@ def __init__(self, config=None, timeout_ms=1000, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2269)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2269)
 
 ## recamera_ext.ProbeSample
 
@@ -1335,7 +1335,7 @@ def __init__(self, src, csample)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2301)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2301)
 
 ### recamera_ext.ProbeSample.released
 
@@ -1346,7 +1346,7 @@ def released(self)
 
 此 probe sample 的借用是否已释放/失效。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2330)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2330)
 
 ### recamera_ext.ProbeSample.release_reason
 
@@ -1357,7 +1357,7 @@ def release_reason(self)
 
 返回借用失效原因，供生命周期诊断使用。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2334)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2334)
 
 ### recamera_ext.ProbeSample.release
 
@@ -1367,7 +1367,7 @@ def release(self)
 
 Release this sample early; idempotent like :class:`FrameLease`.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2353)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2353)
 
 ### recamera_ext.ProbeSample.__enter__
 
@@ -1377,7 +1377,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2360)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2360)
 
 ### recamera_ext.ProbeSample.__exit__
 
@@ -1387,7 +1387,7 @@ def __exit__(self, *_exc)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2364)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2364)
 
 ### recamera_ext.ProbeSample.payload
 
@@ -1398,7 +1398,7 @@ def payload(self)
 
 The sample bytes (a copy). Valid only for this iteration step.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2375)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2375)
 
 ### recamera_ext.ProbeSample.array
 
@@ -1411,7 +1411,7 @@ Zero-copy numpy view over the payload. When meta is present the view
 is typed/shaped by the TensorMeta (dtype + shape); otherwise a flat
 uint8 array. The view is valid only until the loop advances.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2383)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2383)
 
 ## recamera_ext.ProbeSource
 
@@ -1439,7 +1439,7 @@ def close(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L739)
 
 ### recamera_ext.ProbeSource.closed
 
@@ -1452,7 +1452,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.ProbeSource.__enter__
 
@@ -1464,7 +1464,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.ProbeSource.__exit__
 
@@ -1476,7 +1476,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.ProbeSource.__iter__
 
@@ -1488,7 +1488,7 @@ def __iter__(self)
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1080)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1080)
 
 ### recamera_ext.ProbeSource.acquire
 
@@ -1506,7 +1506,7 @@ ownership model.
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1108)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1108)
 
 ### recamera_ext.ProbeSource.__next__
 
@@ -1524,7 +1524,7 @@ needs to distinguish protocol/backpressure/internal failures should use
 
 此方法定义于基类 `_BorrowIterator`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L1128)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L1128)
 
 ### recamera_ext.ProbeSource.__init__
 
@@ -1534,7 +1534,7 @@ def __init__(self, stages, sample_every=1, timeout_ms=1000, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2422)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2422)
 
 ## recamera_ext.MaskControl
 
@@ -1561,7 +1561,7 @@ def close(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L739)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L739)
 
 ### recamera_ext.MaskControl.closed
 
@@ -1574,7 +1574,7 @@ Whether the owning native handle has already been closed.
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L754)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L754)
 
 ### recamera_ext.MaskControl.__enter__
 
@@ -1586,7 +1586,7 @@ def __enter__(self)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L766)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L766)
 
 ### recamera_ext.MaskControl.__exit__
 
@@ -1598,7 +1598,7 @@ def __exit__(self, exc_type, exc_value, _traceback)
 
 此方法定义于基类 `_Handle`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L769)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L769)
 
 ### recamera_ext.MaskControl.__init__
 
@@ -1608,7 +1608,7 @@ def __init__(self, lib_path=None)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2471)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2471)
 
 ### recamera_ext.MaskControl.set
 
@@ -1619,7 +1619,7 @@ def set(self, rects)
 Full set of active blocks (list[MaskRect], <=6). Persisted. Returns
 the number of blocks actually applied.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2491)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2491)
 
 ### recamera_ext.MaskControl.update
 
@@ -1631,7 +1631,7 @@ Incrementally move a single block (no flicker, not persisted). The
 block must already exist. Returns 0; raises on error (caller may fall
 back to set()).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2506)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2506)
 
 ### recamera_ext.MaskControl.clear
 
@@ -1641,7 +1641,7 @@ def clear(self)
 
 Clear all masks (persisted).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2517)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2517)
 
 ### recamera_ext.MaskControl.query
 
@@ -1651,4 +1651,4 @@ def query(self)
 
 Return the current active masks as list[MaskRect].
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/sdk/python/recamera_ext/__init__.py#L2525)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/sdk/python/recamera_ext/__init__.py#L2525)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/vad.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/vad.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py)；签名由 AST 提取，不导入硬件依赖。
 
 PCM 语音活动分段器；采样率、块长、门限决定切分，输出语音段而非识别文本。
 
@@ -91,7 +91,7 @@ def __init__(self, model: str=DEFAULT_VAD_MODEL, *, sample_rate: int=16000, thre
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L75)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L75)
 
 ### kit.logic.vad.VadSegmenter.accept
 
@@ -101,7 +101,7 @@ def accept(self, pcm: Union[bytes, 'object']) -> None
 
 Feed one chunk (PcmFrame / int16 bytes / ndarray). Any length is fine.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L122)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L122)
 
 ### kit.logic.vad.VadSegmenter.segments
 
@@ -111,7 +111,7 @@ def segments(self) -> Iterator[SpeechSegment]
 
 Yield every finished utterance currently buffered, oldest first.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L147)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L147)
 
 ### kit.logic.vad.VadSegmenter.is_speech
 
@@ -121,7 +121,7 @@ def is_speech(self) -> bool
 
 True while the model currently believes speech is ongoing.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L165)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L165)
 
 ### kit.logic.vad.VadSegmenter.flush
 
@@ -131,7 +131,7 @@ def flush(self) -> None
 
 Force-close any in-progress speech (call at end-of-stream).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L169)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L169)
 
 ### kit.logic.vad.VadSegmenter.reset
 
@@ -141,4 +141,4 @@ def reset(self) -> None
 
 Drop all state/buffered segments (call when entering a fresh listen).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/vad.py#L173)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/vad.py#L173)

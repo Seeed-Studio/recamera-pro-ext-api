@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/registry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/registry.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py)；签名由 AST 提取，不导入硬件依赖。
 
 按能力与显式偏好选择后端。auto 只采纳已验证能力；存在 socket 文件不等于 AVAILABLE。
 
@@ -67,7 +67,7 @@ launch-time integrity contract and therefore supersedes both values.  With
 the dedicated policy unset/``auto``, an explicit ``prefer="snapshot"``
 remains the caller's debug fallback as before.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py#L138)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py#L138)
 
 ## kit.adapters.registry.select_result_sink
 
@@ -85,7 +85,7 @@ OSD ingress is NOT auto-selected on socket presence -- it is explicit opt-in
 only (see `_result_osd_opt_in`, or pass kind="osd"). The "stdout" debug sink
 is always honoured verbatim.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py#L198)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py#L198)
 
 ## kit.adapters.registry.select_audio_source
 
@@ -121,7 +121,7 @@ Selection order:
 "ai_asr" (default) | "rtsp" | "alsa". The official broker, when present,
 supersedes all three.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py#L226)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py#L226)
 
 ## kit.adapters.registry.select_control
 
@@ -140,7 +140,7 @@ usually falls back to `CgiControl`, the workaround plane that drives the
 device's existing `entry.cgi` endpoints (localhost, no JWT) for
 set_inference and proxies a FrameSource frame for snapshot.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py#L269)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py#L269)
 
 ## kit.adapters.registry.select_probe
 
@@ -166,4 +166,4 @@ forwarded to ProbeSource verbatim. Imported lazily so this module stays
 importable off-device (recamera_ext + librecamera_ext.so.1 only exist on the
 device with the extension-API firmware).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/registry.py#L289)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/registry.py#L289)

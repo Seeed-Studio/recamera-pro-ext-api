@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/recording.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/recording.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/recording.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/recording.py)；签名由 AST 提取，不导入硬件依赖。
 
 把显式业务事件交给 App.request_recording；必须有 manifest 录像声明与 AppMgr 授权。
 
@@ -24,4 +24,4 @@ Defaults are off. Only successful local queueing starts the cooldown; this
 is not a recording acknowledgement. At most the declared event kinds are
 retained, and presentation/ML state is unaffected by configuration changes.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/recording.py#L5)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/recording.py#L5)

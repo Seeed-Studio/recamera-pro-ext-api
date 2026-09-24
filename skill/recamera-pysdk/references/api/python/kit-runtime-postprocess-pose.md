@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/pose.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/pose.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/pose.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/pose.py)；签名由 AST 提取，不导入硬件依赖。
 
 YOLO pose 框和关键点解码；关键点数量/索引与模型一致。
 
@@ -21,9 +21,10 @@ in-graph concat/decode (see models/convert/export_pose.py):
         cls branch  [1,  1, H, W]   -> person score (single class)
         kpt branch  [1, 51, H, W]   -> 17 keypoints, each (x, y, conf)
 
-Keypoint decode (ultralytics convention):
-    kx = (raw_x * 2.0 + (gx - 0.5)) * stride
-    ky = (raw_y * 2.0 + (gy - 0.5)) * stride
+Keypoint decode (ultralytics convention, anchors = grid + 0.5, so
+anchors - 0.5 is the integer grid index):
+    kx = (raw_x * 2.0 + gx) * stride
+    ky = (raw_y * 2.0 + gy) * stride
     kc = sigmoid(raw_conf)
 
 Output: list of dicts
@@ -53,4 +54,4 @@ Boxes and keypoints are in ORIGINAL-image pixel coordinates. Keypoints
 below `kpt_thres` keep their coordinates but the caller should treat their
 confidence as the visibility gate.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/pose.py#L102)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/pose.py#L103)

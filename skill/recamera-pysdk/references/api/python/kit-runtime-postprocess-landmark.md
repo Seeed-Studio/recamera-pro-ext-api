@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/runtime/postprocess/landmark.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/landmark.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/runtime/postprocess/landmark.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/landmark.py)；签名由 AST 提取，不导入硬件依赖。
 
 人脸 landmark/face score 解码，按第二阶段 ROI 映射回原画面。
 
@@ -53,4 +53,4 @@ input_size : landmark model input side (192).
 
 Returns (landmarks float32 [468,3], presence float in [0,1]).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/runtime/postprocess/landmark.py#L52)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/runtime/postprocess/landmark.py#L52)

@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/logic/rep_counter.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/logic/rep_counter.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py)；签名由 AST 提取，不导入硬件依赖。
 
 运动次数计数与动作状态；基于关节角、可见性、平滑和迟滞，含 squat/push-up/hammer-curl。
 
@@ -45,7 +45,7 @@ def __init__(self, up_threshold: float, down_threshold: float, min_interval: flo
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L52)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L52)
 
 ### kit.logic.rep_counter.RepCounter.reset
 
@@ -55,7 +55,7 @@ def reset(self) -> None
 
 重置角度平滑、伸展/屈曲状态与次数累计，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L60)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L60)
 
 ### kit.logic.rep_counter.RepCounter.miss
 
@@ -67,7 +67,7 @@ Feed a frame with no usable reading (joints hidden). After
 _LOST_SECONDS of these the phase resets, so an athlete who walks away
 and comes back does not resume mid-rep.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L71)
 
 ### kit.logic.rep_counter.RepCounter.update
 
@@ -79,7 +79,7 @@ Feed one angle reading. Returns True on the frame a rep completes.
 
 `angle` is None ( == C++ NaN) when the joint triplet is not readable.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L80)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L80)
 
 ### kit.logic.rep_counter.RepCounter.smoothed
 
@@ -90,7 +90,7 @@ def smoothed(self) -> float
 
 返回平滑后的当前关节角度（度）。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L123)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L123)
 
 ### kit.logic.rep_counter.RepCounter.has_reading
 
@@ -100,7 +100,7 @@ def has_reading(self) -> bool
 
 当前是否有可使用的角度读数。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L126)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L126)
 
 ### kit.logic.rep_counter.RepCounter.extended
 
@@ -110,7 +110,7 @@ def extended(self) -> bool
 
 当前是否满足伸展状态的角度/迟滞条件。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L129)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L129)
 
 ### kit.logic.rep_counter.RepCounter.flexed
 
@@ -120,7 +120,7 @@ def flexed(self) -> bool
 
 当前是否满足屈曲状态的角度/迟滞条件。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L132)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L132)
 
 ### kit.logic.rep_counter.RepCounter.last_rep_min_angle
 
@@ -130,7 +130,7 @@ def last_rep_min_angle(self) -> float
 
 返回最近一次完成动作的最小关节角度（度）。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L135)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L135)
 
 ### kit.logic.rep_counter.RepCounter.ever_read
 
@@ -140,7 +140,7 @@ def ever_read(self) -> bool
 
 是否曾接收过有效角度读数。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L138)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L138)
 
 ## kit.logic.rep_counter.ExerciseState
 
@@ -158,7 +158,7 @@ def __init__(self, two_sided: bool=False)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L148)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L148)
 
 ### kit.logic.rep_counter.ExerciseState.as_dict
 
@@ -168,7 +168,7 @@ def as_dict(self) -> Dict
 
 将动作计数、组数与状态输出为可序列化字典。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L164)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L164)
 
 ## kit.logic.rep_counter.Exercise
 
@@ -199,7 +199,7 @@ def __init__(self, kpt_thres: float=0.5)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L194)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L194)
 
 ### kit.logic.rep_counter.Exercise.set_targets
 
@@ -209,7 +209,7 @@ def set_targets(self, target_reps: int, target_sets: int) -> None
 
 更新每组次数与目标组数，不执行模型推理，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L203)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L203)
 
 ### kit.logic.rep_counter.Exercise.reset
 
@@ -219,7 +219,7 @@ def reset(self) -> None
 
 重置当前动作会话的计数/状态，返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L207)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L207)
 
 ### kit.logic.rep_counter.Exercise.update
 
@@ -229,7 +229,7 @@ def update(self, person: Optional[dict], now_sec: float) -> ExerciseState
 
 输入单个人体姿态字典或 None、单调秒级 now_sec，更新动作状态并返回 ExerciseState。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L220)
 
 ## kit.logic.rep_counter.Squat
 
@@ -256,7 +256,7 @@ def __init__(self, kpt_thres: float=0.5)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L259)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L259)
 
 ### kit.logic.rep_counter.Squat.set_targets
 
@@ -268,7 +268,7 @@ def set_targets(self, target_reps: int, target_sets: int) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L203)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L203)
 
 ### kit.logic.rep_counter.Squat.reset
 
@@ -280,7 +280,7 @@ def reset(self) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L207)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L207)
 
 ### kit.logic.rep_counter.Squat.update
 
@@ -292,7 +292,7 @@ def update(self, person: Optional[dict], now_sec: float) -> ExerciseState
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L220)
 
 ## kit.logic.rep_counter.PushUp
 
@@ -319,7 +319,7 @@ def __init__(self, kpt_thres: float=0.5)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L307)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L307)
 
 ### kit.logic.rep_counter.PushUp.set_targets
 
@@ -331,7 +331,7 @@ def set_targets(self, target_reps: int, target_sets: int) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L203)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L203)
 
 ### kit.logic.rep_counter.PushUp.reset
 
@@ -343,7 +343,7 @@ def reset(self) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L207)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L207)
 
 ### kit.logic.rep_counter.PushUp.update
 
@@ -355,7 +355,7 @@ def update(self, person: Optional[dict], now_sec: float) -> ExerciseState
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L220)
 
 ## kit.logic.rep_counter.HammerCurl
 
@@ -382,7 +382,7 @@ def __init__(self, kpt_thres: float=0.5)
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L355)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L355)
 
 ### kit.logic.rep_counter.HammerCurl.set_targets
 
@@ -394,7 +394,7 @@ def set_targets(self, target_reps: int, target_sets: int) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L203)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L203)
 
 ### kit.logic.rep_counter.HammerCurl.reset
 
@@ -406,7 +406,7 @@ def reset(self) -> None
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L207)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L207)
 
 ### kit.logic.rep_counter.HammerCurl.update
 
@@ -418,7 +418,7 @@ def update(self, person: Optional[dict], now_sec: float) -> ExerciseState
 
 此方法定义于基类 `Exercise`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L220)
 
 ## kit.logic.rep_counter.create_exercise
 
@@ -428,7 +428,7 @@ def create_exercise(mode: str, kpt_thres: float=0.5) -> Optional[Exercise]
 
 按 exercise_id 和参数创建对应动作对象；未知标识按源码错误路径处理，不自动选任意动作。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L452)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L452)
 
 ## kit.logic.rep_counter.exercise_ids
 
@@ -438,4 +438,4 @@ def exercise_ids() -> List[str]
 
 返回当前实现支持的动作标识集合/列表，供 UI 枚举。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/logic/rep_counter.py#L457)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/logic/rep_counter.py#L457)

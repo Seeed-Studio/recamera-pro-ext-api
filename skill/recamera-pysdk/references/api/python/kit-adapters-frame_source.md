@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/adapters/frame_source.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/adapters/frame_source.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py)；签名由 AST 提取，不导入硬件依赖。
 
 取帧协议和 RTSP／快照兼容源。软件解码需要 FFmpeg，普通相机 AI 优先受管 native frame source。
 
@@ -78,7 +78,7 @@ def frames(self) -> Iterator[Frame]
 
 Yield decoded frames until the stream ends or close() is called.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L61)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L61)
 
 ### kit.adapters.frame_source.FrameSource.close
 
@@ -88,7 +88,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L65)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L65)
 
 ### kit.adapters.frame_source.FrameSource.__enter__
 
@@ -98,7 +98,7 @@ def __enter__(self)
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L68)
 
 ### kit.adapters.frame_source.FrameSource.__exit__
 
@@ -108,7 +108,7 @@ def __exit__(self, *exc)
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L71)
 
 ## kit.adapters.frame_source.FfmpegRtspSource
 
@@ -130,7 +130,7 @@ def frames(self) -> Iterator[Frame]
 
 迭代 FFmpeg 解码出的 CPU RGB Kit Frame。流结束停止；解码、拷贝和网络缓冲会增加延迟，不是 native DMA 取帧。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L146)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L146)
 
 ### kit.adapters.frame_source.FfmpegRtspSource.close
 
@@ -140,7 +140,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L164)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L164)
 
 ### kit.adapters.frame_source.FfmpegRtspSource.__enter__
 
@@ -152,7 +152,7 @@ def __enter__(self)
 
 此方法定义于基类 `FrameSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L68)
 
 ### kit.adapters.frame_source.FfmpegRtspSource.__exit__
 
@@ -164,7 +164,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `FrameSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L71)
 
 ### kit.adapters.frame_source.FfmpegRtspSource.__init__
 
@@ -174,7 +174,7 @@ def __init__(self, url: str=DEFAULT_SUB_STREAM, width: Optional[int]=None, heigh
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L83)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L83)
 
 ## kit.adapters.frame_source.SnapshotSource
 
@@ -196,7 +196,7 @@ def frames(self) -> Iterator[Frame]
 
 反复读取快照并产出 Kit Frame；适合兼容/诊断路径，时延和帧率受快照操作限制。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L230)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L230)
 
 ### kit.adapters.frame_source.SnapshotSource.close
 
@@ -206,7 +206,7 @@ def close(self) -> None
 
 关闭本对象持有的连接/线程/设备等资源。具体幂等性、在途任务及失败处理见该类生命周期说明；不要在关闭后继续发送或读取。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L239)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L239)
 
 ### kit.adapters.frame_source.SnapshotSource.__enter__
 
@@ -218,7 +218,7 @@ def __enter__(self)
 
 此方法定义于基类 `FrameSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L68)
 
 ### kit.adapters.frame_source.SnapshotSource.__exit__
 
@@ -230,7 +230,7 @@ def __exit__(self, *exc)
 
 此方法定义于基类 `FrameSource`。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L71)
 
 ### kit.adapters.frame_source.SnapshotSource.__init__
 
@@ -240,7 +240,7 @@ def __init__(self, url: str=DEFAULT_SUB_STREAM, interval: float=0.0, rtsp_transp
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L186)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L186)
 
 ## kit.adapters.frame_source.open_frame_source
 
@@ -256,4 +256,4 @@ frame broker (`/run/recamera/frame.sock`) and returns an
 exist, so the registry falls back to the workaround backend selected by
 `prefer` and behaviour is unchanged.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/adapters/frame_source.py#L243)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/adapters/frame_source.py#L243)

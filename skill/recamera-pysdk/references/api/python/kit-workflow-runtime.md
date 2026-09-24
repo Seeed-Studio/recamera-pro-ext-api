@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/workflow/runtime.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/workflow/runtime.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py)；签名由 AST 提取，不导入硬件依赖。
 
 同步 Pipeline 的组合、运行、统计与逆序清理；Stage 所有权只能转移一次，关闭等待在途任务。
 
@@ -54,7 +54,7 @@ def message(self) -> str
 
 Stable human-readable error summary.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L47)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L47)
 
 ## kit.workflow.runtime.WorkflowCloseReport
 
@@ -92,7 +92,7 @@ def ok(self) -> bool
 
 Whether every attempted closer completed without an exception.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L71)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L71)
 
 ### kit.workflow.runtime.WorkflowCloseReport.errors
 
@@ -103,7 +103,7 @@ def errors(self) -> tuple[str, ...]
 
 Compact ``stage: exception`` summaries for status reporting.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L77)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L77)
 
 ### kit.workflow.runtime.WorkflowCloseReport.as_dict
 
@@ -113,7 +113,7 @@ def as_dict(self) -> dict[str, Any]
 
 Return a JSON-compatible close summary.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L82)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L82)
 
 ## kit.workflow.runtime.Pipeline
 
@@ -147,7 +147,7 @@ def __init__(self, stages: Iterable[Stage]=(), *, clock: Callable[[], float]=tim
 
 构造实例并保存/校验上述参数；参数默认值见签名。是否在构造时打开设备或加载模型，以本类的生命周期说明为准；构造方法返回 None。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L166)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L166)
 
 ### kit.workflow.runtime.Pipeline.stages
 
@@ -158,7 +158,7 @@ def stages(self) -> tuple[Stage, ...]
 
 Stages in their exact deterministic execution order.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L202)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L202)
 
 ### kit.workflow.runtime.Pipeline.closed
 
@@ -169,7 +169,7 @@ def closed(self) -> bool
 
 Whether close has started and no further items may run.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L208)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L208)
 
 ### kit.workflow.runtime.Pipeline.__len__
 
@@ -179,7 +179,7 @@ def __len__(self) -> int
 
 返回同步 Pipeline 的 Stage 数量，不是运行线程数或队列长度。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L214)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L214)
 
 ### kit.workflow.runtime.Pipeline.__iter__
 
@@ -189,7 +189,7 @@ def __iter__(self) -> Iterator[Stage]
 
 返回本对象定义的迭代器；迭代元素与借用有效期见类说明。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L217)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L217)
 
 ### kit.workflow.runtime.Pipeline.__or__
 
@@ -203,7 +203,7 @@ A closer-backed stage is a linear resource, not a reusable value.  On
 success the source pipeline(s) are marked transferred and only the
 returned pipeline may execute or close the combined stages.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L220)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L220)
 
 ### kit.workflow.runtime.Pipeline.run_one
 
@@ -218,7 +218,7 @@ already present on ``context`` are absolute values from the pipeline's
 monotonic clock.  Ordinary stage exceptions become :class:`StageError`
 with cause/context; direct ``BaseException`` control flow passes through.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L460)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L460)
 
 ### kit.workflow.runtime.Pipeline.run
 
@@ -232,7 +232,7 @@ The iterator is lazy and runs entirely on its consumer's thread.  An
 absolute ``deadline`` applies to every item and can therefore serve as a
 whole-loop boundary; ``timeout`` is recomputed inside each ``run_one``.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L574)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L574)
 
 ### kit.workflow.runtime.Pipeline.close
 
@@ -242,7 +242,7 @@ def close(self) -> WorkflowCloseReport
 
 Drain active calls, then close stages in reverse order exactly once.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L598)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L598)
 
 ### kit.workflow.runtime.Pipeline.close_report
 
@@ -253,7 +253,7 @@ def close_report(self) -> WorkflowCloseReport | None
 
 The first close outcome, including context-manager teardown.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L688)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L688)
 
 ### kit.workflow.runtime.Pipeline.__enter__
 
@@ -263,7 +263,7 @@ def __enter__(self) -> 'Pipeline'
 
 进入上下文管理器，返回其受管对象；与 __exit__ 配对使用，避免异常路径遗留资源。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L694)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L694)
 
 ### kit.workflow.runtime.Pipeline.__exit__
 
@@ -273,4 +273,4 @@ def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None
 
 离开上下文并执行本类的清理方法；异常传播/清理失败语义见类说明，不把退出视作任务已完成。
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/workflow/runtime.py#L698)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/workflow/runtime.py#L698)

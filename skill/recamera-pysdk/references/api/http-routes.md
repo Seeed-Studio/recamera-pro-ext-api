@@ -41,7 +41,7 @@
 
 - 请求：无 body。
 - 返回：应用列表，含 manifest/UI 信息、运行/资源状态及可执行动作。
-- 特性：配置与运行状态可能变化，按实际 actions/state 决定操作可用性。
+- 特性：配置与运行状态可能变化，按实际 actions/state 决定操作可用性。 runtime.memory 可包含应用 PSS/匿名内存、共享推理服务 PSS、系统可用内存、增长趋势和保护原因；旧固件可能无此字段，stale 时不可当实时值。共享服务占用不能精确归因于单个应用。
 
 源码路由：`GET /api/app-center/v1/apps`
 
@@ -345,7 +345,7 @@
 
 - 请求：multipart/form-data：package 为 .tar.gz；可选 signature 服从 policy；必须有有效 Content-Length，限制以 policy 为准。
 - 返回：201，upload id 与 preflight（manifest、permissions、release_id、install_context 等）。
-- 特性：上传/预检不等于安装。来源与渠道由服务端确定，不接受客户端伪造。
+- 特性：上传/预检不等于安装。来源与渠道由服务端确定，不接受客户端伪造。 上传前按 policy 校验文件大小，最高 10 GiB；流式写盘仍受实际可用空间/暂存配额限制。413 表示超过限制，507 表示空间不足，503 memory_pressure 表示内存保护暂拒，均不是安装成功。
 
 源码路由：`POST /api/app-center/v1/uploads`
 

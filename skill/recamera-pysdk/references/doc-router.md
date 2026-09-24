@@ -41,7 +41,7 @@ not a requirement to recover missing baseline method signatures.
 
 Packaging does not require source resolution: the Skill already contains the
 fixed official builder from its pinned public SDK revision
-`60e0f2ade601152c3dd7bf7e228297cc8203a2ed`. Use a local checkout or pinned
+`635ffc3c51d596dd2e8139f297798162e6be62b9`. Use a local checkout or pinned
 public-upstream content when comparing newer API docs, Kit code, examples, or
 manifests.
 

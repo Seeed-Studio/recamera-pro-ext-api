@@ -2,7 +2,7 @@
 
 [API 索引](../index.md) · [接口特性与边界](../features.md)
 
-源码基线：[kit/config.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py)；签名由 AST 提取，不导入硬件依赖。
+源码基线：[kit/config.py](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py)；签名由 AST 提取，不导入硬件依赖。
 
 manifest、用户配置、schema 展平和有效配置解析；应用路径来自 AppMgr 上下文，避免按 __file__ 猜安装根目录。
 
@@ -45,7 +45,7 @@ still accepted for third-party packages built before the unification; it is
 normalised to the grouped form by `_flat_to_grouped` and logged once per
 process. Support for it will be dropped -- publish grouped.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L28)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L28)
 
 ## kit.config.flatten_schema
 
@@ -58,7 +58,7 @@ Return {key: default} for every schema item that declares one.
 Items with no "default" (e.g. retail zone/line controls) are omitted -- they
 only exist in config.json once the user draws them.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L68)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L68)
 
 ## kit.config.load_manifest
 
@@ -68,7 +68,7 @@ def load_manifest(app_dir: str) -> dict
 
 Read <app_dir>/manifest.json, or {} if missing/corrupt.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L78)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L78)
 
 ## kit.config.appdata_root
 
@@ -81,7 +81,7 @@ Root of the user-data tree that survives app upgrades.
 Mirrors appmgr's paths.APPDATA_DIR (same env var, same default). Read at
 call time so a test / a manually launched app can redirect it.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L87)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L87)
 
 ## kit.config.app_id_of_dir
 
@@ -91,7 +91,7 @@ def app_id_of_dir(app_dir: str, manifest: Optional[dict]=None) -> str
 
 The app id owning `app_dir`: manifest `id` if sane, else the dir name.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L96)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L96)
 
 ## kit.config.user_config_path
 
@@ -107,7 +107,7 @@ delete the user's settings. Falls back to the legacy in-app path while that
 file still exists (appmgr migrates it on the next read/write/install; the kit
 side only ever READS, it never moves files from the app process).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L106)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L106)
 
 ## kit.config.load_user_config
 
@@ -117,7 +117,7 @@ def load_user_config(app_dir: str, manifest: Optional[dict]=None) -> Dict[str, A
 
 Read the user's config.json overrides, or {} if absent/corrupt.
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L123)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L123)
 
 ## kit.config.effective_config
 
@@ -127,7 +127,7 @@ def effective_config(app_dir: str, manifest: Optional[dict]=None) -> Dict[str, A
 
 Merge manifest defaults with the user's config.json (config.json wins).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L133)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L133)
 
 ## kit.config.app_dir_of
 
@@ -141,4 +141,4 @@ The app object's class lives in the app's app.py, so its module __file__
 directory IS the install dir (where manifest.json / config.json sit). Falls
 back to CWD (appmgr launches each app with cwd=app_dir).
 
-[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/7b67185f34b9f4ab0e6d60d234c7568a5f94b1e6/kit/config.py#L143)
+[实现与参数校验](https://github.com/Seeed-Studio/recamera-pro-ext-api/blob/635ffc3c51d596dd2e8139f297798162e6be62b9/kit/config.py#L143)
