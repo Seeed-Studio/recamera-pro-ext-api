@@ -137,7 +137,6 @@ def test_failed_release_preserves_model_for_quarantine_and_retry(vendor, result)
 
 @pytest.mark.parametrize("inputs", [
     (),
-    (TensorSpec("speech", (1, 344, 560), "float32", "NTF"),),
     (TensorSpec("image", (1, 8, 8, 3)),
      TensorSpec("aux", (1, 2), "float32", "NC")),
 ])
@@ -147,11 +146,34 @@ def test_auto_fallback_contracts_use_collected_backend(vendor, monkeypatch, inpu
     assert isinstance(runtime, RknnLiteRuntime)
 
 
-def test_image_ctypes_selection_unchanged_and_explicit_lite_is_protected(vendor, monkeypatch):
+@pytest.mark.parametrize("spec", [
+    ModelSpec("image.rknn", inputs=(TensorSpec("image", (1, 8, 8, 3)),)),
+    ModelSpec("speech.rknn", inputs=(TensorSpec("speech", (1, 344, 560), "float32", "NTF"),)),
+])
+def test_ctypes_selection_and_explicit_lite_is_protected(vendor, monkeypatch, spec):
     from kit.runtime.ctypes_rknn import CtypesRknnModel
 
-    spec = ModelSpec("image.rknn", inputs=(TensorSpec("image", (1, 8, 8, 3)),))
     monkeypatch.setenv("ESK_RKNN_BACKEND", "auto")
     assert isinstance(_runtime_for_spec(spec), CtypesRknnModel)
     monkeypatch.setenv("ESK_RKNN_BACKEND", "rknnlite")
     assert isinstance(_runtime_for_spec(spec), RknnLiteRuntime)
+
+
+def test_service_does_not_collect_twice_for_protected_runtime(vendor, monkeypatch):
+    from contextlib import nullcontext
+    from market.inferenced.server import RknnBackend
+
+    runtime = RknnLiteRuntime()
+    collect = gc.collect
+    calls = []
+
+    def counted_collect(*args):
+        calls.append(args)
+        return collect(*args)
+
+    monkeypatch.setattr(gc, "collect", counted_collect)
+    backend = RknnBackend(coordinator=types.SimpleNamespace(hold=nullcontext))
+    out = backend.infer(runtime, [np.ones((1, 344, 560), dtype=np.float32)])
+    assert len(calls) == 1
+    assert all(ref() is None for ref in runtime.buffers)
+    np.testing.assert_array_equal(out[0], np.arange(6).reshape(2, 3))

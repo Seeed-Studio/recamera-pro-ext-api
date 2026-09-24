@@ -4,7 +4,7 @@ RKNNLite 2.3.2 leaves ctypes input/output buffers in reference cycles. Python's
 automatic collector counts objects, not their backing bytes: a handful of ASR
 outputs can retain hundreds of MiB before it runs. Collect after each vendor
 call in the process that owns the runtime, including failed calls and teardown.
-The default image ctypes/DMA backend does not use this wrapper or pay this cost.
+The ctypes backend (image/DMA or feature tensors) does not pay this cost.
 
 This does not change tensor ownership, dtype, shape, layout or backend selection.
 Live outputs remain valid across subsequent calls and release. Native context
@@ -22,6 +22,7 @@ class RknnLiteRuntime:
     """The vendor interface with explicit collection at synchronous boundaries."""
 
     backend = "rknnlite"
+    collects_output_cycles = True
 
     def __init__(self, *args, **kwargs):
         # Keep host imports independent of the target-only vendor wheel.

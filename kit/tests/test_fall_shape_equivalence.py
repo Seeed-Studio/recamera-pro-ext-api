@@ -140,13 +140,13 @@ def _raw_kpt(ox, oy, cell):
     """Original-frame (x, y) -> the raw (x, y) the pose head must emit.
 
     Inverse of the decoder: original -> letterbox (scale + pad) -> ultralytics
-    keypoint decode ``k = (raw * 2 + (g - 0.5)) * stride``.
+    keypoint decode ``k = (raw * 2 + g) * stride``.
     """
     col, row = cell
     lx = ox * _LB_INFO.scale + _LB_INFO.pad_w
     ly = oy * _LB_INFO.scale + _LB_INFO.pad_h
-    return ((lx / STRIDE - col + 0.5) / 2.0,
-            (ly / STRIDE - row + 0.5) / 2.0)
+    return ((lx / STRIDE - col) / 2.0,
+            (ly / STRIDE - row) / 2.0)
 
 
 def _skeleton(cx, cy, lying):

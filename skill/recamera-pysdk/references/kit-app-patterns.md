@@ -171,12 +171,22 @@ When the runtime receives a complete `ModelSpec.inputs` contract:
 | --- | --- | --- |
 | `ESK_RKNN_BACKEND=auto` (default) | Selects RKNNLite | Remote sessions use ordinary tensor messages over the Unix socket, without shared DMA IO |
 | `ESK_RKNN_BACKEND=rknnlite` | Supported by typed sessions | Model/operator support still depends on the installed RKNN runtime |
-| `ESK_RKNN_BACKEND=ctypes` | Rejected | Current ctypes backend requires one static image input, supplied as uint8 NHWC |
+| `ESK_RKNN_BACKEND=ctypes` | Rejected | Requires one static input: uint8 NHWC image, or uint8/int8/float16/float32 non-image tensor |
 | Bound/shared DMA IO and deferred `infer(prepared)` | Single input only | Do not apply this optimization to a multi-input model |
 
-`auto` selects from the declared contract; it is not a universal fallback after
-probing any model graph. A legacy path-only load without input metadata can
-still select ctypes and reject a multi-input graph even in `auto` mode.
+For a declared contract, `auto` selects ctypes for a supported static single
+input, including float32 NTF speech features. Non-image features use ordinary
+tensor IO, not image preprocessing or shared DMA. Multiple inputs select
+RKNNLite. The scheduled service can also inspect an undeclared graph in `auto`
+mode: it tries ctypes for supported non-image graphs and safely falls back to
+RKNNLite for unsupported graphs, including multiple inputs and undeclared
+image inputs. Initialization/cleanup failures do not allow an unsafe fallback.
+Local sessions without input metadata continue to select RKNNLite in `auto`.
+
+Kit's RKNNLite wrapper copies outputs and collects vendor buffer cycles on
+return/error and teardown. This bounds retained native buffers at an additional
+copy/GC cost; ctypes paths do not use that wrapper. Do not bypass the model
+factory with direct vendor RKNNLite imports to avoid this protection.
 
 For scheduled/brokered inference, backend selection occurs in the inference
 service process. Setting `ESK_RKNN_BACKEND` only in an App's environment does

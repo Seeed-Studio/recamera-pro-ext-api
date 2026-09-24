@@ -1,7 +1,8 @@
 # RKNN 推理内存生命周期
 
-Kit 的默认静态图像路径使用 ctypes/DMA；语音、多个输入、缺少可信输入声明的
-模型，以及显式 `ESK_RKNN_BACKEND=rknnlite` 使用 RKNNLite 兼容路径。两条路径
+Kit 的默认静态图像路径使用 ctypes/DMA；静态单输入特征张量也可使用 ctypes，
+通过普通张量协议传输。多个输入、不满足 ctypes 条件的模型，以及显式
+`ESK_RKNN_BACKEND=rknnlite` 使用 RKNNLite 兼容路径。两条路径
 都必须在实际持有模型的进程中管理内存，应用进程的垃圾回收不能清理推理服务的堆。
 
 ## RKNNLite 的循环引用
@@ -28,10 +29,16 @@ ctypes 缓冲区的循环引用，而非已证明的厂商 C 层缺少 `free`。
 - 覆盖 inferenced、普通本地 RknnSession/RknnModel 和本地 SenseVoice 后端。
   测试/厂商显式注入的 `runtime_factory` 仍由调用方负责其自定义实现。
 
-这会给 RKNNLite 路径增加输出复制和回收开销。图像 ctypes/DMA 快路径不执行这些
-操作。不能为了绕过回收而把 float32、NTF 或多个输入强制送进当前仅支持 uint8
-NHWC 图像输入的 ctypes 实现。应用自己导入厂商 RKNNLite 的调用也不经过 Kit
-保护；托管应用应使用模型工厂或 RemoteRknnSession。
+这会给 RKNNLite 路径增加输出复制和回收开销。ctypes 路径不执行这些兼容操作。
+合入 float 特征支持后，单个静态 uint8/int8/float16/float32 非图像输入（例如
+float32 NTF 语音特征）可使用 ctypes 的普通 IO；图像快速路径仍要求调用方提供
+uint8 NHWC。多个输入仍需 RKNNLite。服务在 auto 模式对未声明输入的模型先检查
+图结构；不支持的图在确认上下文已安全释放后回退，不能吞掉驱动初始化或释放错误。
+未声明输入的图像模型保留 RKNNLite 兼容行为。应用自己导入厂商 RKNNLite 的
+调用不经过 Kit 保护；托管应用应使用模型工厂或 RemoteRknnSession。
+
+服务只对未使用保护包装器的 RKNNLite 句柄保留推理前 GC，避免与包装器的推理后
+回收重复。状态接口使用 `ctypes` / `rknnlite` 标识实际后端。
 
 ## 服务线程中的大张量
 
@@ -56,7 +63,10 @@ NHWC 图像输入的 ctypes 实现。应用自己导入厂商 RKNNLite 的调用
 
 AppMgr 的[内存保护](memory-protection.md)仍作为异常应用和其他资源增长的兜底。
 
-### 2026-09-24 修复后目标板对照
+### 2026-09-24 RKNNLite 修复后目标板对照
+
+以下数据来自合入 float ctypes 支持前的 RKNNLite 路径；不代表更新后 auto 模式
+语音模型的耗时。选择 ctypes 后不会发生这里测量的 RKNNLite 输出复制和 GC。
 
 在同一台设备保持 depth-estimation、fall-detection 两个 ctypes 应用运行，另起
 使用正式服务实现、真实授权校验和同一 NPU 驱动锁的独立语音测试服务。临时授权
