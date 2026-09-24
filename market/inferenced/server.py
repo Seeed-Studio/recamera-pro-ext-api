@@ -6,6 +6,7 @@ import argparse
 import gc
 import hashlib
 import json
+import logging
 import os
 import re
 import signal
@@ -23,7 +24,8 @@ import numpy as np
 from kit.runtime._inference_protocol import ProtocolError, recv_message, send_message
 from kit.runtime._inference_protocol import MAX_MESSAGE_BYTES, MAX_TENSORS
 from kit.runtime._inference_shared import SHARED_IO_VERSION, send_fds
-from kit.runtime.ctypes_rknn import _BoundIOUnavailable
+from kit.runtime import ctypes_rknn as _ctypes_rknn
+from kit.runtime.ctypes_rknn import CtypesUnsupportedModel, _BoundIOUnavailable
 from kit.runtime.engine import (
     ModelSpec,
     TensorSpec,
@@ -54,6 +56,7 @@ DEFAULT_ALLOWED_ROOTS = (
     "/userdata/local/models",
     "/oem/usr/share/model",
 )
+log = logging.getLogger(__name__)
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
@@ -84,6 +87,26 @@ class RknnBackend:
             return _default_runtime_factory()
         return _runtime_for_spec(model_spec)
 
+    def _select_runtime(self, model_spec: ModelSpec):
+        """Return ``(runtime, may_fall_back_to_rknnlite)``.
+
+        A model whose manifest declares no input contract uses the ctypes
+        runtime, which reads the contract from the verified graph at init.
+        Its IO stays on the general API (no bound/shared IO), as with
+        RKNNLite.  Graphs ctypes cannot run fall back to RKNNLite at load.
+        ``ESK_RKNN_BACKEND=rknnlite|ctypes`` keeps its forcing meaning.
+        """
+        if self._runtime_factory is not None or model_spec.inputs:
+            return self._new_runtime(model_spec), False
+        choice = str(os.environ.get("ESK_RKNN_BACKEND", "auto")).strip().lower()
+        if choice == "auto" and _ctypes_rknn.library_path():
+            return _ctypes_rknn.CtypesRknnModel(io_mode="legacy"), True
+        return self._new_runtime(model_spec), False
+
+    @staticmethod
+    def backend_name(handle: Any) -> str:
+        return "ctypes" if getattr(handle, "backend", None) == "ctypes" else "rknnlite"
+
     @staticmethod
     def _tensor(raw: Mapping[str, Any]) -> TensorSpec:
         return TensorSpec(
@@ -103,34 +126,49 @@ class RknnBackend:
         )
         # Backend selection happens before entering the driver lock and before
         # either implementation performs native model loading.
-        runtime = self._new_runtime(model_spec)
+        runtime, may_fall_back = self._select_runtime(model_spec)
         with self.coordinator.hold() as token:
             try:
-                result = runtime.load_rknn(path)
-                if result != 0:
-                    raise RuntimeError(f"load_rknn failed with status {result!r}")
-                if model_spec.core_mask is None:
-                    result = runtime.init_runtime()
-                else:
-                    result = runtime.init_runtime(core_mask=model_spec.core_mask)
-                if result != 0:
-                    raise RuntimeError(f"init_runtime failed with status {result!r}")
-            except BaseException as load_error:
-                if getattr(runtime, "native_cleanup_failed", False):
-                    token.retain_fail_closed(f"model initialization cleanup failed: {load_error}")
+                self._initialize(token, runtime, path, model_spec)
+            except CtypesUnsupportedModel as unsupported:
+                # Fall back only after the ctypes context was destroyed; a
+                # failed teardown has already quarantined the driver.
+                if not (may_fall_back and getattr(runtime, "released", False)
+                        and not getattr(runtime, "native_cleanup_failed", False)):
                     raise
-                try:
-                    released = runtime.release()
-                    if released not in (None, 0):
-                        raise RuntimeError(
-                            f"RKNNLite.release returned {released!r} during rollback"
-                        )
-                except BaseException as release_error:
-                    token.retain_fail_closed(
-                        f"model-load rollback failed for {path}: {release_error}"
-                    )
-                raise
+                log.info("ctypes backend cannot run %s (%s); using RKNNLite",
+                         model_spec.name or path, unsupported)
+                runtime = _default_runtime_factory()
+                self._initialize(token, runtime, path, model_spec)
         return runtime
+
+    @staticmethod
+    def _initialize(token, runtime, path: str, model_spec: ModelSpec) -> None:
+        try:
+            result = runtime.load_rknn(path)
+            if result != 0:
+                raise RuntimeError(f"load_rknn failed with status {result!r}")
+            if model_spec.core_mask is None:
+                result = runtime.init_runtime()
+            else:
+                result = runtime.init_runtime(core_mask=model_spec.core_mask)
+            if result != 0:
+                raise RuntimeError(f"init_runtime failed with status {result!r}")
+        except BaseException as load_error:
+            if getattr(runtime, "native_cleanup_failed", False):
+                token.retain_fail_closed(f"model initialization cleanup failed: {load_error}")
+                raise
+            try:
+                released = runtime.release()
+                if released not in (None, 0):
+                    raise RuntimeError(
+                        f"RKNNLite.release returned {released!r} during rollback"
+                    )
+            except BaseException as release_error:
+                token.retain_fail_closed(
+                    f"model-load rollback failed for {path}: {release_error}"
+                )
+            raise
 
     def infer(self, handle: Any, inputs: Sequence[np.ndarray]) -> list[np.ndarray]:
         if getattr(handle, "backend", None) != "ctypes":
@@ -226,6 +264,10 @@ class FakeBackend:
 
     def release(self, handle: Mapping[str, Any]) -> None:
         self.released.append(str(handle["path"]))
+
+    @staticmethod
+    def backend_name(handle: Any) -> str:
+        return "fake"
 
 
 @dataclass
@@ -1078,10 +1120,12 @@ class InferenceService:
             self._clients.pop(client.id, None)
 
     def status(self) -> dict:
+        backend_name = getattr(self.backend, "backend_name", None)
         with self._lock:
             models = [
                 {
                     "key": item.key,
+                    "backend": backend_name(item.handle) if callable(backend_name) else None,
                     "sha256": item.sha256,
                     "memory_mb": item.memory_mb,
                     "priority": item.priority,
