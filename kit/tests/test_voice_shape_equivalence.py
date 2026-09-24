@@ -485,6 +485,8 @@ class _Base(unittest.TestCase):
             for it in g["items"]:
                 self.eff[it["key"]] = it["default"]
         self.eff["listen_timeout_sec"] = LISTEN_TIMEOUT_SEC
+        # The legacy loop always waits for a wake word; compare in that mode.
+        self.eff["wake_word_enabled"] = True
 
         self._env = os.environ.get("RECAMERA_VOICE_WAV")
         os.environ["RECAMERA_VOICE_WAV"] = "/tmp/fixture.wav"

@@ -295,7 +295,7 @@
   "id": "voice-transcribe",
   "name": "Voice Transcribe",
   "name_zh": "语音转录",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "image": "/appcenter/apps/voice-transcribe.png",
   "icon": {
     "path": "icon.png",
@@ -304,8 +304,8 @@
   "type": "self-hosted",
   "scene": "Voice & Audio",
   "scene_zh": "语音音频",
-  "description": "On-device offline voice transcription: wake word -> VAD endpointing -> SenseVoice ASR. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux is a fallback). Streaming sherpa-onnx KWS and silero VAD run on the ARM cores; the default `rk` ASR backend runs SenseVoice w4a16 on the RV1126B NPU under the shared rkipc broker lease. The optional `sherpa` ASR backend is CPU-only and requires an extra ONNX model. Streams state and transcript text to the /appcenter panel.",
-  "description_zh": "设备端离线语音转录：唤醒词 -> VAD 断句 -> SenseVoice 识别。默认通过官方 ALSA `ai_asr` 共享采集 PCM（dsnoop，与 rkipc 共用麦克风、不接管设备、不影响视频；也可回退到 RTSP 音频轨）。流式 sherpa-onnx KWS 与 silero VAD 运行在 ARM 核心；默认 `rk` 识别后端通过共享的 rkipc broker 租约，在 RV1126B NPU 上运行 SenseVoice w4a16。可选 `sherpa` 识别后端仅使用 CPU，且需额外提供 ONNX 模型。向 /appcenter 面板输出状态与转录文本。",
+  "description": "On-device offline voice transcription: VAD endpointing -> SenseVoice ASR, transcribing every utterance continuously by default; an optional wake word (off by default, switchable live) gates transcription behind a wake phrase. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux is a fallback). Streaming sherpa-onnx KWS (when the wake word is enabled) and silero VAD run on the ARM cores; the default `rk` ASR backend runs SenseVoice w4a16 on the RV1126B NPU under the shared rkipc broker lease. The optional `sherpa` ASR backend is CPU-only and requires an extra ONNX model. Streams state and transcript text to the /appcenter panel.",
+  "description_zh": "设备端离线语音转录：VAD 断句 -> SenseVoice 识别，默认持续转写每一句话；可选唤醒词（默认关闭，可在线切换），开启后说出唤醒词才转写。默认通过官方 ALSA `ai_asr` 共享采集 PCM（dsnoop，与 rkipc 共用麦克风、不接管设备、不影响视频；也可回退到 RTSP 音频轨）。流式 sherpa-onnx KWS（启用唤醒词时）与 silero VAD 运行在 ARM 核心；默认 `rk` 识别后端通过共享的 rkipc broker 租约，在 RV1126B NPU 上运行 SenseVoice w4a16。可选 `sherpa` 识别后端仅使用 CPU，且需额外提供 ONNX 模型。向 /appcenter 面板输出状态与转录文本。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -483,6 +483,16 @@
         "title": "Wake word",
         "title_zh": "唤醒词",
         "items": [
+          {
+            "key": "wake_word_enabled",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Require wake word",
+            "title_zh": "启用唤醒词",
+            "default": false,
+            "help": "Off: transcribe every utterance continuously. On: transcribe only after the wake phrase.",
+            "help_zh": "关闭：持续转写每一句话。开启：说出唤醒词后才转写。"
+          },
           {
             "key": "wake_backend",
             "type": "enum",
