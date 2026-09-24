@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import os
@@ -132,6 +133,15 @@ class RknnBackend:
         return runtime
 
     def infer(self, handle: Any, inputs: Sequence[np.ndarray]) -> list[np.ndarray]:
+        if getattr(handle, "backend", None) != "ctypes":
+            # RKNNLite 2.3.2 keeps each call's output arrays in reference
+            # cycles, so only the cyclic GC frees them.  GC is triggered by
+            # object counts, not bytes: a 34 MB SenseVoice logits tensor per
+            # call accumulated until the kernel OOM-killed this daemon.  By
+            # now the previous call's outputs have been sent and dropped, so
+            # a full collection here reclaims them without copying the
+            # current outputs.  Runs outside the driver lock.
+            gc.collect()
         with self.coordinator.hold():
             outputs = handle.inference(inputs=list(inputs))
             if outputs is None:
