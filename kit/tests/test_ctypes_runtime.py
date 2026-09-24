@@ -198,7 +198,7 @@ def test_backend_selection_explicit_rknnlite_and_unsupported_contracts(monkeypat
         engine.TensorSpec("a", (1, 2, 2, 3)),
         engine.TensorSpec("b", (1, 2, 2, 3)),
     ))
-    with pytest.raises(ConfigurationError, match="one static uint8 NHWC"):
+    with pytest.raises(ConfigurationError, match="one static input"):
         monkeypatch.setenv("ESK_RKNN_BACKEND", "ctypes")
         engine._runtime_for_spec(multi)
 
@@ -259,5 +259,160 @@ def test_native_input_shape_is_checked_before_driver(tmp_path, monkeypatch):
         with pytest.raises(ValueError, match="input shape"):
             model.inference(inputs=[np.zeros((1, 3, 2, 2), np.uint8)])
         assert not hasattr(lib, "input_descriptor") or lib.input_descriptor is None
+    finally:
+        model.release()
+
+
+class SequenceFakeLib(ImageFakeLib):
+    """3D float16 graph, e.g. SenseVoice's (1, T, F) encoder input."""
+
+    def __init__(self, dims=(1, 344, 560), **kwargs):
+        super().__init__(**kwargs)
+        self.seq_dims = dims
+        self.destroy_before_release = None
+
+    def rknn_query(self, ctx, cmd, value, size):
+        if cmd == ctypes_rknn.RKNN_QUERY_INPUT_ATTR:
+            value._obj.n_dims = len(self.seq_dims)
+            value._obj.dims[0:len(self.seq_dims)] = self.seq_dims
+            value._obj.type = ctypes_rknn.RKNN_TENSOR_FLOAT16
+            value._obj.fmt = ctypes_rknn.RKNN_TENSOR_UNDEFINED
+            return 0
+        return super().rknn_query(ctx, cmd, value, size)
+
+
+class BoundCapableSequenceLib(SequenceFakeLib):
+    def rknn_create_mem(self, *args):  # pragma: no cover - must not be reached
+        raise AssertionError("bound IO attempted for a non-image input")
+
+    rknn_destroy_mem = rknn_set_io_mem = rknn_mem_sync = rknn_create_mem
+
+
+def test_rknn_enum_values_match_rknn_api_header():
+    # rknn_api.h: _rknn_tensor_type / _rknn_tensor_format.
+    assert (ctypes_rknn.RKNN_TENSOR_FLOAT32, ctypes_rknn.RKNN_TENSOR_FLOAT16,
+            ctypes_rknn.RKNN_TENSOR_INT8, ctypes_rknn.RKNN_TENSOR_UINT8) == (0, 1, 2, 3)
+    assert (ctypes_rknn.RKNN_TENSOR_NCHW, ctypes_rknn.RKNN_TENSOR_NHWC,
+            ctypes_rknn.RKNN_TENSOR_NC1HWC2,
+            ctypes_rknn.RKNN_TENSOR_UNDEFINED) == (0, 1, 2, 3)
+
+
+def test_float32_sequence_input_sets_float32_undefined_descriptor(tmp_path, monkeypatch):
+    lib = SequenceFakeLib()
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, lib)
+    try:
+        feats = np.zeros((1, 344, 560), np.float32)
+        result = model.inference(inputs=[feats])
+        assert result[0].shape == (2,)
+        descriptor = lib.input_descriptor
+        assert descriptor.pass_through == 0
+        assert descriptor.type == ctypes_rknn.RKNN_TENSOR_FLOAT32
+        assert descriptor.fmt == ctypes_rknn.RKNN_TENSOR_UNDEFINED
+        assert descriptor.size == feats.nbytes
+        assert model.io_mode == "legacy"
+    finally:
+        model.release()
+
+
+@pytest.mark.parametrize("dtype, native", [
+    (np.float16, ctypes_rknn.RKNN_TENSOR_FLOAT16),
+    (np.int8, ctypes_rknn.RKNN_TENSOR_INT8),
+    (np.uint8, ctypes_rknn.RKNN_TENSOR_UINT8),
+])
+def test_sequence_input_descriptor_follows_caller_dtype(tmp_path, monkeypatch, dtype, native):
+    lib = SequenceFakeLib(dims=(1, 4, 3))
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, lib)
+    try:
+        model.inference(inputs=[np.zeros((1, 4, 3), dtype)])
+        assert lib.input_descriptor.type == native
+        assert lib.input_descriptor.fmt == ctypes_rknn.RKNN_TENSOR_UNDEFINED
+    finally:
+        model.release()
+
+
+def test_sequence_input_shape_and_dtype_are_checked_before_driver(tmp_path, monkeypatch):
+    lib = SequenceFakeLib()
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, lib)
+    try:
+        with pytest.raises(ValueError, match="input shape"):
+            model.inference(inputs=[np.zeros((1, 100, 560), np.float32)])
+        with pytest.raises(ValueError, match="input shape"):
+            model.inference(inputs=[np.zeros((344, 560), np.float32)])
+        with pytest.raises(TypeError, match="float32"):
+            model.inference(inputs=[np.zeros((1, 344, 560), np.float64)])
+        assert lib.input_descriptor is None
+    finally:
+        model.release()
+
+
+def test_sequence_input_skips_bound_io_without_recreating_context(tmp_path, monkeypatch):
+    lib = BoundCapableSequenceLib(dims=(1, 4, 3))
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, lib)
+    try:
+        assert model.io_mode == "legacy"
+        assert "image" in model.io_fallback_reason
+        assert lib.destroy_calls == 0
+        model.inference(inputs=[np.zeros((1, 4, 3), np.float32)])
+    finally:
+        model.release()
+
+    path = tmp_path / "bound.rknn"
+    path.write_bytes(b"rknn")
+    strict = ctypes_rknn.CtypesRknnModel(io_mode="bound")
+    strict.load_rknn(path)
+    with pytest.raises(ctypes_rknn._BoundIOUnavailable):
+        strict.init_runtime()
+    strict.release()
+
+
+def test_auto_selects_ctypes_for_float32_feature_sequence(monkeypatch):
+    monkeypatch.setenv("ESK_RKNN_BACKEND", "auto")
+    monkeypatch.setattr(ctypes_rknn, "library_path", lambda: "/fake/rt.so")
+    sentinel = object()
+    monkeypatch.setattr(engine, "_default_runtime_factory", lambda: sentinel)
+    spec = engine.ModelSpec("asr.rknn", inputs=(engine.TensorSpec(
+        "speech", (1, 344, 560), "float32", "NTF"),))
+    assert isinstance(engine._runtime_for_spec(spec), ctypes_rknn.CtypesRknnModel)
+    # Image-shaped non-uint8 and dynamic contracts stay on RKNNLite.
+    for tensor in (engine.TensorSpec("x", (1, 2, 2, 3), "float32", "NHWC"),
+                   engine.TensorSpec("x", (1, 3, 2, 2), "uint8", "NCHW"),
+                   engine.TensorSpec("x", (1, -1, 560), "float32", "NTF"),
+                   engine.TensorSpec("x", (1, 344, 560), "float64", "NTF")):
+        assert engine._runtime_for_spec(engine.ModelSpec("x.rknn", inputs=(tensor,))) is sentinel
+
+
+@pytest.mark.parametrize("dims, fmt, dtype", [
+    ((1, 0, 560), ctypes_rknn.RKNN_TENSOR_UNDEFINED, ctypes_rknn.RKNN_TENSOR_FLOAT16),
+    ((1, 8), ctypes_rknn.RKNN_TENSOR_NC1HWC2, ctypes_rknn.RKNN_TENSOR_FLOAT16),
+    ((1, 8), ctypes_rknn.RKNN_TENSOR_UNDEFINED, 6),  # RKNN_TENSOR_INT32
+])
+def test_unsupported_graph_input_raises_distinct_error_and_releases(
+        tmp_path, monkeypatch, dims, fmt, dtype):
+    class Lib(SequenceFakeLib):
+        def rknn_query(self, ctx, cmd, value, size):
+            result = super().rknn_query(ctx, cmd, value, size)
+            if cmd == ctypes_rknn.RKNN_QUERY_INPUT_ATTR:
+                value._obj.fmt, value._obj.type = fmt, dtype
+            return result
+
+    lib = Lib(dims=dims)
+    monkeypatch.setattr(ctypes_rknn, "_load", lambda: lib)
+    path = tmp_path / "m.rknn"
+    path.write_bytes(b"rknn")
+    model = ctypes_rknn.CtypesRknnModel(io_mode="legacy")
+    model.load_rknn(path)
+    with pytest.raises(ctypes_rknn.CtypesUnsupportedModel):
+        model.init_runtime()
+    model.release()
+    assert model.released and lib.destroy_calls == 1
+
+
+def test_input_contract_errors_are_value_errors(tmp_path, monkeypatch):
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, SequenceFakeLib(dims=(1, 4, 3)))
+    try:
+        for value in (np.zeros((1, 4, 3), np.float64), np.zeros((1, 3, 4), np.float32)):
+            with pytest.raises(ctypes_rknn.InputContractError) as caught:
+                model.inference(inputs=[value])
+            assert isinstance(caught.value, ValueError)
     finally:
         model.release()

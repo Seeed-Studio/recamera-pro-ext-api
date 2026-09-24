@@ -1,4 +1,9 @@
-"""Direct ``librknnrt.so`` bindings for a single uint8 NHWC caller input.
+"""Direct ``librknnrt.so`` bindings for a single static caller input.
+
+Image graphs (4D, NHWC or NCHW) take a uint8 NHWC caller array. Other graphs
+(for example a 3D float32 sequence) take an array whose shape equals the
+graph's declared dims and whose dtype is uint8, int8, float16 or float32; the
+descriptor carries that dtype and the graph's own fmt.
 
 The August 19 legacy-path investigation observed reference cycles retained by
 RKNNLite 2.3.2 and compared direct bindings against that wrapper. Those historical
@@ -62,6 +67,14 @@ RKNN_TENSOR_NHWC = 1
 RKNN_TENSOR_NCHW = 0
 RKNN_TENSOR_NC1HWC2 = 2
 RKNN_TENSOR_UNDEFINED = 3
+
+# numpy dtype name -> rknn_tensor_type (rknn_api.h, _rknn_tensor_type).
+_CALLER_TYPES = {
+    "uint8": RKNN_TENSOR_UINT8,
+    "int8": RKNN_TENSOR_INT8,
+    "float16": RKNN_TENSOR_FLOAT16,
+    "float32": RKNN_TENSOR_FLOAT32,
+}
 RKNN_MEMORY_SYNC_TO_DEVICE = 1
 RKNN_MEMORY_SYNC_FROM_DEVICE = 2
 
@@ -145,6 +158,20 @@ class RknnTensorMem(ctypes.Structure):
 
 class _BoundIOUnavailable(RuntimeError):
     pass
+
+
+class CtypesUnsupportedModel(RuntimeError):
+    """The graph's own input contract is outside what this backend handles.
+
+    Raised by ``init_runtime`` after the native context exists; the caller
+    must ``release()`` it.  RKNNLite may still run such a graph, so callers
+    that did not declare an input contract can fall back to it.
+    """
+
+
+class InputContractError(ValueError, TypeError):
+    """A caller tensor does not match the graph input; raised before any
+    driver call.  Subclasses TypeError for callers of the older dtype check."""
 
 
 class RknnIOBuffer:
@@ -307,7 +334,7 @@ def _attr_dict(attr: RknnTensorAttr) -> dict:
 class CtypesRknnModel:
     """One ``rknn_context``, same surface as ``RknnLiteModel``.
 
-    ``infer(uint8_NHWC) -> list[np.ndarray]`` of dequantized float32 tensors
+    ``infer(array) -> list[np.ndarray]`` of dequantized float32 tensors
     shaped by the graph's declared output dims.
 
     One ``rknn_input`` array and one ``rknn_output`` array are allocated at
@@ -318,10 +345,14 @@ class CtypesRknnModel:
     backend = "ctypes"
 
     def __init__(self, path: str = "", core_mask: Optional[int] = None,
-                 io_mode: Optional[str] = None):
+                 io_mode: Optional[str] = None, image_inputs: bool = True):
         # Match RKNNLite's two phase API.  The daemon constructs backends
         # outside its driver lock; no native call is allowed here.
         self.path = str(path)
+        # False makes a 4D image graph raise CtypesUnsupportedModel: without a
+        # declared contract the caller may send float pixels, which only the
+        # RKNNLite path accepts for image graphs.
+        self._allow_image_input = bool(image_inputs)
         self.core_mask = core_mask
         self.lib = None
         self.lib_path = ""
@@ -340,6 +371,8 @@ class CtypesRknnModel:
         self.n_output = 0
         self._out_shapes = []
         self._input_shape = ()
+        self._input_fmt = RKNN_TENSOR_NHWC
+        self._image_input = True
         self._ready = False
         self._output_release_failed = False
         self._native_cleanup_failed = False
@@ -369,6 +402,14 @@ class CtypesRknnModel:
     def init_runtime(self, *, core_mask: Optional[int] = None, **kwargs) -> int:
         self._initialize_context(core_mask=core_mask, **kwargs)
         if self.requested_io_mode == "legacy":
+            return RKNN_SUCC
+        if not self._image_input:
+            # Bound IO is limited to uint8 NHWC images. Nothing native has
+            # been bound yet, so the general-API context stays usable.
+            self.io_fallback_reason = "bound IO supports only static NHWC image inputs"
+            if self.requested_io_mode == "bound":
+                self._ready = False
+                raise _BoundIOUnavailable(self.io_fallback_reason)
             return RKNN_SUCC
         required = ("rknn_create_mem", "rknn_destroy_mem", "rknn_set_io_mem",
                     "rknn_mem_sync")
@@ -477,19 +518,47 @@ class CtypesRknnModel:
             for i in range(self.n_output)
         ]
         if self.n_input != 1:
-            raise RuntimeError(f"ctypes backend requires one input, got {self.n_input}")
+            raise CtypesUnsupportedModel(
+                f"ctypes backend requires one input, got {self.n_input}")
         attr = self.input_attrs[0]
-        if attr.n_dims != 4 or attr.fmt not in (RKNN_TENSOR_NHWC, RKNN_TENSOR_NCHW):
-            raise RuntimeError("ctypes backend requires a static 4D image model")
-        shape = tuple(int(attr.dims[i]) for i in range(4))
+        if not 1 <= attr.n_dims <= len(attr.dims):
+            raise CtypesUnsupportedModel(
+                f"ctypes backend got invalid input rank {attr.n_dims}")
+        shape = tuple(int(attr.dims[i]) for i in range(attr.n_dims))
         if not all(shape):
-            raise RuntimeError("ctypes backend does not support dynamic input shapes")
-        # Graph storage may be int8/float16 and NCHW. pass_through=0 asks RKNN
-        # to convert the caller's uint8 NHWC pixels to that internal format.
-        self._input_shape = (shape if attr.fmt == RKNN_TENSOR_NHWC
-                             else (shape[0], shape[2], shape[3], shape[1]))
+            raise CtypesUnsupportedModel(
+                "ctypes backend does not support dynamic input shapes")
+        self._image_input = (attr.n_dims == 4
+                             and attr.fmt in (RKNN_TENSOR_NHWC, RKNN_TENSOR_NCHW))
+        if self._image_input and not self._allow_image_input:
+            raise CtypesUnsupportedModel(
+                "image graph without a declared uint8 contract stays on RKNNLite")
+        if not self._image_input:
+            if attr.fmt not in (RKNN_TENSOR_NCHW, RKNN_TENSOR_NHWC,
+                                RKNN_TENSOR_UNDEFINED):
+                raise CtypesUnsupportedModel(
+                    f"ctypes backend does not support input fmt {int(attr.fmt)}")
+            if attr.type not in _CALLER_TYPES.values():
+                raise CtypesUnsupportedModel(
+                    f"ctypes backend does not support input type {int(attr.type)}")
+        if self._image_input:
+            # Graph storage may be int8/float16 and NCHW. pass_through=0 asks
+            # RKNN to convert the caller's uint8 NHWC pixels to that format.
+            self._input_shape = (shape if attr.fmt == RKNN_TENSOR_NHWC
+                                 else (shape[0], shape[2], shape[3], shape[1]))
+            self._input_fmt = RKNN_TENSOR_NHWC
+        else:
+            # Non-image graph: the caller supplies the declared dims in the
+            # graph's own fmt; pass_through=0 converts dtype/quantization.
+            self._input_shape = shape
+            self._input_fmt = int(attr.fmt)
         self._ready = True
         return RKNN_SUCC
+
+    @property
+    def released(self):
+        """Whether release() completed and no native context remains."""
+        return self._released
 
     @property
     def native_cleanup_failed(self):
@@ -801,18 +870,32 @@ class CtypesRknnModel:
 
     def _prepare_input(self, input_uint8):
         arr = np.asarray(input_uint8)
-        if arr.ndim == 3:
-            arr = np.expand_dims(arr, 0)
-        if arr.dtype != np.uint8:
-            raise TypeError(f"ctypes backend requires uint8 input, got {arr.dtype}")
+        if self._image_input:
+            if arr.ndim == 3:
+                arr = np.expand_dims(arr, 0)
+            if arr.dtype != np.uint8:
+                raise InputContractError(
+                    f"ctypes backend requires uint8 input, got {arr.dtype}")
+        elif arr.dtype.name not in _CALLER_TYPES:
+            raise InputContractError("ctypes backend requires uint8, int8, float16 or "
+                                     f"float32 input, got {arr.dtype}")
+        elif not arr.dtype.isnative:
+            # The driver reads the buffer in native byte order; a '>f4' array
+            # passes the name check but its bytes would decode to other values.
+            arr = arr.astype(arr.dtype.newbyteorder("="))
         if arr.shape != self._input_shape:
-            raise ValueError(f"input shape {arr.shape} != model shape {self._input_shape}")
+            raise InputContractError(
+                f"input shape {arr.shape} != model shape {self._input_shape}")
         return arr
 
     # ---------------------------------------------------------------- infer
 
     def infer(self, input_uint8) -> List[np.ndarray]:
-        """One forward pass. Input is uint8 NHWC; outputs are float32."""
+        """One forward pass; outputs are float32.
+
+        Image graphs take uint8 NHWC. Other graphs take the declared dims in
+        one of the dtypes listed in ``_CALLER_TYPES``.
+        """
         self._require_ready()
         if self.io_mode == "bound":
             out = [np.empty(shape, dtype=np.float32) for shape in self._out_shapes]
@@ -825,8 +908,8 @@ class CtypesRknnModel:
         inp.buf = arr.ctypes.data_as(ctypes.c_void_p)
         inp.size = arr.nbytes
         inp.pass_through = 0
-        inp.type = RKNN_TENSOR_UINT8
-        inp.fmt = RKNN_TENSOR_NHWC
+        inp.type = _CALLER_TYPES[arr.dtype.name]
+        inp.fmt = self._input_fmt
         ret = lib.rknn_inputs_set(self.ctx, self.n_input, self._inputs)
         if ret != RKNN_SUCC:
             raise RuntimeError(f"rknn_inputs_set failed: ret={ret}")

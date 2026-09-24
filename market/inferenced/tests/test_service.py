@@ -280,6 +280,62 @@ def test_rknn_backend_reports_none_outputs_explicitly():
         backend.infer(Runtime(), [np.zeros((1, 3, 4), dtype=np.float32)])
 
 
+def test_rknn_backend_reclaims_rknnlite_output_cycles_between_calls():
+    import gc
+    import weakref
+
+    class Coordinator:
+        @contextmanager
+        def hold(self):
+            yield
+
+    class Runtime:
+        """Mimics RKNNLite 2.3.2 retaining its outputs in a reference cycle."""
+
+        def inference(self, *, inputs):
+            output = np.zeros((1, 344, 25055), dtype=np.float32)
+            holder = {"output": output}
+            holder["self"] = holder
+            return [output]
+
+    backend = RknnBackend(coordinator=Coordinator())
+    runtime = Runtime()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        first = backend.infer(runtime, [np.zeros((1, 344, 560), np.float32)])
+        previous = weakref.ref(first[0])
+        del first
+        assert previous() is not None
+        backend.infer(runtime, [np.zeros((1, 344, 560), np.float32)])
+        assert previous() is None
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def test_rknn_backend_skips_collection_for_ctypes_handles(monkeypatch):
+    import gc
+
+    class Coordinator:
+        @contextmanager
+        def hold(self):
+            yield
+
+    class Runtime:
+        backend = "ctypes"
+
+        def inference(self, *, inputs):
+            return [np.zeros((1, 4), dtype=np.float32)]
+
+    calls = []
+    monkeypatch.setattr(gc, "collect", lambda *args: calls.append(args) or 0)
+    RknnBackend(coordinator=Coordinator()).infer(
+        Runtime(), [np.zeros((1, 2, 2, 3), np.uint8)]
+    )
+    assert calls == []
+
+
 def test_identical_digest_and_spec_share_one_loaded_context(tmp_path):
     running = RunningService(tmp_path)
     path, digest = model(tmp_path)
