@@ -121,10 +121,15 @@ _INTEGER_KEYS = {
 # a blanket "integral default => integer" sweep would have silently truncated
 # these the first time somebody typed a decimal.
 _DELIBERATE_NUMBER_KEYS = {
-    "fall-detection": {"torso_angle_threshold_deg", "recovery_torso_angle_deg"},
+    # Recording cooldowns are elapsed seconds and intentionally allow fractions.
+    "facemesh-reader": {"recording_cooldown_sec"},
+    "fall-detection": {"torso_angle_threshold_deg", "recovery_torso_angle_deg",
+                       "recording_cooldown_sec"},
     "fitness-trainer": {"idle_reset_seconds"},
     "depth-estimation": {"near_percentile"},
-    "retail-vision": {"dwell_assist", "dwell_speed", "window_duration"},
+    "qrcode-reader": {"recording_cooldown_sec"},
+    "retail-vision": {"dwell_assist", "dwell_speed", "window_duration",
+                      "recording_cooldown_sec"},
 }
 
 
