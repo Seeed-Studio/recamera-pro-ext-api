@@ -728,8 +728,10 @@ render 或 space 都会被忽略。
 范围的 kit。新源码 manifest 中的版本不等于 catalog 中已经发布的包版本；新包
 必须先由 v2 builder 生成 lock、BOM 和签名，再更新 catalog。
 
-ctypes backend 接受调用方的静态单输入 `uint8/NHWC` 合约。native graph 内部
-仍可能是 NCHW 或 int8，这不改变调用方合约。auto 模式遇到不支持的 spec 使用
+ctypes backend 接受调用方的静态单输入合约：4D `uint8/NHWC` 图像，或非图像
+张量（例如 SenseVoice 的 `float32 (1, 344, 560)`），dtype 为 uint8/int8/float16/
+float32，形状须等于 graph 声明的 dims。native graph 内部仍可能是 NCHW 或 int8，
+这不改变调用方合约。auto 模式遇到不支持的 spec 使用
 `rknnlite`；可用 `ESK_RKNN_BACKEND=rknnlite` 强制选择，但 native 初始化失败后
 不会隐式切换 backend。managed 模式的上游 lease 与 driver lock 仍然生效；早期
 RSS 数字来自 8 月 19 日的旧路径，新 daemon 仍需在设备上验证。
