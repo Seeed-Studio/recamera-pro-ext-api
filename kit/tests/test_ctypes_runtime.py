@@ -379,3 +379,40 @@ def test_auto_selects_ctypes_for_float32_feature_sequence(monkeypatch):
                    engine.TensorSpec("x", (1, -1, 560), "float32", "NTF"),
                    engine.TensorSpec("x", (1, 344, 560), "float64", "NTF")):
         assert engine._runtime_for_spec(engine.ModelSpec("x.rknn", inputs=(tensor,))) is sentinel
+
+
+@pytest.mark.parametrize("dims, fmt, dtype", [
+    ((1, 0, 560), ctypes_rknn.RKNN_TENSOR_UNDEFINED, ctypes_rknn.RKNN_TENSOR_FLOAT16),
+    ((1, 8), ctypes_rknn.RKNN_TENSOR_NC1HWC2, ctypes_rknn.RKNN_TENSOR_FLOAT16),
+    ((1, 8), ctypes_rknn.RKNN_TENSOR_UNDEFINED, 6),  # RKNN_TENSOR_INT32
+])
+def test_unsupported_graph_input_raises_distinct_error_and_releases(
+        tmp_path, monkeypatch, dims, fmt, dtype):
+    class Lib(SequenceFakeLib):
+        def rknn_query(self, ctx, cmd, value, size):
+            result = super().rknn_query(ctx, cmd, value, size)
+            if cmd == ctypes_rknn.RKNN_QUERY_INPUT_ATTR:
+                value._obj.fmt, value._obj.type = fmt, dtype
+            return result
+
+    lib = Lib(dims=dims)
+    monkeypatch.setattr(ctypes_rknn, "_load", lambda: lib)
+    path = tmp_path / "m.rknn"
+    path.write_bytes(b"rknn")
+    model = ctypes_rknn.CtypesRknnModel(io_mode="legacy")
+    model.load_rknn(path)
+    with pytest.raises(ctypes_rknn.CtypesUnsupportedModel):
+        model.init_runtime()
+    model.release()
+    assert model.released and lib.destroy_calls == 1
+
+
+def test_input_contract_errors_are_value_errors(tmp_path, monkeypatch):
+    model = _loaded_ctypes_model(tmp_path, monkeypatch, SequenceFakeLib(dims=(1, 4, 3)))
+    try:
+        for value in (np.zeros((1, 4, 3), np.float64), np.zeros((1, 3, 4), np.float32)):
+            with pytest.raises(ctypes_rknn.InputContractError) as caught:
+                model.inference(inputs=[value])
+            assert isinstance(caught.value, ValueError)
+    finally:
+        model.release()

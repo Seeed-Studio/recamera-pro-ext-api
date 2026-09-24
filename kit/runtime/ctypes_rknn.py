@@ -160,6 +160,20 @@ class _BoundIOUnavailable(RuntimeError):
     pass
 
 
+class CtypesUnsupportedModel(RuntimeError):
+    """The graph's own input contract is outside what this backend handles.
+
+    Raised by ``init_runtime`` after the native context exists; the caller
+    must ``release()`` it.  RKNNLite may still run such a graph, so callers
+    that did not declare an input contract can fall back to it.
+    """
+
+
+class InputContractError(ValueError, TypeError):
+    """A caller tensor does not match the graph input; raised before any
+    driver call.  Subclasses TypeError for callers of the older dtype check."""
+
+
 class RknnIOBuffer:
     """Model-owned DMA allocation; descriptors are borrowed until release.
 
@@ -500,15 +514,26 @@ class CtypesRknnModel:
             for i in range(self.n_output)
         ]
         if self.n_input != 1:
-            raise RuntimeError(f"ctypes backend requires one input, got {self.n_input}")
+            raise CtypesUnsupportedModel(
+                f"ctypes backend requires one input, got {self.n_input}")
         attr = self.input_attrs[0]
         if not 1 <= attr.n_dims <= len(attr.dims):
-            raise RuntimeError(f"ctypes backend got invalid input rank {attr.n_dims}")
+            raise CtypesUnsupportedModel(
+                f"ctypes backend got invalid input rank {attr.n_dims}")
         shape = tuple(int(attr.dims[i]) for i in range(attr.n_dims))
         if not all(shape):
-            raise RuntimeError("ctypes backend does not support dynamic input shapes")
+            raise CtypesUnsupportedModel(
+                "ctypes backend does not support dynamic input shapes")
         self._image_input = (attr.n_dims == 4
                              and attr.fmt in (RKNN_TENSOR_NHWC, RKNN_TENSOR_NCHW))
+        if not self._image_input:
+            if attr.fmt not in (RKNN_TENSOR_NCHW, RKNN_TENSOR_NHWC,
+                                RKNN_TENSOR_UNDEFINED):
+                raise CtypesUnsupportedModel(
+                    f"ctypes backend does not support input fmt {int(attr.fmt)}")
+            if attr.type not in _CALLER_TYPES.values():
+                raise CtypesUnsupportedModel(
+                    f"ctypes backend does not support input type {int(attr.type)}")
         if self._image_input:
             # Graph storage may be int8/float16 and NCHW. pass_through=0 asks
             # RKNN to convert the caller's uint8 NHWC pixels to that format.
@@ -522,6 +547,11 @@ class CtypesRknnModel:
             self._input_fmt = int(attr.fmt)
         self._ready = True
         return RKNN_SUCC
+
+    @property
+    def released(self):
+        """Whether release() completed and no native context remains."""
+        return self._released
 
     @property
     def native_cleanup_failed(self):
@@ -837,12 +867,14 @@ class CtypesRknnModel:
             if arr.ndim == 3:
                 arr = np.expand_dims(arr, 0)
             if arr.dtype != np.uint8:
-                raise TypeError(f"ctypes backend requires uint8 input, got {arr.dtype}")
+                raise InputContractError(
+                    f"ctypes backend requires uint8 input, got {arr.dtype}")
         elif arr.dtype.name not in _CALLER_TYPES:
-            raise TypeError("ctypes backend requires uint8, int8, float16 or "
-                            f"float32 input, got {arr.dtype}")
+            raise InputContractError("ctypes backend requires uint8, int8, float16 or "
+                                     f"float32 input, got {arr.dtype}")
         if arr.shape != self._input_shape:
-            raise ValueError(f"input shape {arr.shape} != model shape {self._input_shape}")
+            raise InputContractError(
+                f"input shape {arr.shape} != model shape {self._input_shape}")
         return arr
 
     # ---------------------------------------------------------------- infer
