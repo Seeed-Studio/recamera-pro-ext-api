@@ -11,7 +11,9 @@ import pytest
 
 from kit.runtime import ctypes_rknn as r
 from kit.runtime import engine
-from kit.runtime.remote import RemoteRknnModel
+from kit.errors import InputValidationError
+from kit.runtime.engine import ModelSpec, TensorSpec
+from kit.runtime.remote import RemoteRknnModel, RemoteRknnSession
 from market.inferenced import server
 from market.inferenced.server import RknnBackend
 from market.inferenced.tests.test_service import RunningService, model
@@ -288,21 +290,31 @@ def test_undeclared_ctypes_rejects_mismatched_tensor_before_driver(native, value
 
 def test_service_reports_backend_and_maps_contract_mismatch(native, tmp_path):
     install, lites, _ = native
-    install(GraphLib())
+    lib = install(GraphLib())
     running = RunningService(tmp_path, backend=RknnBackend(coordinator=Coordinator()))
     path, digest = model(tmp_path, "asr.rknn")
-    remote = None
+    sessions = []
+
+    def session(frames):
+        # The client-side spec only shapes the request; the daemon checks
+        # the undeclared model against the graph itself.
+        spec = ModelSpec(str(path), name="asr", inputs=(
+            TensorSpec("speech", (1, frames, 560), "float32", "NTF"),))
+        sessions.append(RemoteRknnSession(spec, socket_path=running.socket,
+                                          model_sha256=digest, memory_mb=32))
+        return sessions[-1]
+
     try:
-        remote = RemoteRknnModel(str(path), socket_path=running.socket,
-                                 model_sha256=digest, memory_mb=32)
+        good = session(344)
+        assert good.infer(np.zeros((1, 344, 560), np.float32))[0].shape == (2,)
         status = running.service.status()
         assert [item["backend"] for item in status["models"]] == ["ctypes"]
-        with pytest.raises(Exception, match="invalid_request|model shape"):
-            remote.infer(np.zeros((1, 3, 560), np.float32))
-        assert remote.infer(np.zeros((1, 344, 560), np.float32))[0].shape == (2,)
+        with pytest.raises(InputValidationError, match="model shape"):
+            session(3).infer(np.zeros((1, 3, 560), np.float32))
+        assert len(lib.inputs_set) == 1
     finally:
-        if remote is not None:
-            remote.release()
+        for item in sessions:
+            item.release()
         running.close()
 
 
