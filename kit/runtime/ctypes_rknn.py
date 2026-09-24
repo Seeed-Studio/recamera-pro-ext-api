@@ -345,10 +345,14 @@ class CtypesRknnModel:
     backend = "ctypes"
 
     def __init__(self, path: str = "", core_mask: Optional[int] = None,
-                 io_mode: Optional[str] = None):
+                 io_mode: Optional[str] = None, image_inputs: bool = True):
         # Match RKNNLite's two phase API.  The daemon constructs backends
         # outside its driver lock; no native call is allowed here.
         self.path = str(path)
+        # False makes a 4D image graph raise CtypesUnsupportedModel: without a
+        # declared contract the caller may send float pixels, which only the
+        # RKNNLite path accepts for image graphs.
+        self._allow_image_input = bool(image_inputs)
         self.core_mask = core_mask
         self.lib = None
         self.lib_path = ""
@@ -526,6 +530,9 @@ class CtypesRknnModel:
                 "ctypes backend does not support dynamic input shapes")
         self._image_input = (attr.n_dims == 4
                              and attr.fmt in (RKNN_TENSOR_NHWC, RKNN_TENSOR_NCHW))
+        if self._image_input and not self._allow_image_input:
+            raise CtypesUnsupportedModel(
+                "image graph without a declared uint8 contract stays on RKNNLite")
         if not self._image_input:
             if attr.fmt not in (RKNN_TENSOR_NCHW, RKNN_TENSOR_NHWC,
                                 RKNN_TENSOR_UNDEFINED):
