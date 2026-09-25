@@ -25,6 +25,7 @@ apps/fall-detection/models/*
 market/packaging/dist/
 market/packaging/models/
 market/_local_backups/
+market/packaging/icons/
 
 # 大资源目录(应用素材/市场包)
 *.mp4

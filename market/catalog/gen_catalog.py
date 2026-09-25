@@ -81,6 +81,7 @@ DEFAULT_OUT = os.path.join(_HERE, "catalog.json")
 DEFAULT_BASE_URL = "/appcenter/apps/"
 DEFAULT_MODELS_SPEC = os.path.join(_HERE, "models.json")
 DEFAULT_MODELS_DIR = os.path.normpath(os.path.join(_HERE, "..", "packaging", "models"))
+DEFAULT_ICONS_DIR = os.path.normpath(os.path.join(_HERE, "..", "packaging", "icons"))
 # On-demand runtime bundles (release/build-voice-runtime.sh output). These are
 # NOT apps: they are ~18 MB of aarch64 wheels a device only needs if it installs
 # an app declaring the matching capability, which is exactly why they are not in
@@ -273,15 +274,38 @@ def _build_runtimes(runtimes_dir: str, base: str) -> dict:
     return out
 
 
+_ICON_EXTS = ("png", "webp", "jpg", "jpeg")
+
+
+def _staged_icon(app_id: str, icons_dir: str) -> str | None:
+    """Return the staged icon filename for `app_id`, or None.
+
+    The manifest `image` field is a device-relative path that 404s until the
+    app is installed, so a store listing could never preview its art
+    pre-install. Icons staged in <icons-dir>/<app_id>.<ext> are uploaded to
+    the CDN `icons/` prefix next to the packages; the catalog then carries an
+    absolute `icon_url` the browser can render before anything is installed.
+    """
+    for ext in _ICON_EXTS:
+        name = f"{app_id}.{ext}"
+        if os.path.isfile(os.path.join(icons_dir, name)):
+            return name
+    return None
+
+
 def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS_DIR,
                   models_spec_path: str = DEFAULT_MODELS_SPEC,
                   models_base_url: str | None = None,
-                  runtimes_dir: str = DEFAULT_RUNTIMES_DIR) -> dict:
+                  runtimes_dir: str = DEFAULT_RUNTIMES_DIR,
+                  icons_dir: str = DEFAULT_ICONS_DIR) -> dict:
     pkgs = sorted(glob.glob(os.path.join(dist_dir, "*.tar.gz")))
     if not pkgs:
         raise SystemExit(f"no *.tar.gz packages found in {dist_dir}")
 
     base = base_url if base_url.endswith("/") else base_url + "/"
+    # Icons are uploaded to the sibling `icons/` prefix of the packages dir
+    # (packages/ -> icons/), mirroring how models/ derives from --models-base-url.
+    icons_base = re.sub(r"(?:packages|pkgs)/$", "icons/", base)
     models_base = _derive_models_base(base_url, models_base_url)
     models_spec = _load_models_spec(models_spec_path)
     apps = []
@@ -337,6 +361,11 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             **{k: man[k] for k in ("image", "scene", "author",
                                    "name_zh", "description_zh", "scene_zh")
                if man.get(k) is not None},
+            # Absolute CDN icon for pre-install preview (see _staged_icon).
+            # `image` stays the device-relative path for on-device consumers;
+            # icon_url is what the browser renders before anything is installed.
+            **({"icon_url": icons_base + icon}
+               if (icon := _staged_icon(app_id, icons_dir)) else {}),
             # Declared capabilities, forwarded verbatim. The browser needs these
             # BEFORE install to know an app pulls in something the device may not
             # have yet -- `"audio"` means the ~18 MB voice runtime has to be
@@ -394,6 +423,9 @@ def main(argv=None) -> int:
     ap.add_argument("--models-base-url", default=None,
                     help="URL prefix shared models are served under "
                          "(default: package base with packages/|pkgs/ -> models/)")
+    ap.add_argument("--icons-dir", default=DEFAULT_ICONS_DIR,
+                    help=f"dir of staged app icons, <icons-dir>/<app_id>.<ext> "
+                         f"(default: {DEFAULT_ICONS_DIR})")
     ap.add_argument("--runtimes-dir", default=DEFAULT_RUNTIMES_DIR,
                     help="dir holding on-demand runtime bundles, e.g. "
                          f"voice-runtime-<ver>.tar.gz (default: {DEFAULT_RUNTIMES_DIR})")
@@ -401,7 +433,7 @@ def main(argv=None) -> int:
 
     catalog = build_catalog(args.dist, args.base_url, args.models_dir,
                             args.models_spec, args.models_base_url,
-                            args.runtimes_dir)
+                            args.runtimes_dir, args.icons_dir)
     with open(args.out, "w") as f:
         json.dump(catalog, f, indent=2, ensure_ascii=False)
         f.write("\n")
