@@ -27,6 +27,11 @@ market/packaging/models/
 market/_local_backups/
 market/packaging/icons/
 
+# 签名私钥不入库（私钥只放 ~/.recamera_release_key/；公钥 release_pub.pem 照常追踪）
+*priv*.pem
+*_private*.pem
+*.key
+
 # 大资源目录(应用素材/市场包)
 *.mp4
 *.avi
