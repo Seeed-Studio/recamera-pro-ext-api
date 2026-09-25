@@ -324,10 +324,14 @@ def stage_signature(src_pkg: str, staged_pkg: str, do_sign: bool, key: str, pub:
 # --------------------------------------------------------------------------- catalog
 
 def regenerate(live: dict, pkg_dir: str, icons_dir: str, empty_dir: str) -> dict:
+    # Store packages are self-contained (bundled artifacts), so every app gets
+    # models: [] regardless of the repo's models.json, which describes the
+    # legacy shared-model layout and would require staged model files.
+    # A missing spec file loads as {} in gen_catalog._load_models_spec.
     cat = gen_catalog.build_catalog(
         pkg_dir, PACKAGES_BASE,
         models_dir=gen_catalog.DEFAULT_MODELS_DIR,
-        models_spec_path=gen_catalog.DEFAULT_MODELS_SPEC,
+        models_spec_path=os.path.join(empty_dir, "models.json"),
         runtimes_dir=empty_dir, icons_dir=icons_dir)
     # Runtime bundles are not apps and are not re-uploaded here: carry the live
     # descriptors over verbatim instead of re-hashing local copies.

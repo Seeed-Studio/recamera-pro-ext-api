@@ -149,6 +149,20 @@ def test_add_stages_only_live_packages(env):
     assert not os.path.exists(pkg + ".sig")               # source never modified
 
 
+def test_repo_shared_model_spec_does_not_affect_store_catalog(env, monkeypatch):
+    # The repo's models.json may still list legacy shared models (with no
+    # staged files); store packages are self-contained, so it must be ignored.
+    spec = env["tmp"] / "repo-models.json"
+    spec.write_text(json.dumps(
+        {"beta": {"target_path": "/userdata/local/models/beta", "files": ["m.rknn"]}}))
+    monkeypatch.setattr(pa.gen_catalog, "DEFAULT_MODELS_SPEC", str(spec))
+    pkg = env["make_pkg"]("gamma", "0.1.0", env["out"])
+    rc, st = env["run"](pkg, "--sign")
+    assert rc == 0
+    by = {a["id"]: a for a in load_cat(st)["apps"]}
+    assert by["beta"]["models"] == [] and by["gamma"]["models"] == []
+
+
 def test_download_when_local_copy_missing_or_different(env):
     os.unlink(env["dist"] / "beta-1.0.0-arm64.tar.gz")
     with open(env["dist"] / "alpha-1.0.0-arm64.tar.gz", "ab") as f:
