@@ -57,6 +57,10 @@ class DeferredCycleCollector:
             if self._due is None:
                 self._due = self._clock() + self._delay
 
+    def pending(self, *, force=False):
+        with self._lock:
+            return self._due is not None and (force or self._clock() >= self._due)
+
     def collect(self, *, force=False):
         with self._lock:
             if self._due is None or (not force and self._clock() < self._due):

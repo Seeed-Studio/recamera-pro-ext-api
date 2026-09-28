@@ -1,4 +1,4 @@
-"""Crash-safe cross-process serialization for RV1126B RKNN driver calls."""
+"""Crash-safe shared inference / exclusive maintenance RKNN driver fence."""
 
 from __future__ import annotations
 
@@ -34,12 +34,14 @@ class DriverLockToken:
 
 
 class NpuDriverCoordinator:
-    """Serialize native RKNN calls with rkipc and within this process.
+    """Coordinate independent inference contexts with exclusive maintenance.
 
     Every acquisition uses a distinct open file description, so ``flock`` has
     well-defined cross-process semantics.  A process-local lock supplies the
-    thread serialization that flock alone does not guarantee.  Process death
-    closes the descriptor and therefore always releases the kernel fence.
+    maintenance serialization that flock alone does not guarantee. Inference
+    takes shared flocks; context serialization and the concurrency bound belong
+    to the service. Existing rkipc/older services retain their exclusive flocks
+    and therefore cannot overlap these calls. Process death releases the fence.
     """
 
     def __init__(self, path: str = DEFAULT_DRIVER_LOCK) -> None:
@@ -75,6 +77,49 @@ class NpuDriverCoordinator:
                 raise DriverLockError("NPU driver lock is already quarantined")
             self._quarantine_fd = token._fd
             self._quarantine_reason = str(reason or "native teardown failed")
+
+    def _check_fault(self):
+        with self._state:
+            if self._quarantine_reason is not None:
+                raise DriverLockError(
+                    f"NPU driver is quarantined: {self._quarantine_reason}"
+                )
+
+    @contextlib.contextmanager
+    def inference(self, timeout: float = 30.0) -> Iterator[None]:
+        """Admit one independent context; never use this for native teardown.
+
+        Each call has its own fd/open description, so one finishing reader
+        cannot unlock another. The legacy exclusive fence still waits for all
+        in-flight readers before destroying native resources.
+        """
+        if isinstance(timeout, bool):
+            raise ValueError("timeout must be numeric, not bool")
+        timeout = float(timeout)
+        if not 0 < timeout <= 300 or not timeout < float("inf"):
+            raise ValueError("timeout must be finite and in (0, 300]")
+        self._check_fault()
+        deadline = time.monotonic() + timeout
+        fd = self._open()
+        try:
+            while True:
+                self._check_fault()
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EINTR):
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out waiting for NPU driver lock {self.path}") from exc
+                    time.sleep(min(0.02, max(0.001, deadline - time.monotonic())))
+            self._check_fault()
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
     @contextlib.contextmanager
     def hold(self, timeout: float = 30.0) -> Iterator[DriverLockToken]:

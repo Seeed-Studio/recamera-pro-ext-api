@@ -113,6 +113,11 @@ App 的 `hw-direct + model_dma_input=True` 是另一条面向模型的优化路�
 - `RemoteRknnSession.infer` 同步等待服务返回，含排队/传输/调度等成本。
   `stats.last_ms/total_ms` 是调用耗时；`last_timings_ms` 用于观察实际后端阶段。
   应用循环耗时还应在取帧、前处理、后处理和 emit 外围单独测量。
+- 新版共享服务默认最多 4 个不同模型上下文并发，同一缓存上下文仍串行。
+  单线程应用的同步 infer 不会自动并发；不得重复打开相同模型来绕过上下文互斥。
+  平台启动参数 `--max-concurrent-models` 可设为 1–4，不是应用配置项；实际吞吐量
+  受 NPU/DDR 和模型影响，不保证四倍加速。GC、加载/卸载及旧 IPC 的驱动锁
+  仍会产生等待，并发也会增加同时存活的张量内存。
 - 共享 IO、绑定缓冲与 DMA prepared input 是否使用，由协议协商和后端能力决定。
   `io_transport` 可检查当前通道；共享内存不意味着完全没有 IPC、同步或拷贝。
 - `RknnSession` / 兼容 `RknnModel` 是 **legacy exclusive** 本地执行路径；

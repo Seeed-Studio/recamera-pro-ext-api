@@ -12,6 +12,7 @@ from typing import Any, Callable, Deque, Optional
 
 
 log = logging.getLogger(__name__)
+MAX_CONCURRENT_MODELS = 4
 
 
 class QueueFullError(RuntimeError):
@@ -37,6 +38,9 @@ class ScheduledJob:
     sequence: int = 0
     enqueued_at: float = field(default_factory=time.monotonic)
     cleanup: Optional[Callable[[], None]] = None
+    # Cache/context identity, not client identity. None preserves serialization
+    # for callers which have not supplied a model concurrency contract.
+    concurrency_key: Optional[str] = None
     _done: threading.Event = field(default_factory=threading.Event, init=False)
     _result: Any = field(default=None, init=False)
     _error: Optional[BaseException] = field(default=None, init=False)
@@ -55,24 +59,29 @@ class ScheduledJob:
 
 
 class FairScheduler:
-    """Single-driver scheduler with bounded per-client queues.
+    """Bounded independent-context scheduler with per-application fairness.
 
     Equal-priority clients rotate.  Priority is combined with bounded aging, so
     an interactive request normally wins while a lower-priority stream still
-    becomes runnable after waiting.  Only the worker calls ``job.execute``;
-    vendor RKNN contexts therefore never infer concurrently.
+    becomes runnable after waiting. A context occupies at most one worker;
+    waiting jobs for that context do not consume the other workers.
     """
 
     def __init__(
         self,
         *,
         max_pending_per_client: int = 8,
+        max_concurrent_models: int = MAX_CONCURRENT_MODELS,
         aging_points_per_second: float = 10.0,
         clock: Callable[[], float] = time.monotonic,
         name: str = "recamera-inferenced",
     ) -> None:
         if max_pending_per_client <= 0:
             raise ValueError("max_pending_per_client must be positive")
+        if (type(max_concurrent_models) is not int
+                or not 1 <= max_concurrent_models <= MAX_CONCURRENT_MODELS):
+            raise ValueError(f"max_concurrent_models must be an integer in 1..{MAX_CONCURRENT_MODELS}")
+        self.max_concurrent_models = max_concurrent_models
         self.max_pending_per_client = int(max_pending_per_client)
         self.aging_points_per_second = float(aging_points_per_second)
         self._clock = clock
@@ -81,8 +90,12 @@ class FairScheduler:
         self._rotation: collections.deque[str] = collections.deque()
         self._sequence = itertools.count(1)
         self._stopping = False
-        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
-        self._thread.start()
+        self._active_keys: set[Optional[str]] = set()
+        self._threads = [threading.Thread(target=self._run, name=f"{name}-{i}", daemon=True)
+                         for i in range(max_concurrent_models)]
+        self._thread = self._threads[0]  # Compatibility for internal diagnostics.
+        for thread in self._threads:
+            thread.start()
 
     def submit(self, job: ScheduledJob) -> ScheduledJob:
         if not 0 <= int(job.priority) <= 100:
@@ -138,8 +151,16 @@ class FairScheduler:
                 self._queues.pop(client_id, None)
             self._rotation.clear()
             self._cv.notify_all()
-        if self._thread is not threading.current_thread():
-            self._thread.join(timeout=5.0)
+        deadline = time.monotonic() + 5.0
+        for thread in self._threads:
+            if thread is not threading.current_thread():
+                thread.join(timeout=max(0, deadline - time.monotonic()))
+
+    def status(self):
+        with self._cv:
+            return {"max_concurrent_models": self.max_concurrent_models,
+                    "active_models": len(self._active_keys),
+                    "pending_requests": sum(len(q) for q in self._queues.values())}
 
     def _remove_empty(self, client_id: str) -> None:
         queue = self._queues.get(client_id)
@@ -164,21 +185,30 @@ class FairScheduler:
             # Expired jobs are completed without entering the driver.  Continue
             # until this client's head is live so one stale request cannot block
             # all later work from the same application.
-            while queue and queue[0].deadline <= now:
-                queue.popleft().finish(
-                    error=DeadlineExceededError("inference deadline expired in queue")
-                )
+            for job in list(queue):
+                if job.deadline <= now:
+                    queue.remove(job)
+                    job.finish(error=DeadlineExceededError("inference deadline expired in queue"))
             if not queue:
                 self._remove_empty(client_id)
                 continue
 
             # Within one client, priority may reorder pending work.  Sequence is
             # the stable FIFO tiebreaker.
-            job = max(queue, key=lambda item: (item.priority, -item.sequence))
-            eligible = max(job.enqueued_at, float(job.ready_at()))
-            if eligible > now:
-                wake_at = eligible if wake_at is None else min(wake_at, eligible)
+            runnable = []
+            for job in queue:
+                # Also wake for expiry when every context is busy/rate-limited.
+                wake_at = job.deadline if wake_at is None else min(wake_at, job.deadline)
+                if job.concurrency_key in self._active_keys:
+                    continue
+                eligible = max(job.enqueued_at, float(job.ready_at()))
+                if eligible > now:
+                    wake_at = min(wake_at, eligible)
+                else:
+                    runnable.append(job)
+            if not runnable:
                 continue
+            job = max(runnable, key=lambda item: (item.priority, -item.sequence))
             age = max(0.0, now - job.enqueued_at)
             score = float(job.priority) + min(100.0, age * self.aging_points_per_second)
             candidates.append(
@@ -188,6 +218,7 @@ class FairScheduler:
         if not candidates:
             return None, wake_at
         _, _, _, client_id, selected = max(candidates)
+        self._active_keys.add(selected.concurrency_key)
         queue = self._queues[client_id]
         queue.remove(selected)
         # Move the winning client behind its peers for equal-score round robin.
@@ -226,6 +257,9 @@ class FairScheduler:
                 # owns its job/result; do not keep the last tensor payload (or
                 # a failed job's input closure) alive in this thread's frame.
                 cleanup = job.cleanup
+                with self._cv:
+                    self._active_keys.remove(job.concurrency_key)
+                    self._cv.notify_all()
                 result = None
                 job = None
                 if cleanup is not None:

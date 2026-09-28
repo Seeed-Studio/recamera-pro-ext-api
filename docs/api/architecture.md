@@ -391,8 +391,11 @@ struct frame_hdr {
 
 当前 manifest-v2 的 scheduled 应用由 `appmgr` 授权后连接 `inferenced.sock`，
 与上文 legacy `inference-control.sock` 单 owner 直连路径区分。模型上下文由
-推理服务缓存，内置 IPC 与服务仍通过共同的 driver coordinator 串行提交 RKNN；
-IPC 的前后处理不占用该全局锁，实例锁继续保护完整模型生命周期。
+推理服务缓存。服务默认允许最多 4 个不同上下文并发，同一上下文仍串行；
+推理使用共享 driver flock，加载/销毁使用独占 flock。现有内置 IPC 仍持同一
+文件的独占锁，与共享服务保留跨进程互斥；IPC 的前后处理不占用该全局锁。
+上下文锁继续保护推理、DMA 绑定和生命周期，详见
+[模型并发](../guide/inference-concurrency.md)。
 
 可选 `rknn-dma-v1` 使用每个连接/alias 独立的常驻输入输出 DMA 缓存。
 socket 保留身份验证、请求和完成通知；未协商能力时继续使用原 tensor-v1 数据传输。

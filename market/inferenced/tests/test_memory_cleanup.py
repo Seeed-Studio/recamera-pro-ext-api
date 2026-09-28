@@ -321,20 +321,28 @@ def test_send_failure_reclaims_buffers(vendor, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["ok", "raise"])
-def test_worker_finishing_after_timeout_reclaims_without_another_request(vendor, tmp_path, mode):
+def test_worker_finishing_after_timeout_reclaims_without_another_request(vendor, tmp_path, mode, monkeypatch):
     running = RunningService(tmp_path, backend=RknnBackend(coordinator=Coordinator()))
     remote = session(running, tmp_path)
     entered, proceed = threading.Event(), threading.Event()
     vendor.instances[0].block = (entered, proceed)
     vendor.instances[0].mode = mode
+
+    def response_wait_expires(job, timeout=None):
+        # Exercise a response timeout while native work is already running.
+        # A short wire deadline can instead expire during pre-inference GC,
+        # which correctly rejects the call before it reaches the vendor.
+        assert entered.wait(3), "native call never started"
+        raise server.DeadlineExceededError("scheduler result wait timed out")
+
+    monkeypatch.setattr(server.ScheduledJob, "result", response_wait_expires)
     try:
         # Keep the connection open after a server-side deadline. The real
         # vendor call outlives the response, so response cleanup alone is wrong.
-        remote._sock.settimeout(3)
+        remote._sock.settimeout(5)
         send_message(remote._sock, {"op": "infer", "alias": remote._alias,
-                                    "request_id": 900, "timeout_ms": 100},
+                                    "request_id": 900, "timeout_ms": 30000},
                      [np.zeros((1, 8), np.float32)])
-        assert entered.wait(1)
         reply, _ = recv_message(remote._sock)
         assert reply["error"]["code"] == "deadline_exceeded"
         assert not running.backend.collect_pending()  # Native work still active.

@@ -3,6 +3,9 @@
 推理服务继续负责模型缓存、应用授权、公平调度和生命周期管理。静态视觉模型可协商
 `rknn-dma-v1`，每个连接/alias 拥有独立的输入输出 DMA 缓存，大块张量不再逐帧走 socket。
 
+共享服务默认最多 4 个不同模型上下文并发，同一上下文的推理及 DMA 绑定/解绑
+仍串行。并发上限、驱动锁和退出规则见[模型并发](inference-concurrency.md)。
+
 ## 选择与兼容
 
 - ctypes 的 `ESK_RKNN_IO_MODE=auto` 默认探测 native tensor 属性，绑定 UINT8/NHWC
