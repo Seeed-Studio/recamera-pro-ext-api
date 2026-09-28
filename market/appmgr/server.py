@@ -3495,6 +3495,59 @@ def _require_installed(app_id: str) -> None:
         raise FileNotFoundError("app not installed: %s" % app_id)
 
 
+def _read_webui_token(app_id: str, name) -> str:
+    """Current UI token from the app data dir, or "" when unavailable.
+
+    Read on every launch click so a regenerated token is never stale. The
+    file name is manifest-declared and re-checked here against the same
+    single-component rule (installed metadata may be hand-modified)."""
+    if (not isinstance(name, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) is None):
+        return ""
+    try:
+        with open(os.path.join(paths.appdata_dir(app_id), name),
+                  "r", encoding="utf-8", errors="replace") as handle:
+            token = handle.read(256).strip()
+    except OSError:
+        return ""
+    return token if token and "\n" not in token else ""
+
+
+def do_v1_app_webui_launch(app_id: str, host_header) -> str:
+    """Browser launch URL for an app's declared webui (302 target).
+
+    The host comes from the console request itself, so the redirect always
+    points at the address the browser already reached. With a ``token``
+    declaration the current credential rides the URL fragment (never the
+    query string, so it stays out of server logs); without one, or when the
+    token file is absent, the app simply prompts on arrival."""
+    _require_installed(app_id)
+    manifest = _read_manifest(app_id) or {}
+    webui = manifest.get("webui")
+    if not isinstance(webui, dict) or not isinstance(webui.get("port"), int):
+        raise FileNotFoundError("app declares no webui: %s" % app_id)
+    if supervisor.is_running(app_id) is None:
+        raise BusyError("app is not running: %s" % app_id)
+    host = (host_header or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        host = host[:end + 1] if end > 0 else ""
+    else:
+        host = host.split(":", 1)[0]
+    if not host:
+        host = "127.0.0.1"
+    url = "%s://%s:%d%s" % (webui.get("scheme") or "http", host,
+                            webui["port"], webui.get("path") or "/")
+    token_decl = webui.get("token")
+    if isinstance(token_decl, dict):
+        token = _read_webui_token(app_id, token_decl.get("file"))
+        param = token_decl.get("fragment_param")
+        if token and isinstance(param, str) and \
+                re.fullmatch(r"[A-Za-z0-9_-]{1,64}", param):
+            url += "#/?%s=%s" % (quote(param, safe=""), quote(token, safe=""))
+    return url
+
+
 def do_v1_lifecycle(app_id: str, action: str) -> dict:
     # ``builtin`` and ``acousticslab`` are synthetic first-class apps backed by
     # firmware services. They deliberately have no /userdata/local/apps/<id>
@@ -3573,6 +3626,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _send_bytes(self, code: int, data: bytes, content_type: str,
                     cache: str = None, headers: dict = None) -> None:
@@ -3879,6 +3939,15 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 return self._send(
                     200, do_get_app_visualization(visualization_match.group(1)))
+            except Exception as exc:
+                return self._v1_error(exc)
+        webui_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/webui",
+            path)
+        if webui_match:
+            try:
+                return self._send_redirect(do_v1_app_webui_launch(
+                    webui_match.group(1), self.headers.get("Host")))
             except Exception as exc:
                 return self._v1_error(exc)
         match = re.fullmatch(

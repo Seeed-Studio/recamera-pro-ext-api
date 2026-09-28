@@ -307,6 +307,56 @@
     },
     "record_trigger": {"$ref": "#/$defs/recordTriggerV1"},
     "ha_entities": {"type": "array"},
+    "webui": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^x-": true
+      },
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "http",
+            "https"
+          ],
+          "default": "http"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/(?!/)[^#]*$",
+          "default": "/"
+        },
+        "token": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "fragment_param"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "fragment_param": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          "description": "Declares fragment-carried token auth: appmgr's launch endpoint reads <appdata>/<file> per click and redirects to scheme://host:port/path#/?<fragment_param>=<token>."
+        }
+      },
+      "description": "Optional browser UI entry point; the App Center renders an Open link (scheme://device-host:port/path) when present."
+    },
     "package": {
       "type": "object",
       "additionalProperties": false,
