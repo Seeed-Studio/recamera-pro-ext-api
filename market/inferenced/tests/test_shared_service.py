@@ -197,7 +197,16 @@ def test_timed_out_dma_call_cannot_reuse_channel_and_server_waits_for_active_wor
     assert backend.entered.wait(1)
     try:
         assert done.wait(2), "deadline must reach the caller while native work is in flight"
-        assert len(errors) == 1 and isinstance(errors[0], InferenceError)
+        assert len(errors) == 1
+        # Client socket and server job waits both expire at timeout + 1s.
+        # Either can win; accept only that timeout, not arbitrary transport
+        # failures. The DMA lifetime checks below apply to both paths.
+        if isinstance(errors[0], TransportError):
+            assert errors[0].code == "inference_service_unavailable"
+            assert isinstance(errors[0].__cause__, TimeoutError)
+        else:
+            assert isinstance(errors[0], InferenceError)
+            assert errors[0].code == "deadline_exceeded"
         assert backend.active and not backend.finished.is_set()
         with pytest.raises(TransportError):
             session.infer(np.full(SHAPE, 99, np.uint8))
