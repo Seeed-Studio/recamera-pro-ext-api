@@ -175,7 +175,15 @@ class EldercareMonitorApp(App):
     asr_backend = "rk"
     language = "auto"
     model_dir = _BUNDLED_ASR_SUBDIR
-    min_silence_sec = 0.6
+    # 1.2 s rather than the 0.6 s the segmenter has defaulted to. The ASR is a
+    # fixed-window graph, so one call costs the same ~1.25 s whether the clip is
+    # 1 s or 20 s (measured on-device: rtf 1.64 on a 0.73 s clip, 0.22 on a
+    # 6.42 s one -- elapsed 1.20 s vs 1.41 s). At 0.6 s the speaker's ordinary
+    # clause pauses end the segment, so speech arrives as ~1 s fragments: the
+    # pipeline runs at rtf ~1.1 with no headroom, and the encoder attends to
+    # zero padding for most of the window. Bridging pauses up to 1.2 s collects
+    # 2-6 s utterances at the same per-call cost, which leaves rtf ~0.2-0.6.
+    min_silence_sec = 1.2
     max_utterance_sec = 15.0
     preroll_ms = 300.0
     audio_source = "ai_asr"

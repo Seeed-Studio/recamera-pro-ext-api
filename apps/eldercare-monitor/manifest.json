@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 2,
+    "sequence": 5,
     "channel": "stable"
   },
   "compatibility": {
@@ -657,7 +657,7 @@
             "min": 0.2,
             "max": 3.0,
             "step": 0.1,
-            "default": 0.6
+            "default": 1.2
           },
           {
             "key": "max_utterance_sec",
