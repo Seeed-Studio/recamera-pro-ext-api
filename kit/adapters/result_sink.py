@@ -50,7 +50,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
-from kit.errors import AdapterError
+from kit.errors import AdapterError, InputValidationError
 from kit.diagnostics import get_logger
 
 
@@ -241,6 +241,37 @@ class ResultSink(ABC):
 
         self.emit(payload, pts)
 
+    def emit_typed(self, payload: dict, pts: float) -> None:
+        """Publish one application-typed envelope (``metrics`` / ``status``).
+
+        A typed publication is an envelope whose ``type`` is NOT ``results``:
+        it reports a metric or a durable state snapshot and is not a frame.  It
+        differs from :meth:`emit` in three ways that matter to a consumer
+        (overlay phase-2 V4-4/V5-3):
+
+          * it takes its ``seq`` from the SAME counter as result frames, so two
+            publications can never reuse a seq (the Hub derives message ids as
+            ``app:generation:seq:type``; a second counter would collide on
+            ``:N:status``);
+          * it bypasses the results-only filter/index path, which exists to
+            suppress, index and rate-limit *frames*;
+          * it must not carry a non-empty ``geometry`` array -- geometry is what
+            makes a Hub envelope a frame, and a typed publication carrying one
+            would materialise a frame out of a metric.
+
+        The default implementation delegates to :meth:`emit` so a trivial sink
+        keeps working; every sink that assigns its own ``seq`` overrides it.
+        """
+
+        geometry = payload.get("geometry")
+        if geometry:
+            raise InputValidationError(
+                "a typed publication must not carry geometry",
+                operation="result.emit_typed",
+                code="typed_geometry_forbidden",
+                details={"type": payload.get("type"), "items": len(geometry)})
+        self.emit(payload, pts)
+
     def request_recording(self, event_kind: str, pts: float) -> bool:
         """Only a managed gateway implements recording; telemetry sinks do not."""
         return False
@@ -315,6 +346,32 @@ class StdoutSink(ResultSink):
         print(json.dumps(payload, separators=(",", ":")), flush=True)
 
 
+def _typed_envelope(payload: dict, pts: float, *, seq: int, app_id: str,
+                    frame_w: Optional[int] = None,
+                    frame_h: Optional[int] = None) -> dict:
+    """Stamp one typed publication onto the sink's shared sequence counter.
+
+    Byte-shape parity with `emit`'s stamping (app / pts / seq / frame size),
+    minus the ``type`` default: a typed publication names its own type, and the
+    consumer (appmgr's Result Hub) derives ``app:generation:seq:<type>`` from it.
+    """
+    obj = dict(payload)
+    obj.setdefault("type", "metrics")
+    obj.setdefault("app", app_id)
+    obj["pts"] = pts
+    obj["seq"] = int(seq)
+    if frame_w and frame_h:
+        obj["frame"] = {"width": int(frame_w), "height": int(frame_h)}
+    return obj
+
+
+def _typed_seq(owner) -> int:
+    """Next value of a sink's publication counter (atomic, single counter)."""
+    with owner._seq_lock:
+        owner._seq += 1
+        return owner._seq
+
+
 def _ws_encode_text(data: bytes) -> bytes:
     """Encode a single unmasked server->client WebSocket text frame (FIN=1)."""
     header = bytearray([0x81])  # FIN + opcode 0x1 (text)
@@ -371,7 +428,13 @@ class WsResultSink(ResultSink):
         self._srv: Optional[socket.socket] = None
         self._accept_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
+        # ★One publication counter per application★ (overlay phase-2 V5-3):
+        # result frames, metrics and status all draw from this number, so the
+        # Hub's `app:generation:seq:type` ids can never collide across two
+        # publications. Guarded because a merged app publishes from more than
+        # one thread (`self._seq += 1` is a non-atomic read-modify-write).
         self._seq = 0
+        self._seq_lock = threading.Lock()
         # Current inference-frame pixel size (base loop calls set_frame_size once
         # per frame BEFORE emit). Emitted as `frame:{width,height}` so the
         # /appcenter overlay knows the coordinate reference space the box/keypoint
@@ -505,12 +568,11 @@ class WsResultSink(ResultSink):
             # frame). Broadcast it as-is; do not add a second sequence.
             self.publish_envelope(payload)
             return
-        self._seq += 1
         payload = dict(payload)
         payload.setdefault("type", "results")
         payload.setdefault("app", self.app_id)
         payload["pts"] = pts
-        payload["seq"] = self._seq
+        payload["seq"] = _typed_seq(self)
         # Announce the inference-frame reference size the result coords map to.
         # The overlay reads this to scale box/keypoint PIXELS into the video
         # display area; without it the panel falls back to a hard-coded guess.
@@ -518,13 +580,38 @@ class WsResultSink(ResultSink):
             payload["frame"] = {"width": self._frame_w, "height": self._frame_h}
         self._broadcast(payload)
 
+    def emit_typed(self, payload: dict, pts: float) -> None:
+        """Broadcast a typed (metrics/status) publication off the shared seq."""
+        geometry = payload.get("geometry")
+        if geometry:
+            raise InputValidationError(
+                "a typed publication must not carry geometry",
+                operation="result.emit_typed",
+                code="typed_geometry_forbidden",
+                details={"type": payload.get("type"), "items": len(geometry)})
+        env = _typed_envelope(payload, pts, seq=_typed_seq(self),
+                              app_id=self.app_id, frame_w=self._frame_w,
+                              frame_h=self._frame_h)
+        if self.preserve_envelope:
+            self.publish_envelope(env)
+            return
+        self._broadcast(env)
+
     def emit_meta(self, payload: dict) -> None:
         """Broadcast a metrics/meta message on the SAME WS channel as results.
-        Tagged with its own `type` (e.g. "metrics") so the panel can demux; it
-        does NOT advance the results `seq` counter."""
+
+        Tagged with its own `type` (e.g. "metrics") so the panel can demux.
+        ★It draws from the SAME counter★ (V5-3): this is a publication like any
+        other, and a payload left without an explicit `seq` would have one
+        derived downstream -- where a derived value can land on a `seq` a
+        publisher already used, giving two different envelopes the same
+        `app:generation:seq:metrics` identity (and a consumer that dedupes on
+        `(source, seq)` then silently drops one of each colliding pair).
+        """
         payload = dict(payload)
         payload.setdefault("type", "meta")
         payload.setdefault("app", self.app_id)
+        payload["seq"] = _typed_seq(self)
         self._broadcast(payload)
 
     def client_count(self) -> int:
@@ -600,7 +687,10 @@ class GatewayResultSink(ResultSink):
         self._conn: Optional[socket.socket] = None
         self._conn_lock = threading.Lock()
         self._stop = threading.Event()
+        # ★One publication counter per application★ (V5-3): frames, metrics,
+        # status and recording requests share it, atomically.
         self._seq = 0
+        self._seq_lock = threading.Lock()
         self._frame_w: Optional[int] = None
         self._frame_h: Optional[int] = None
         self._sent = 0
@@ -709,9 +799,8 @@ class GatewayResultSink(ResultSink):
         return True
 
     def request_recording(self, event_kind: str, pts: float) -> bool:
-        self._seq += 1
         return self._offer({"type": "recording_request", "event_kind": event_kind,
-                            "pts": pts, "seq": self._seq})
+                            "pts": pts, "seq": _typed_seq(self)})
 
     def _run(self) -> None:
         while True:
@@ -763,20 +852,45 @@ class GatewayResultSink(ResultSink):
         if self.preserve_envelope:
             self.publish_envelope(payload)
             return
-        self._seq += 1
         obj = dict(payload)
         obj.setdefault("type", "results")
         obj.setdefault("app", self.app_id)
         obj["pts"] = pts
-        obj["seq"] = self._seq
+        obj["seq"] = _typed_seq(self)
         if self._frame_w and self._frame_h:
             obj["frame"] = {"width": self._frame_w, "height": self._frame_h}
         self._offer(obj)
 
+    def emit_typed(self, payload: dict, pts: float) -> None:
+        """Queue a typed (metrics/status) publication off the shared seq."""
+        geometry = payload.get("geometry")
+        if geometry:
+            raise InputValidationError(
+                "a typed publication must not carry geometry",
+                operation="result.emit_typed",
+                code="typed_geometry_forbidden",
+                details={"type": payload.get("type"), "items": len(geometry)})
+        env = _typed_envelope(payload, pts, seq=_typed_seq(self),
+                              app_id=self.app_id, frame_w=self._frame_w,
+                              frame_h=self._frame_h)
+        if self.preserve_envelope:
+            obj = dict(env)
+            obj.setdefault("type", "metrics")
+            self._offer(obj)
+            return
+        self._offer(env)
+
     def emit_meta(self, payload: dict) -> None:
+        """Queue a metrics/meta record; shares the publication counter.
+
+        Same reason as :meth:`WsResultSink.emit_meta`: the loop's periodic
+        `metrics` envelope goes out through this path, so leaving it without a
+        `seq` is what let the Hub derive one that collided with a published one.
+        """
         obj = dict(payload)
         obj.setdefault("type", "meta")
         obj.setdefault("app", self.app_id)
+        obj["seq"] = _typed_seq(self)
         self._offer(obj)
 
     def stats(self) -> dict:
@@ -830,6 +944,21 @@ class MultiSink(ResultSink):
         for s in self.sinks:
             try:
                 s.emit(payload, pts)
+            except Exception:
+                pass
+
+    def emit_typed(self, payload: dict, pts: float) -> None:
+        """Fan a typed publication out to every child that supports it.
+
+        Children that only implement the legacy ABC still receive the
+        publication through the base ``emit_typed`` -> ``emit`` fallback, so a
+        mixed tree keeps working; each child stamps its own seq, which is
+        correct because each child is a separate transport feeding a separate
+        consumer (only the managed gateway feeds the Result Hub).
+        """
+        for s in self.sinks:
+            try:
+                s.emit_typed(payload, pts)
             except Exception:
                 pass
 

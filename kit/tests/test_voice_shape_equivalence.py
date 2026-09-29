@@ -49,6 +49,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import types
 import unittest
 
@@ -57,6 +58,7 @@ if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 from kit import app as kit_app                                       # noqa: E402
+from kit.audio_claim import ENV_LOCK_PATH                             # noqa: E402
 from kit.tests.legacy_loop import LegacyLoopApp              # noqa: E402
 from kit.adapters.result_sink import MultiSink, ResultSink           # noqa: E402
 
@@ -490,6 +492,11 @@ class _Base(unittest.TestCase):
 
         self._env = os.environ.get("RECAMERA_VOICE_WAV")
         os.environ["RECAMERA_VOICE_WAV"] = "/tmp/fixture.wav"
+        # The exclusive microphone claim (kit/audio_claim.py) defaults to a
+        # device path; keep the suite from touching a shared lock file.
+        self._claim = os.environ.get(ENV_LOCK_PATH)
+        os.environ[ENV_LOCK_PATH] = os.path.join(tempfile.mkdtemp(),
+                                                 "audio-exclusive.lock")
 
         # ★load-bearing★: a voice app must never open a camera frame source.
         self._orig_open = kit_app.open_frame_source
@@ -518,6 +525,10 @@ class _Base(unittest.TestCase):
             os.environ.pop("RECAMERA_VOICE_WAV", None)
         else:
             os.environ["RECAMERA_VOICE_WAV"] = self._env
+        if self._claim is None:
+            os.environ.pop(ENV_LOCK_PATH, None)
+        else:
+            os.environ[ENV_LOCK_PATH] = self._claim
         try:
             signal.signal(signal.SIGHUP, signal.SIG_DFL)
         except (ValueError, OSError):
@@ -587,7 +598,14 @@ def _core(payload):
 
 class VoiceEquivalenceTests(_Base):
 
-    def test_state_machine_preserves_loop_error_when_close_also_fails(self):
+    def test_run_propagates_the_loop_error_and_leaves_cleanup_to_the_owner(self):
+        """A loop error reaches the caller; the source stays open for teardown.
+
+        V5-4 moved audio cleanup out of the loop: `run()` reports the failure
+        and returns the source untouched, and `close()` -- called by the
+        application's teardown -- is what releases it, with a retry when that
+        release itself fails.
+        """
         from kit.logic.voice_sm import VoiceStateMachine
 
         primary = ValueError("PRIMARY_READ")
@@ -621,17 +639,19 @@ class VoiceEquivalenceTests(_Base):
             sm.run()
         self.assertIs(caught.exception, primary)
         self.assertEqual(src.open_calls, 1)
-        self.assertEqual(src.close_calls, 1)
+        self.assertEqual(src.close_calls, 0, "run() must not close the source")
         self.assertTrue(sm._opened)
-        self.assertTrue(any("SECONDARY_CLOSE" in note
-                            for note in getattr(primary, "__notes__", ())))
 
+        # Owner teardown: the failure leaves `_opened` set so a retry works.
+        with self.assertRaises(RuntimeError):
+            sm.close()
+        self.assertTrue(sm._opened)
         src.close_error = None
         sm.close()
         self.assertEqual(src.close_calls, 2)
         self.assertFalse(sm._opened)
 
-    def test_state_machine_closes_preopened_source_when_wake_reset_fails(self):
+    def test_state_machine_keeps_preopened_source_open_when_wake_reset_fails(self):
         from kit.logic.voice_sm import VoiceStateMachine
 
         primary = KeyboardInterrupt()
@@ -659,6 +679,9 @@ class VoiceEquivalenceTests(_Base):
             sm.run()
         self.assertIs(caught.exception, primary)
         self.assertEqual(src.open_calls, 1)
+        self.assertEqual(src.close_calls, 0, "run() must not close the source")
+        self.assertTrue(sm._opened)
+        sm.close()
         self.assertEqual(src.close_calls, 1)
         self.assertFalse(sm._opened)
 
@@ -816,8 +839,10 @@ class VoiceEquivalenceTests(_Base):
             self.assertEqual(stubs.audio.open_calls, 1)
 
             app.run()
+            # run() no longer owns the microphone (V5-4): the source is still
+            # open when the loop returns, and `finish()` is what closes it.
             self.assertEqual(stubs.audio.open_calls, 1)
-            self.assertEqual(stubs.audio.close_calls, 1)
+            self.assertEqual(stubs.audio.close_calls, 0)
 
             app.finish()
             app.finish()

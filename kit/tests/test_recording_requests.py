@@ -17,7 +17,11 @@ def gateway_without_thread(size=2):
     sink = GatewayResultSink.__new__(GatewayResultSink)
     sink._q = queue.Queue(maxsize=size)
     sink._stop = threading.Event()
+    # ★One counter per application★ (V5-3): the sink's constructor always pairs
+    # `_seq` with `_seq_lock`, because frames, metrics, status and recording
+    # requests all draw their seq from it -- from more than one thread.
     sink._errors = sink._dropped = sink._seq = 0
+    sink._seq_lock = threading.Lock()
     sink._frame_w = sink._frame_h = 0
     sink.app_id = 'demo-app'
     sink.preserve_envelope = False

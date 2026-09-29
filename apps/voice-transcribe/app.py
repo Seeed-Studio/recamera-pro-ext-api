@@ -51,6 +51,7 @@ import sys
 import time
 
 from kit.app import App, run_app
+from kit.audio_claim import ExclusiveAudioClaim
 
 
 # States mirrored from kit.logic.voice_sm (kept local to avoid importing sherpa
@@ -160,6 +161,7 @@ class VoiceTranscribeApp(App):
             raise RuntimeError("voice runtime is already initialized")
         self._asr = None
         self._voice_sm = None
+        self._audio_claim = None
 
         super().setup(config or {})
         c = self.config
@@ -234,8 +236,22 @@ class VoiceTranscribeApp(App):
         sm = getattr(self, "_voice_sm", None)
         if sm is None:
             return
+        # Closing is terminal for admission: stop accepting callbacks first, so
+        # nothing can publish into a half-torn-down sink tree while we work. The
+        # default budget returns immediately when -- as here, after run() has
+        # returned -- no callback is in flight.
+        sm.request_stop()
         sm.close()
         self._voice_sm = None
+
+    def _release_audio_claim(self):
+        """Drop the exclusive microphone claim; retained on failure."""
+
+        claim = getattr(self, "_audio_claim", None)
+        if claim is None:
+            return
+        claim.release()
+        self._audio_claim = None
 
     def finish(self):
         """Release ASR and kit resources while preserving the first failure."""
@@ -254,7 +270,13 @@ class VoiceTranscribeApp(App):
 
         # Stop input before destroying ASR/NPU state, then let the kit release
         # signal handlers, frame/model resources and its owned sink.
+        #
+        # The audio source itself is closed HERE (V5-4): the state machine no
+        # longer closes it when its loop exits, so teardown is the one place
+        # that decides when the microphone is released -- and it releases the
+        # exclusive claim only after the source is actually closed.
         clean("voice pipeline", self._close_voice_pipeline)
+        clean("audio claim", self._release_audio_claim)
         clean("ASR", self._close_asr)
         clean("kit", super().finish)
 
@@ -455,11 +477,17 @@ class VoiceTranscribeApp(App):
     def prepare_runtime(self):
         """Build and probe Voice's complete pipeline before start() returns."""
 
-        if self._voice_sm is not None:
+        if getattr(self, "_voice_sm", None) is not None:
             raise RuntimeError("voice pipeline is already initialized")
         from kit.logic.vad import VadSegmenter
         from kit.logic.wakeword import SherpaKwsWakeWord, AsrKeywordWakeWord
         from kit.logic.voice_sm import VoiceStateMachine
+
+        # ★Symmetric audio exclusion★ (kit/audio_claim.py): the merged
+        # `eldercare-monitor` app takes the SAME claim, so whichever of the two
+        # starts second is refused with a reason -- in both orders, atomically.
+        # Held until finish().
+        self._audio_claim = ExclusiveAudioClaim(self.id).acquire()
 
         verbose = self.verbose
         md = self.model_dir

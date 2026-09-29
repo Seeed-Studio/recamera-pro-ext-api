@@ -41,6 +41,7 @@ from kit.adapters.result_sink import (
     ResultSink,
     WsResultSink,
 )
+from kit.errors import InputValidationError
 # MqttSink is reused for HA state aggregation (`_build_state`). Imported at
 # module level (mqtt_sink has no back-dependency on output_sink, so no cycle)
 # so HaDiscoveryFormatter.format does not re-import it on every frame.
@@ -867,7 +868,13 @@ class ConfigurableSink(ResultSink):
         # `_formatter` object being smuggled through config.json.
         self._formatter_builder = formatter_builder
         self._lock = threading.Lock()
+        # ★One publication counter per application★ (V5-3/V6-2): frames, metrics
+        # and status all draw from `self._seq`, so the Hub's derived
+        # `app:generation:seq:type` identities never collide across two
+        # publications. `_seq_lock` makes the read-modify-write atomic -- a
+        # merged app publishes from the camera thread AND the voice thread.
         self._seq = 0
+        self._seq_lock = threading.Lock()
         self._frame_w: Optional[int] = None
         self._frame_h: Optional[int] = None
         self._legacy_sinks: List[ResultSink] = []
@@ -929,12 +936,18 @@ class ConfigurableSink(ResultSink):
                 pass
 
     # -- envelope + filter ------------------------------------------------ #
-    def _build_envelope(self, payload: dict, pts: float) -> dict:
+    def _next_seq(self) -> int:
+        with self._seq_lock:
+            self._seq += 1
+            return self._seq
+
+    def _build_envelope(self, payload: dict, pts: float, *,
+                        seq: Optional[int] = None) -> dict:
         env = {
             "type": "results",
             "app": self.app_id,
             "timestamp": int(time.time() * 1000),
-            "seq": self._seq,
+            "seq": self._seq if seq is None else int(seq),
             "frame": {"width": self._frame_w, "height": self._frame_h, "pts": pts},
             "results": payload.get("results") or [],
             "events": payload.get("events") or [],
@@ -942,6 +955,32 @@ class ConfigurableSink(ResultSink):
         for k, v in (payload or {}).items():
             if k not in env and k not in ("results", "events"):
                 env[k] = v
+        return env
+
+    def _build_typed_envelope(self, payload: dict, pts: float, *,
+                              seq: int) -> dict:
+        """Canonical envelope for a typed (metrics/status) publication.
+
+        Deliberately carries NO ``results`` key at all, and never ``geometry``:
+        a consumer (appmgr's Result Hub) treats "the producer sent an explicit
+        ``results`` list" -- even an empty one -- as a frame snapshot that
+        replaces the latest frame, and treats non-empty ``geometry`` as frame
+        material. A typed publication is neither, so it must not look like
+        either (V4-4/V5-2).
+        """
+        message_type = str((payload or {}).get("type") or "metrics")
+        env = {
+            "type": message_type,
+            "app": self.app_id,
+            "timestamp": int(time.time() * 1000),
+            "seq": int(seq),
+            "frame": {"width": self._frame_w, "height": self._frame_h, "pts": pts},
+        }
+        for k, v in (payload or {}).items():
+            if k in ("results", "geometry"):
+                continue
+            env[k] = v
+        env["type"] = message_type
         return env
 
     def _class_match(self, item: dict) -> bool:
@@ -996,8 +1035,7 @@ class ConfigurableSink(ResultSink):
 
     # -- ResultSink ------------------------------------------------------- #
     def emit(self, payload: dict, pts: float) -> None:
-        self._seq += 1
-        env = self._build_envelope(payload, pts)
+        env = self._build_envelope(payload, pts, seq=self._next_seq())
         decision = self._apply_filters(env)
         if decision is None:
             return
@@ -1008,15 +1046,41 @@ class ConfigurableSink(ResultSink):
                    if self._rate_ok(ch.name, has_edge)]
         if not passing:
             return
-        # Format ONCE per frame: no formatter reads `channel`, and the formatter
-        # may carry per-frame state (HaDiscoveryFormatter._seq) that must advance
-        # once per frame -- not once per channel. Fan the resulting messages out
-        # to every rate-passing channel.
+        self._format_and_publish(env, passing)
+
+    def emit_typed(self, payload: dict, pts: float) -> None:
+        """Publish a typed (metrics/status) envelope off the shared seq.
+
+        Bypasses `_apply_filters` and `_rate_ok` on purpose: those implement the
+        *results* contract (`classes` allow-lists, `only_on_detection`, the frame
+        rate limit). Applying them here would silently drop a metric for not
+        containing a detection, which is the exact failure this path exists to
+        avoid (V4-4: "绕开只认 results 的过滤/索引"). Rate limiting for metrics is
+        the producer's job (<= 5 Hz, V4-4).
+        """
+        geometry = (payload or {}).get("geometry")
+        if geometry:
+            raise InputValidationError(
+                "a typed publication must not carry geometry",
+                operation="output.emit_typed",
+                code="typed_geometry_forbidden",
+                details={"type": (payload or {}).get("type"),
+                         "items": len(geometry)})
+        env = self._build_typed_envelope(payload, pts, seq=self._next_seq())
+        if not self.channels:
+            return
+        self._format_and_publish(env, list(self.channels))
+
+    def _format_and_publish(self, env: dict, passing: List[OutputChannel]) -> None:
+        # Format ONCE per publication: no formatter reads `channel`, and the
+        # formatter may carry per-publication state (HaDiscoveryFormatter._seq)
+        # that must advance once -- not once per channel. Fan the resulting
+        # messages out to every rate-passing channel.
         try:
             msgs = self.formatter.format(env, channel=None)
         except Exception as e:
             # A format failure hits all channels alike; log once (throttled on
-            # the first channel's key) and drop this frame.
+            # the first channel's key) and drop this publication.
             self._log_channel_error(passing[0].name, e)
             return
         for ch in passing:

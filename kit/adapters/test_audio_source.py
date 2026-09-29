@@ -253,3 +253,65 @@ if __name__ == "__main__":
     test_registry_audio_socket_is_unknown_until_explicit_opt_in()
     _clear_env()
     print("ALL AUDIO SOURCE TESTS PASSED")
+
+
+def test_read_returns_end_of_stream_when_the_owner_closes_mid_read():
+    """Closing a source from another thread must not raise into the reader.
+
+    Owner teardown is now the normal path that closes the microphone (the voice
+    loop never closes it itself), and it runs on a DIFFERENT thread from the one
+    parked in `read()`. That reader must see a clean end of stream -- a torn
+    read is a shutdown, not a crash -- for both the subprocess-backed sources
+    and the in-memory one.
+    """
+    import threading
+    import time
+    import wave
+
+    import numpy as np
+
+    # -- in-memory WAV source: close() nulls the buffer -------------------- #
+    path = os.path.join(tempfile.mkdtemp(), "race.wav")
+    pcm = (np.sin(np.arange(16000 * 4) * 0.05) * 8000).astype(np.int16)
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(pcm.tobytes())
+
+    source = A.WavFileAudioSource(path, realtime=True)
+    source.open()
+    failures = []
+    stop = threading.Event()
+
+    def reader():
+        try:
+            while not stop.is_set():
+                if source.read() is None:
+                    return
+        except BaseException as exc:                       # noqa: BLE001
+            failures.append(exc)
+
+    worker = threading.Thread(target=reader, daemon=True)
+    worker.start()
+    time.sleep(0.25)                       # let it park inside read()
+    source.close()                         # owner teardown, other thread
+    worker.join(5.0)
+    stop.set()
+    assert failures == [], failures
+    assert not worker.is_alive()
+    assert source.read() is None
+
+    # -- subprocess-backed source: close() clears the Popen ----------------- #
+    rtsp = RtspAudioSource("rtsp://example.invalid/live", chunk_ms=100)
+    rtsp._proc = A.subprocess.Popen(                        # noqa: SLF001
+        [sys.executable, "-c",
+         "import sys,time; sys.stdout.buffer.write(b'\\0'*4000); "
+         "sys.stdout.buffer.flush(); time.sleep(30)"],
+        stdout=A.subprocess.PIPE, stderr=A.subprocess.PIPE)
+    try:
+        chunk = rtsp.read() or rtsp.read()
+        assert chunk is not None, "the fake subprocess produced no audio"
+    finally:
+        rtsp.close()
+    assert rtsp.read() is None
