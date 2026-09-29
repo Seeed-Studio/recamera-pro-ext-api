@@ -42,6 +42,12 @@
   var WAVE_N = 56;              // waveform sample ring
   var WAVE_STEP_MS = 48;        // one waveform sample per 48 ms
   var KP_MIN = 0.3;             // keypoints below this are not drawn
+  // The pose decoder marks a joint it cannot see by clamping the coordinate to
+  // the frame border (e.g. x == stream width) while still reporting a
+  // confidence that can exceed KP_MIN.  Connecting such a sentinel throws a
+  // limb out to the edge of the frame, so a point this close to the border is
+  // treated as invalid as well.
+  var BORDER_EPS = 1.0;         // source-space px that count as "on the border"
   var LISTEN_HOLD_MS = 2200;    // "listening" dot stays lit this long after speech
   var SPEAKER = "说话人";        // fixed wording: no speaker diarisation
 
@@ -495,11 +501,34 @@
     return "ID " + pad2(Math.trunc(tid));
   }
 
+  // True when a keypoint lies on the frame border, i.e. is a clamped sentinel
+  // for a joint the model could not see.  Mirrors toScreen's pixel/normalized
+  // decision so the test uses the same coordinate space the point is drawn in.
+  function kpOnBorder(x, y) {
+    var st = S.stream;
+    var sw = (st && st.width > 0) ? st.width : 0;
+    var sh = (st && st.height > 0) ? st.height : 0;
+    var space = String((st && st.coordinate_space) || S.space || "");
+    if (sw > 0 && sh > 0 && (space.indexOf("pixel") === 0 || x > 1.5 || y > 1.5)) {
+      return (x <= BORDER_EPS || x >= sw - BORDER_EPS ||
+              y <= BORDER_EPS || y >= sh - BORDER_EPS);
+    }
+    // Normalized (or undeclared) space: the border is exactly 0 / 1.
+    var eps = 1e-3;
+    return (x <= eps || x >= 1 - eps || y <= eps || y >= 1 - eps);
+  }
+
+  function kpUsable(kp) {
+    if (!kp || num(kp[2]) === null || kp[2] < KP_MIN) return false;
+    if (num(kp[0]) === null || num(kp[1]) === null) return false;
+    return !kpOnBorder(kp[0], kp[1]);
+  }
+
   // -- drawing: one person ---------------------------------------------------
   function drawSkeleton(kps) {
     var i, a, b, pa, pb, pts = [];
     for (i = 0; i < kps.length; i++) {
-      if (kps[i] && num(kps[i][2]) !== null && kps[i][2] >= KP_MIN) {
+      if (kpUsable(kps[i])) {
         pts[i] = toScreen(kps[i][0], kps[i][1]);
       } else {
         pts[i] = null;

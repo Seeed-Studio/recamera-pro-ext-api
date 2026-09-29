@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 1,
+    "sequence": 2,
     "channel": "stable"
   },
   "compatibility": {
@@ -284,7 +284,7 @@
   "ui": {
     "overlay": {
       "entry": "web/overlay.html",
-      "sha256": "9c02f0ad15638c0a17fb6f6f4dd05dc5eb9bf35b2e91dfefd8ce6476a1dbbbb4"
+      "sha256": "123981122333d577b11c9e990984be8f563edeccd11dd06b3bef988a89f6d845"
     }
   },
   "render": {
