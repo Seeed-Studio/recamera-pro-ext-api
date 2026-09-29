@@ -119,6 +119,17 @@
       "share_scope": "content"
     },
     {
+      "id": "sensevoice-rknn-t100",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/asr/sensevoice_rv1126b_w4a16_t100.rknn",
+      "sha256": "0a2e450c432cc064da5518f0cac5c4a44bb2e728f45ab5370efb761b6126bc48",
+      "size": 132339323,
+      "mount": "models/asr/sensevoice_rv1126b_w4a16_t100.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
       "id": "sensevoice-cmvn",
       "kind": "data",
       "source": "bundled",

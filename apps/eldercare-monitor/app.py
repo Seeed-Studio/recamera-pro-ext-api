@@ -86,6 +86,26 @@ ALWAYS_ON_BACKEND = "always-on"
 _SHARED_ASR_DIRS = ("/userdata/local/models/asr", "/userdata/tmp/asr")
 _BUNDLED_ASR_SUBDIR = os.path.join("models", "asr")
 _JOIN_TIMEOUT_SEC = 3.0
+
+
+def _is_tier_rknn(name: str) -> bool:
+    """Whether `name` is an encoder window tier rather than the primary model.
+
+    The backend picks one encoder window per tier by filename -- the production
+    `<stem>.rknn` plus optional `<stem>_t<digits>.rknn` windows, see
+    `kit/asr_rknn_backend.py` (`DEFAULT_RKNN_SHORT_NAME`).  A tier window is
+    declared as an artifact too, because appmgr publishes only declared bundled
+    RKNN artifacts to the inference service and an undeclared one could not be
+    opened; but it is not the primary model and must not count against the
+    exactly-one-primary rule.
+    """
+    stem, dot, extension = name.rpartition(".")
+    if dot != "." or extension != "rknn":
+        return False
+    head, separator, width = stem.rpartition("_t")
+    return bool(separator and head and width.isdigit())
+
+
 _INFERENCE_SERVICE_ENVS = (
     "RECAMERA_INFERENCE_SERVICE_SOCK",
     # Read-only compatibility alias also honoured by kit.runtime.remote.
@@ -305,6 +325,7 @@ class EldercareMonitorApp(App):
             and item.get("source") == "bundled"
             and isinstance(item.get("file"), str)
             and os.path.dirname(item["file"]) == _BUNDLED_ASR_SUBDIR
+            and not _is_tier_rknn(os.path.basename(item["file"]))
         ]
         if len(artifacts) != 1:
             if not required:
