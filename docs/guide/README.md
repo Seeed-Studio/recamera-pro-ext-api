@@ -50,7 +50,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **结果推送（notify）** | 现成可用 | 向 `/var/tmp/notify` 写 `InferenceResult`（仅分发，不上 OSD） | [result-push.md](./result-push.md) |
 | **统一 AI Result Hub v2** | 后端协议/订阅/重放已实现 | `/ws/ai/results/v2`（app + builtin，raw/formatted）；legacy 8123/8124 保留 | [result-hub-v2.md](./result-hub-v2.md) |
 | **AI 结果叠加自定义**（显示样式覆盖 + geometry 自由绘制） | 后端 + 前端真机验证（2026-09-15）；前端分支未推送；沙箱 JS 插件另见叠加插件篇 | 应用中心「显示样式」面板 / `GET·PUT·DELETE /api/app-center/v1/apps/<id>/render-override`；app 发 `geometry[]` | [overlay-customization.md](./overlay-customization.md) · [交接](./overlay-customization-handoff.md) |
-| **应用自带叠加插件**（sandbox iframe 里自绘 UI） | 服务端（manifest/安装/取数路由）+ 前端宿主已实现（后端在本工作树，前端宿主提交 `be5726a`/`9b63caa`，2026-09-28）；是否已随前端/固件构建发布到设备**未核实** | manifest `ui.overlay {entry, sha256}` → 包内单文件 `web/overlay.html`；宿主经 MessageChannel 投递 `init`/`data`/`geometry` | [overlay-plugins.md](./overlay-plugins.md) |
+| **应用自带叠加插件**（sandbox iframe 里自绘 UI） | 服务端（manifest/安装/取数路由）+ 前端宿主已实现（后端在本工作树，前端宿主提交 `130edb8`/`d4e6668`，2026-09-29）；设备上运行的 bundle 是否已换成含这两个提交的构建**未核实** | manifest `ui.overlay {entry, sha256}` → 包内单文件 `web/overlay.html`；宿主经 MessageChannel 投递 `init`/`frame`/`status`/`event`/`render`/`geometry` | [overlay-plugins.md](./overlay-plugins.md) |
 | **硬件隐私遮罩**（COVER 增量控制） | 固件 + SDK 就绪；线 B 冷启动真机验证通过 | `MaskControl` / C ABI `rc_ext_mask_*`（rkipc RPC，M4） | [hw-mask-api.md](./hw-mask-api.md) |
 | **输出组件**（声明式结果输出） | 现成可用；真机 + 本地 broker 验证（P3b） | manifest `capabilities:["output"]` + `output` 块，`ConfigurableSink`（零 app 代码） | [output-sink.md](./output-sink.md) |
 | **硬件预处理加速**（RGA letterbox） | `hw-direct` 真机 A/B **+55%**；`hw` 实测无收益（+0.8%），默认不开 | `App.model_frame = "hw-direct"`（一行类属性，零 RGA 代码） | [hw-preprocess.md](./hw-preprocess.md) |
