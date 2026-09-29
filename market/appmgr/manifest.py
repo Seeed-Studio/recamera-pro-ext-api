@@ -32,6 +32,11 @@ RESERVED_PACKAGE_PATHS = frozenset((RELEASE_LOCK_PATH, BOM_PATH))
 # driven through appmgr's acousticslab.py adapter).
 RESERVED_APP_IDS = frozenset(("builtin", "acousticslab"))
 MAX_ICON_BYTES = 1024 * 1024
+# Sandboxed browser overlay plugin (overlay phase-2 spec §3): a v2 package may
+# ship ONE self-contained HTML document declared as `ui.overlay`.  appmgr serves
+# those bytes text/plain for the front end to inline into a sandboxed srcdoc
+# iframe, so the document is bounded well below the package caps.
+MAX_OVERLAY_BYTES = 256 * 1024
 ICON_MEDIA_EXTENSIONS = {
     "image/png": (".png",),
     "image/webp": (".webp",),
@@ -54,6 +59,11 @@ _VERSION_CONSTRAINT_RE = re.compile(
     r"[A-Za-z0-9<>=!~^*][A-Za-z0-9._+,:<>=!~^*-]{0,127}"
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+# ui.overlay.entry: one HTML document under the package's web/ tree.  The
+# character class already excludes separators Windows treats specially and any
+# control character; '..' segments are rejected separately below because '.'
+# alone is a legal class member.
+_OVERLAY_ENTRY_RE = re.compile(r"web/[A-Za-z0-9._/-]{1,120}\.html")
 _IMPORT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 _CONFIG_KEY_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ENDPOINT_RE = re.compile(r"[a-z][a-z0-9_.-]{0,63}")
@@ -66,7 +76,7 @@ _V2_REQUIRED = frozenset((
 _V2_ALLOWED = _V2_REQUIRED | frozenset((
     "name_zh", "description", "description_zh", "author", "image", "icon", "scene",
     "scene_zh", "tags", "models", "needs_model", "postproc", "render",
-    "output", "record_trigger", "ha_entities", "package",
+    "output", "record_trigger", "ha_entities", "package", "ui",
 ))
 
 _CONFIG_TYPES = frozenset((
@@ -186,6 +196,31 @@ def validate_icon_declaration(value: Any) -> dict[str, str]:
             "extension must match icon.media_type %r (%s)" % (
                 media_type, ", ".join(extensions)))
     return {"path": icon_path, "media_type": media_type}
+
+
+def validate_overlay_declaration(value: Any) -> dict[str, str]:
+    """Validate and canonicalise manifest-v2's ``ui.overlay`` browser plugin.
+
+    The overlay plugin is one self-contained HTML document shipped under the
+    package's ``web/`` tree and served by appmgr as ``text/plain`` for the front
+    end to inline into a sandboxed iframe.  The schema is closed at both levels:
+    ``ui`` may only carry ``overlay`` and ``overlay`` only ``entry``/``sha256``.
+    """
+    ui = _expect_object(value, "ui")
+    _closed(ui, frozenset(("overlay",)), "ui")
+    _required(ui, frozenset(("overlay",)), "ui")
+    overlay = _expect_object(ui["overlay"], "ui.overlay")
+    _closed(overlay, frozenset(("entry", "sha256")), "ui.overlay")
+    _required(overlay, frozenset(("entry", "sha256")), "ui.overlay")
+    entry = _string(overlay["entry"], "ui.overlay.entry", max_len=255)
+    if _OVERLAY_ENTRY_RE.fullmatch(entry) is None:
+        _fail("ui.overlay.entry",
+              "must be a web/<name>.html package path "
+              "(1..120 chars of [A-Za-z0-9._/-] after web/)")
+    if ".." in entry.split("/"):
+        _fail("ui.overlay.entry", "must not contain '..' path segments")
+    return {"entry": entry, "sha256": _sha256(overlay["sha256"],
+                                              "ui.overlay.sha256")}
 
 
 def icon_bytes_match_media_type(data: bytes, media_type: str) -> bool:
@@ -1460,6 +1495,8 @@ def validate_manifest(manifest: Any, *, allow_v1: bool = True) -> int:
         _validate_record_trigger(obj["record_trigger"], obj.get("output"))
     if "render" in obj:
         _validate_render_contract(obj["render"])
+    if "ui" in obj:
+        validate_overlay_declaration(obj["ui"])
     # Invoke even when either section is absent/legacy: strict geometry is a
     # bidirectional contract and must never install successfully only to be
     # discarded silently by Result Hub.
@@ -1526,6 +1563,22 @@ def validate_package_files(manifest: Mapping[str, Any], files: Mapping[str, Mapp
             _fail(
                 "icon.path",
                 f"icon exceeds {MAX_ICON_BYTES} byte limit: {record['size']}")
+
+    if "ui" in manifest:
+        overlay = validate_overlay_declaration(manifest["ui"])
+        record = records.get(overlay["entry"])
+        if record is None:
+            _fail("ui.overlay.entry",
+                  f"package is missing {overlay['entry']!r}")
+        if record["size"] > MAX_OVERLAY_BYTES:
+            _fail(
+                "ui.overlay.entry",
+                f"overlay exceeds {MAX_OVERLAY_BYTES} byte limit: "
+                f"{record['size']}")
+        if record["sha256"] != overlay["sha256"]:
+            _fail(
+                "ui.overlay.sha256",
+                f"digest does not match {overlay['entry']!r}")
 
     for index, wheel in enumerate(manifest["python"]["wheels"]):
         if wheel["source"] != "bundled":

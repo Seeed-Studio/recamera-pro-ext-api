@@ -621,6 +621,40 @@ def _validate_declared_icon_payload(tar: tarfile.TarFile,
                 icon["media_type"], icon["path"]))
 
 
+def _validate_declared_overlay_payload(tar: tarfile.TarFile,
+                                       manifest: dict) -> None:
+    """Bind a v2 ui.overlay declaration to bounded regular-file bytes.
+
+    ``validate_package_files`` has already matched the declaration against the
+    BOM records (existence, size cap, digest).  This adds the member-level
+    rules a record cannot express: the declared entry must be a regular file
+    and never a link.  (``_vet_member`` already refuses every sym/hard link in
+    the package; these checks keep the overlay-specific failure explicit even
+    if that gate ever widens.)
+    """
+    if (manifest_contract.manifest_version(manifest)
+            != manifest_contract.MANIFEST_VERSION
+            or "ui" not in manifest):
+        return
+    overlay = manifest_contract.validate_overlay_declaration(manifest["ui"])
+    entry = overlay["entry"]
+    try:
+        member = tar.getmember(entry)
+    except KeyError as exc:
+        raise InstallError(
+            f"declared overlay entry is missing from package: {entry!r}") from exc
+    if member.issym() or member.islnk():
+        raise InstallError(
+            f"declared overlay entry must not be a link: {entry!r}")
+    if not member.isfile():
+        raise InstallError(
+            f"declared overlay entry must be a regular file: {entry!r}")
+    if member.size > paths.MAX_OVERLAY_BYTES:
+        raise InstallError(
+            f"overlay entry too large: {member.size} > "
+            f"{paths.MAX_OVERLAY_BYTES} ({entry!r})")
+
+
 def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
     try:
         with tempfile.TemporaryDirectory() as probe:
@@ -642,6 +676,7 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
         records = _package_records(tar, members)
         manifest_contract.validate_package_files(manifest, records)
         _validate_declared_icon_payload(tar, manifest)
+        _validate_declared_overlay_payload(tar, manifest)
     except manifest_contract.ManifestValidationError as exc:
         raise InstallError(f"invalid package contract: {exc}") from exc
 

@@ -973,19 +973,26 @@ def _icon_candidates(manifest: dict) -> tuple[bool, list[dict]]:
     } for ext in paths.ICON_EXTS]
 
 
-def _open_icon_nofollow(app_id: str, relative_path: str):
-    """Open one installed icon without following any path component."""
+def _open_icon_nofollow(app_id: str, relative_path: str, *,
+                        max_bytes: int = None, noun: str = "icon"):
+    """Open one installed package file without following any path component.
+
+    Shared by the icon and the ui.overlay entry readers: ``max_bytes`` selects
+    the size cap (default the icon cap) and ``noun`` only shapes error text.
+    """
+    if max_bytes is None:
+        max_bytes = paths.MAX_ICON_BYTES
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     try:
         relative_path = appmanifest.validate_package_member_path(
             relative_path, "icon.path")
     except appmanifest.ManifestValidationError as exc:
-        raise FileNotFoundError("installed icon path is unsafe") from exc
+        raise FileNotFoundError("installed path is unsafe") from exc
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     if nofollow is None or directory is None:
-        raise OSError(errno.ENOTSUP, "safe no-follow icon open is unsupported")
+        raise OSError(errno.ENOTSUP, "safe no-follow open is unsupported")
     common = nofollow | getattr(os, "O_CLOEXEC", 0)
     current_fd = os.open(paths.app_dir(app_id), os.O_RDONLY | directory | common)
     try:
@@ -1002,10 +1009,11 @@ def _open_icon_nofollow(app_id: str, relative_path: str):
         try:
             info = os.fstat(file_fd)
             if not stat.S_ISREG(info.st_mode):
-                raise FileNotFoundError("installed icon is not a regular file")
-            if info.st_size > paths.MAX_ICON_BYTES:
                 raise FileNotFoundError(
-                    f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+                    f"installed {noun} is not a regular file")
+            if info.st_size > max_bytes:
+                raise FileNotFoundError(
+                    f"installed {noun} exceeds {max_bytes} byte limit")
             return file_fd, info
         except BaseException:
             os.close(file_fd)
@@ -1015,12 +1023,15 @@ def _open_icon_nofollow(app_id: str, relative_path: str):
 
 
 def _read_icon_fd(file_fd: int, file_info, media_type: str, *,
-                  strict_media: bool) -> tuple[bytes, str]:
+                  strict_media: bool, max_bytes: int = None,
+                  noun: str = "icon") -> tuple[bytes, str]:
+    if max_bytes is None:
+        max_bytes = paths.MAX_ICON_BYTES
     with os.fdopen(file_fd, "rb", closefd=True) as source:
-        data = source.read(paths.MAX_ICON_BYTES + 1)
-    if len(data) > paths.MAX_ICON_BYTES:
+        data = source.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise FileNotFoundError(
-            f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+            f"installed {noun} exceeds {max_bytes} byte limit")
     if strict_media and not appmanifest.icon_bytes_match_media_type(
             data[:16], media_type):
         raise FileNotFoundError(
@@ -1131,6 +1142,47 @@ def do_icon(app_id: str):
         raise FileNotFoundError(
             f"app {app_id!r} has no safe bundled icon") from exc
     return data, info["media_type"]
+
+
+def do_overlay(app_id: str) -> tuple[bytes, str]:
+    """Return (bytes, sha256hex) of an installed app's ui.overlay entry.
+
+    The sandboxed overlay plugin (overlay phase-2 spec §3) is ONE self-contained
+    HTML document; the front end fetches these bytes with ?h=<declared sha256>
+    and inlines them into a sandboxed srcdoc iframe.  The HTTP layer serves them
+    ``text/plain`` so top-level navigation to this URL can never execute the
+    document.  404 (FileNotFoundError) unless the app is installed AND its
+    installed manifest declares ui.overlay; the read reuses the icon's no-follow
+    open (every path component O_NOFOLLOW, regular-file + size-cap checks) so a
+    tampered install tree cannot escape its app dir or hand out a symlink.
+    """
+    if not paths.valid_app_id(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    _require_installed(app_id)
+    manifest = _read_manifest(app_id)
+    if not (isinstance(manifest, dict)
+            and manifest.get("manifest_version") == appmanifest.MANIFEST_VERSION
+            and "ui" in manifest):
+        raise FileNotFoundError(
+            f"app {app_id!r} declares no overlay plugin")
+    try:
+        overlay = appmanifest.validate_overlay_declaration(manifest["ui"])
+    except appmanifest.ManifestValidationError:
+        # Installed metadata was modified/corrupted.  Fail closed instead of
+        # serving whatever the mutated declaration points at (icon precedent).
+        raise FileNotFoundError(
+            f"app {app_id!r} has an invalid overlay declaration") from None
+    try:
+        file_fd, file_info = _open_icon_nofollow(
+            app_id, overlay["entry"], max_bytes=paths.MAX_OVERLAY_BYTES,
+            noun="overlay entry")
+        data, digest = _read_icon_fd(
+            file_fd, file_info, "", strict_media=False,
+            max_bytes=paths.MAX_OVERLAY_BYTES, noun="overlay entry")
+    except (OSError, ValueError) as exc:
+        raise FileNotFoundError(
+            f"app {app_id!r} has no readable overlay entry") from exc
+    return data, digest
 
 
 def do_assets(paths_param: str) -> dict:
@@ -4025,6 +4077,46 @@ class _Handler(BaseHTTPRequestHandler):
                     200, do_get_render_override(override_match.group(1)))
             except Exception as exc:
                 return self._render_override_error(exc)
+        overlay_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/overlay", path)
+        if overlay_match:
+            # ?h=<full sha256> is mandatory: the front end binds its fetch to
+            # the manifest-declared digest, so there is deliberately no
+            # "serve without verification" path (overlay phase-2 spec §3 M4).
+            requested_hashes = parse_qs(
+                parsed.query, keep_blank_values=True).get("h") or []
+            if len(requested_hashes) != 1:
+                return self._send(400, {
+                    "error": "missing required 'h' (overlay content sha256)",
+                })
+            requested_hash = requested_hashes[0]
+            if re.fullmatch(r"[0-9a-f]{64}", requested_hash) is None:
+                return self._send(400, {
+                    "error": "'h' must be exactly 64 lowercase hexadecimal characters",
+                })
+            try:
+                data, digest = do_overlay(overlay_match.group(1))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except FileNotFoundError as e:
+                return self._send(404, {"error": str(e)})
+            except OSError as e:
+                return self._send(500, {"error": repr(e)})
+            if digest != requested_hash:
+                # Declared digest vs actual bytes diverged (upgrade window or a
+                # modified install): never hand the bytes out under the old
+                # key -- 409 tells the host to drop them and fall back.
+                return self._send(409, {
+                    "error": "overlay content hash does not match",
+                })
+            # text/plain on purpose: these bytes are only ever interpreted as a
+            # document inside the host-built sandboxed srcdoc, never at this URL.
+            # ETag is the digest's first 16 hex chars, matching the icon
+            # endpoint's cache key convention; this branch already pins
+            # X-Content-Type-Options: nosniff inside _send_bytes.
+            return self._send_bytes(
+                200, data, "text/plain; charset=utf-8", cache="no-store",
+                headers={"ETag": digest[:16]})
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/(config|logs)",
             path)

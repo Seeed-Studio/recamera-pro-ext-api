@@ -307,6 +307,29 @@
     },
     "record_trigger": {"$ref": "#/$defs/recordTriggerV1"},
     "ha_entities": {"type": "array"},
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {"^x-": true},
+      "required": ["overlay"],
+      "properties": {
+        "overlay": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {"^x-": true},
+          "required": ["entry", "sha256"],
+          "properties": {
+            "entry": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))web/[A-Za-z0-9._/-]{1,120}\\.html$"
+            },
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
     "package": {
       "type": "object",
       "additionalProperties": false,
