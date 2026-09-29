@@ -5211,7 +5211,15 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
         if install_recovery is not None:
             print("[appmgr] reconciled install transaction: %s" %
                   install_recovery, flush=True)
-            _audit("install_transaction_reconciled", **install_recovery)
+            # `_audit` takes the record's action positionally, and the
+            # reconciler's own "action" (committed/rolled_back) is a different
+            # field: splatting it raises TypeError. This runs once per boot and
+            # has no second chance, so the collision is renamed to `op` -- the
+            # same fix the render-override audit calls needed.
+            _audit("install_transaction_reconciled",
+                   op=install_recovery.get("action"),
+                   **{k: v for k, v in install_recovery.items()
+                      if k != "action"})
     except Exception as exc:
         print("[appmgr] install transaction recovery failed: %r" % exc,
               flush=True)
