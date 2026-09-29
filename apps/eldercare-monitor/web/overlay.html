@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>eldercare-monitor overlay</title>
+<!--
+  Sandboxed overlay plugin for the eldercare-monitor app.
+
+  The App Center host fetches this document, prepends its own CSP meta and a
+  bootstrap script, and mounts the result as <iframe sandbox="allow-scripts"
+  srcdoc="...">.  The injected bootstrap creates the MessageChannel BEFORE any
+  package code runs and exposes this document's end as window.__overlayPort.
+
+  This file stays ONE self-contained document: inline CSS + JS only, no
+  external css/js/img/font, no fetch/WebSocket/storage/parent access.  The
+  channel is port-only: data flows in over __overlayPort after this document
+  posts its single "ready" handshake.
+
+  UI (no buttons anywhere):
+    * one capsule per person  ->  ID 01 . 站立 . 96%   (dot + rounded box + COCO-17 skeleton)
+    * bottom-left status bar  ->  人数 N                (only the count)
+    * right-hand transcript panel -> header, waveform, scrolling rows
+-->
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%;
+               background: transparent; overflow: hidden; }
+  #stage { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+           display: block; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var PROTOCOL = 1;
+  var CHANNEL = "recamera.overlay.plugin";
+  var MAX_PEOPLE = 16;
+  var MAX_ROWS = 30;            // transcript rows kept in memory
+  var VISIBLE_ROWS = 6;         // rows drawn (newest first)
+  var WAVE_N = 56;              // waveform sample ring
+  var WAVE_STEP_MS = 48;        // one waveform sample per 48 ms
+  var KP_MIN = 0.3;             // keypoints below this are not drawn
+  var LISTEN_HOLD_MS = 2200;    // "listening" dot stays lit this long after speech
+  var SPEAKER = "说话人";        // fixed wording: no speaker diarisation
+
+  // COCO-17 skeleton edges.
+  var EDGES = [
+    [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6],
+    [5, 7], [6, 8], [7, 9], [8, 10],
+    [5, 6], [5, 11], [6, 12], [11, 12],
+    [11, 13], [12, 14], [13, 15], [14, 16]
+  ];
+
+  var C = {
+    accent: "#00C853",
+    danger: "#FF5252",
+    idle: "#9AA4AE",
+    skeleton: "#4FC3F7",
+    text: "#FFFFFF",
+    dim: "rgba(255,255,255,0.78)",
+    muted: "rgba(255,255,255,0.58)",
+    faint: "rgba(255,255,255,0.34)",
+    panel: "rgba(10,14,18,0.70)",
+    panelHead: "rgba(255,255,255,0.05)",
+    border: "rgba(255,255,255,0.16)",
+    divider: "rgba(255,255,255,0.09)",
+    shadow: "rgba(0,0,0,0.55)"
+  };
+
+  var FONT = '"PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",' +
+             '"Source Han Sans SC","Microsoft YaHei",-apple-system,' +
+             'BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif';
+
+  var STATE_LABEL = { normal: "站立", fallen: "跌倒", lying: "躺卧" };
+  var STATE_COLOR = { normal: C.accent, fallen: C.danger };
+
+  var port = window.__overlayPort || null;
+  var canvas = document.getElementById("stage");
+  var ctx = canvas.getContext("2d");
+
+  var seq = 0;
+  var sc = 1;                     // design scale, recomputed every draw
+
+  var S = {
+    viewport: null,               // {x, y, width, height} in overlay CSS px
+    dpr: 1,
+    stream: null,                 // {width, height, coordinate_space}
+    space: "",                    // coordinate_space fallback (envelope level)
+    containerWidth: 0,
+    pxW: 0, pxH: 0,               // canvas CSS size
+    results: [],
+    events: [],
+    metrics: {},
+    summary: {},
+    rows: [],                     // transcript rows, newest first
+    seen: {}, seenOrder: [],
+    wave: [],
+    pendingLevel: null,
+    hasLevel: false,
+    lastVoiceAt: 0,
+    waveAcc: 0,
+    dirty: true,
+    started: 0
+  };
+
+  // -- small helpers ---------------------------------------------------------
+  function num(v) { return (typeof v === "number" && isFinite(v)) ? v : null; }
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function pad2(v) { var s = String(v); return s.length < 2 ? "0" + s : s; }
+  function nowMs() { return Date.now(); }
+
+  function roundRect(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(x, y, w, h, r);
+      return;
+    }
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function setFont(px, weight) {
+    ctx.font = (weight ? weight + " " : "") + px.toFixed(2) + "px " + FONT;
+  }
+
+  function textW(str, px, weight) {
+    setFont(px, weight);
+    return ctx.measureText(str).width;
+  }
+
+  // No canvas blur: the "shadow" is a second pass offset by 1 design px, which
+  // keeps text legible over bright video at a fixed, predictable cost.
+  function fillTextShadow(str, x, y, fill, px, weight) {
+    setFont(px, weight);
+    ctx.fillStyle = C.shadow;
+    ctx.fillText(str, x + sc, y + sc);
+    ctx.fillStyle = fill;
+    ctx.fillText(str, x, y);
+  }
+
+  function ellipsize(str, maxW, px, weight) {
+    if (textW(str, px, weight) <= maxW) return str;
+    var out = str;
+    while (out.length > 1 && textW(out + "…", px, weight) > maxW) {
+      out = out.slice(0, -1);
+    }
+    return out + "…";
+  }
+
+  // Greedy wrap that works for CJK (no spaces): one character at a time.
+  // Closing punctuation is kept off the start of a line, otherwise a full line
+  // leaves a lone "。" on the next one.
+  var NO_LINE_START = "。，、；：！？）］｝」』》〉】…·%" +
+                      ".,;:!?)]}";
+  function wrapText(str, maxW, px, weight) {
+    setFont(px, weight);
+    var lines = [];
+    var line = "";
+    var i, ch;
+    for (i = 0; i < str.length; i++) {
+      ch = str.charAt(i);
+      if (ch === "\n") { lines.push(line); line = ""; continue; }
+      if (line !== "" && ctx.measureText(line + ch).width > maxW) {
+        if (NO_LINE_START.indexOf(ch) >= 0 && line.length > 1) {
+          lines.push(line + ch);             // slight overflow, no orphan mark
+          line = "";
+          continue;
+        }
+        lines.push(line);
+        line = ch === " " ? "" : ch;
+      } else {
+        line += ch;
+      }
+    }
+    if (line !== "") lines.push(line);
+    return lines.length ? lines : [""];
+  }
+
+  function scaleOf() {
+    var vp = viewport();
+    var cw = num(S.containerWidth) || vp.width || 900;
+    return clamp(cw / 900, 0.8, 1.5);
+  }
+
+  function viewport() {
+    if (S.viewport && S.viewport.width > 0 && S.viewport.height > 0) return S.viewport;
+    return { x: 0, y: 0,
+             width: window.innerWidth || 1,
+             height: window.innerHeight || 1 };
+  }
+
+  // -- coordinate mapping ----------------------------------------------------
+  function toScreen(x, y) {
+    var st = S.stream;
+    var space = String((st && st.coordinate_space) || S.space || "");
+    if (st && st.width > 0 && st.height > 0) {
+      // pixel_* is the declared encoding; the value-range test also rescues a
+      // host that ships pixel boxes under a normalized label.
+      if (space.indexOf("pixel") === 0 || x > 1.5 || y > 1.5) {
+        x = x / st.width;
+        y = y / st.height;
+      }
+    }
+    var vp = viewport();
+    return [vp.x + x * vp.width, vp.y + y * vp.height];
+  }
+
+  // -- inbound data ----------------------------------------------------------
+  function extractMs(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "object") {
+      if (num(v.wall_ms) !== null) return v.wall_ms;
+      if (num(v.ms) !== null) return v.ms;
+      return null;
+    }
+    var n = num(v);
+    if (n === null) return null;
+    if (n > 1e11) return n;              // epoch ms
+    if (n > 1e8) return n * 1000;        // epoch seconds
+    return null;                          // relative clock: no wall time
+  }
+
+  function clockOf(ms) {
+    var d = new Date(ms);
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+
+  function levelOf(m) {
+    if (!m || typeof m !== "object") return null;
+    if (num(m.audio_level) !== null) return clamp(m.audio_level, 0, 1);
+    if (num(m.audio_level_db) !== null) return clamp((m.audio_level_db + 60) / 60, 0, 1);
+    if (num(m.level) !== null) return clamp(m.level, 0, 1);
+    if (num(m.rms) !== null) return clamp(m.rms * 4, 0, 1);
+    return null;
+  }
+
+  function voiceStateOf(m, s) {
+    var v = "";
+    if (m && typeof m.voice_state === "string") v = m.voice_state;
+    else if (m && typeof m.state === "string") v = m.state;
+    else if (s && typeof s.state === "string") v = s.state;
+    return String(v).toLowerCase();
+  }
+
+  function applyLevel(m) {
+    var lv = levelOf(m);
+    if (lv === null) return;
+    S.hasLevel = true;
+    S.pendingLevel = lv;
+    if (lv > 0.06) S.lastVoiceAt = nowMs();
+  }
+
+  function applyMetrics(m) {
+    if (!m || typeof m !== "object") return;
+    S.metrics = m;
+    applyLevel(m);
+    var vs = voiceStateOf(m, null);
+    if (vs && vs !== "idle" && vs !== "standby" && vs !== "silence") {
+      S.lastVoiceAt = nowMs();
+    }
+  }
+
+  function isTextEvent(ev) {
+    var kind = String(ev.kind || ev.type || ev.name || "").toLowerCase();
+    if (kind === "transcript" || kind === "asr" || kind === "subtitle" ||
+        kind === "speech" || kind === "text") return true;
+    if (kind.indexOf("transcript") >= 0 || kind.indexOf("text") >= 0) return true;
+    if (num(ev.track_id) !== null || ev.box || ev.state) return false;
+    return typeof (ev.text || ev.transcript || ev.content) === "string";
+  }
+
+  function rememberKey(key) {
+    if (key === null || key === undefined) return false;
+    var k = String(key);
+    if (S.seen[k]) return true;
+    S.seen[k] = true;
+    S.seenOrder.push(k);
+    if (S.seenOrder.length > 400) {
+      delete S.seen[S.seenOrder.shift()];
+    }
+    return false;
+  }
+
+  // The host normalises the key to `dedupeKey = event_id ?? id` before delivery.
+  // Falling back to `id` here is only trusted for a bare event object: an
+  // envelope id is shared by every event in one frame, and collapsing them
+  // would drop transcripts.
+  var ENVELOPE_KEYS = ["schema", "source", "seq", "stream", "results", "geometry",
+                       "metrics", "summary", "render", "extensions"];
+  function eventKey(ev) {
+    if (ev.dedupeKey !== undefined && ev.dedupeKey !== null) return ev.dedupeKey;
+    if (ev.event_id !== undefined && ev.event_id !== null) return ev.event_id;
+    if (ev.id === undefined || ev.id === null) return null;
+    for (var i = 0; i < ENVELOPE_KEYS.length; i++) {
+      if (ev[ENVELOPE_KEYS[i]] !== undefined) return null;
+    }
+    return ev.id;
+  }
+
+  function appendEvents(list, frameMs) {
+    if (!Array.isArray(list)) return;
+    var i, ev, key, text;
+    for (i = 0; i < list.length; i++) {
+      ev = list[i];
+      if (!ev || typeof ev !== "object") continue;
+      key = eventKey(ev);
+      if (rememberKey(key)) continue;
+      S.events.push(ev);
+      if (S.events.length > 64) S.events.shift();
+      if (!isTextEvent(ev)) continue;
+      text = String(ev.text || ev.transcript || ev.content || "").trim();
+      if (!text) continue;
+      var ms = extractMs(ev.time) || extractMs(ev.timestamp) ||
+               extractMs(ev.ts) || frameMs || nowMs();
+      S.rows.unshift({ key: key, ms: ms, time: clockOf(ms), text: text });
+      if (S.rows.length > MAX_ROWS) S.rows.pop();
+      S.lastVoiceAt = nowMs();
+    }
+  }
+
+  function applyContext(d) {
+    if (!d) return;
+    var g = d.geometry || d;
+    if (g && g.viewport && num(g.viewport.width) > 0) S.viewport = g.viewport;
+    if (g && num(g.dpr) !== null && g.dpr > 0) S.dpr = g.dpr;
+    if (g && g.stream) S.stream = g.stream;
+    if (g && num(g.containerWidth) !== null && g.containerWidth > 0) {
+      S.containerWidth = g.containerWidth;
+    }
+    if (d.stream) S.stream = d.stream;
+    if (num(d.dpr) !== null && d.dpr > 0) S.dpr = d.dpr;
+    if (num(d.containerWidth) !== null && d.containerWidth > 0) {
+      S.containerWidth = d.containerWidth;
+    }
+    if (S.stream && S.stream.coordinate_space) S.space = S.stream.coordinate_space;
+    else if (d.coordinate_space) S.space = d.coordinate_space;
+  }
+
+  function applyInit(d) {
+    applyContext(d);
+    if (d && d.render) S.render = d.render;
+  }
+
+  function applyFrame(d) {
+    var frameMs = extractMs(d.time) || extractMs(d.timestamp) || nowMs();
+    if (Array.isArray(d.results)) S.results = d.results;
+    if (d.metrics) applyMetrics(d.metrics);
+    if (d.summary && typeof d.summary === "object") {
+      S.summary = d.summary;
+      var vs = voiceStateOf(null, d.summary);
+      if (vs && vs !== "idle" && vs !== "standby") S.lastVoiceAt = nowMs();
+    }
+    if (d.render && typeof d.render === "object") S.render = d.render;
+    if (Array.isArray(d.events)) appendEvents(d.events, frameMs);
+    applyContext(d);
+  }
+
+  function applyEvent(d) {
+    var frameMs = extractMs(d.time) || extractMs(d.timestamp) || nowMs();
+    if (Array.isArray(d.events)) appendEvents(d.events, frameMs);
+    if (d.event && typeof d.event === "object") appendEvents([d.event], frameMs);
+    if (d.metrics) applyMetrics(d.metrics);
+    if (d.results && Array.isArray(d.results)) S.results = d.results;
+    applyContext(d);
+  }
+
+  function teardown() {
+    S.results = [];
+    S.events = [];
+    S.metrics = {};
+    S.summary = {};
+    S.rows = [];
+    S.seen = {};
+    S.seenOrder = [];
+    S.wave = [];
+    S.pendingLevel = null;
+    S.hasLevel = false;
+    S.lastVoiceAt = 0;
+    S.dirty = true;
+  }
+
+  function onMessage(event) {
+    var d = event.data;
+    if (!d || d.protocol !== PROTOCOL || d.channel !== CHANNEL) return;
+    switch (d.type) {
+      case "init": applyInit(d); break;
+      case "frame":
+      case "data": applyFrame(d); break;
+      case "event": applyEvent(d); break;
+      case "geometry": applyContext(d); break;
+      case "metrics": applyMetrics(d.metrics || d); break;
+      case "teardown": teardown(); break;
+      default: break;
+    }
+    S.dirty = true;
+  }
+
+  // -- people ----------------------------------------------------------------
+  function normalizeBox(b) {
+    if (!b || typeof b.length !== "number" || b.length < 4) return null;
+    var x1 = num(b[0]), y1 = num(b[1]), x2 = num(b[2]), y2 = num(b[3]);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) return null;
+    return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+  }
+
+  function keypointsOf(r) {
+    var k = r.keypoints || r.key_points || r.points;
+    if (!Array.isArray(k) || !k.length) return null;
+    var out = [], i, p;
+    for (i = 0; i < k.length; i++) {
+      p = k[i];
+      if (!p) continue;
+      if (typeof p.length === "number" && p.length >= 2) {
+        out.push([num(p[0]) || 0, num(p[1]) || 0,
+                  p.length >= 3 && num(p[2]) !== null ? p[2] : 1]);
+      } else if (typeof p === "object") {
+        out.push([num(p.x) || 0, num(p.y) || 0,
+                  num(p.score) !== null ? p.score : 1]);
+      }
+    }
+    return out.length ? out : null;
+  }
+
+  function personFrom(r) {
+    if (!r || typeof r !== "object") return null;
+    var kps = keypointsOf(r);
+    var box = normalizeBox(r.box || r.bbox);
+    var tid = num(r.track_id !== undefined ? r.track_id : r.trackId);
+    var st = typeof r.state === "string" ? r.state : null;
+    var kind = String(r.kind || r.type || "").toLowerCase();
+    var personish = !!kps || tid !== null || st !== null ||
+                    kind === "person" || kind === "pose" || kind === "pose_state";
+    if (!personish || (!box && !kps)) return null;
+    if (!box && kps) {
+      var i, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (i = 0; i < kps.length; i++) {
+        minX = Math.min(minX, kps[i][0]); maxX = Math.max(maxX, kps[i][0]);
+        minY = Math.min(minY, kps[i][1]); maxY = Math.max(maxY, kps[i][1]);
+      }
+      box = [minX, minY, maxX, maxY];
+    }
+    return { box: box, kps: kps, trackId: tid, state: st, kind: kind };
+  }
+
+  function collectPeople() {
+    var out = [], seen = {}, i, p, tid;
+    for (i = 0; i < S.results.length && out.length < MAX_PEOPLE; i++) {
+      p = personFrom(S.results[i]);
+      if (!p) continue;
+      if (p.trackId !== null) seen["t" + p.trackId] = true;
+      out.push(p);
+    }
+    // Events carrying a box (pose_state during an occlusion) fill gaps only:
+    // a track already present in results is not drawn twice.
+    for (i = 0; i < S.events.length && out.length < MAX_PEOPLE; i++) {
+      p = personFrom(S.events[i]);
+      if (!p) continue;
+      tid = p.trackId;
+      if (tid !== null && seen["t" + tid]) continue;
+      if (tid !== null) seen["t" + tid] = true;
+      out.push(p);
+    }
+    return out;
+  }
+
+  function avgConf(kps) {
+    if (!kps || !kps.length) return null;
+    var sum = 0, n = 0, i;
+    for (i = 0; i < kps.length; i++) {
+      if (kps[i] && num(kps[i][2]) !== null) { sum += kps[i][2]; n += 1; }
+    }
+    return n ? sum / n : null;
+  }
+
+  function stateLabel(st) {
+    if (!st) return "";
+    var key = String(st).toLowerCase();
+    return STATE_LABEL[key] || String(st);
+  }
+
+  function stateColor(st) {
+    var key = String(st || "").toLowerCase();
+    return STATE_COLOR[key] || C.idle;
+  }
+
+  function idText(tid) {
+    if (tid === null) return "ID --";
+    return "ID " + pad2(Math.trunc(tid));
+  }
+
+  // -- drawing: one person ---------------------------------------------------
+  function drawSkeleton(kps) {
+    var i, a, b, pa, pb, pts = [];
+    for (i = 0; i < kps.length; i++) {
+      if (kps[i] && num(kps[i][2]) !== null && kps[i][2] >= KP_MIN) {
+        pts[i] = toScreen(kps[i][0], kps[i][1]);
+      } else {
+        pts[i] = null;
+      }
+    }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // halo pass, then the light stroke: keeps the skeleton readable on bright
+    // frames without a blurred shadow.
+    ctx.strokeStyle = "rgba(0,0,0,0.40)";
+    ctx.lineWidth = 3.8 * sc;
+    for (i = 0; i < EDGES.length; i++) {
+      a = EDGES[i][0]; b = EDGES[i][1];
+      if (!pts[a] || !pts[b]) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[a][0], pts[a][1]);
+      ctx.lineTo(pts[b][0], pts[b][1]);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = C.skeleton;
+    ctx.lineWidth = 2.3 * sc;
+    for (i = 0; i < EDGES.length; i++) {
+      a = EDGES[i][0]; b = EDGES[i][1];
+      if (!pts[a] || !pts[b]) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[a][0], pts[a][1]);
+      ctx.lineTo(pts[b][0], pts[b][1]);
+      ctx.stroke();
+    }
+    for (i = 0; i < pts.length; i++) {
+      if (!pts[i]) continue;
+      ctx.beginPath();
+      ctx.arc(pts[i][0], pts[i][1], 2.7 * sc, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.40)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(pts[i][0], pts[i][1], 2.1 * sc, 0, Math.PI * 2);
+      ctx.fillStyle = C.skeleton;
+      ctx.fill();
+    }
+  }
+
+  function chipWidth(segs) {
+    var w = 9 * sc * 2 + 8 * sc + 6 * sc, i;
+    for (i = 0; i < segs.length; i++) {
+      w += textW(segs[i].t, 12.5 * sc, segs[i].b ? "600" : "500");
+    }
+    return w;
+  }
+
+  function drawChip(segs, x, y, h, dotColor) {
+    var padX = 9 * sc, gap = 6 * sc, dotD = 8 * sc;
+    var w = chipWidth(segs), i;
+    var r = h / 2;
+    ctx.globalAlpha = 1;
+    roundRect(x, y, w, h, r);
+    ctx.fillStyle = "rgba(8,12,16,0.78)";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.stroke();
+
+    var cx = x + padX + dotD / 2, cy = y + h / 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, dotD / 2, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+
+    var tx = x + padX + dotD + gap;
+    ctx.textBaseline = "middle";
+    for (i = 0; i < segs.length; i++) {
+      fillTextShadow(segs[i].t, tx, cy + 0.5 * sc, segs[i].c, 12.5 * sc,
+                     segs[i].b ? "600" : "500");
+      tx += textW(segs[i].t, 12.5 * sc, segs[i].b ? "600" : "500");
+    }
+    return w;
+  }
+
+  function drawPerson(p) {
+    var vp = viewport();
+    var color = stateColor(p.state);
+    if (p.kps) drawSkeleton(p.kps);
+    if (!p.box) return;
+
+    var a = toScreen(p.box[0], p.box[1]);
+    var b = toScreen(p.box[2], p.box[3]);
+    var x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+    var bw = Math.abs(b[0] - a[0]), bh = Math.abs(b[1] - a[1]);
+
+    roundRect(x, y, bw, bh, 10 * sc);
+    ctx.lineWidth = 2.2 * sc;
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
+    ctx.stroke();
+    roundRect(x, y, bw, bh, 10 * sc);
+    ctx.lineWidth = 1.6 * sc;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.92;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    var conf = avgConf(p.kps);
+    var segs = [{ t: idText(p.trackId), c: C.text, b: true }];
+    var stTxt = stateLabel(p.state);
+    if (stTxt) {
+      segs.push({ t: "  ·  ", c: C.faint });
+      segs.push({ t: stTxt, c: color, b: true });
+    }
+    if (conf !== null) {
+      segs.push({ t: "  ·  ", c: C.faint });
+      segs.push({ t: Math.round(conf * 100) + "%", c: C.dim });
+    }
+
+    var h = 25 * sc;
+    var chipW = chipWidth(segs);
+    var chipX = clamp(x, vp.x + 2, Math.max(vp.x + 2, vp.x + vp.width - chipW - 2));
+    var chipY = y - h - 2 * sc;
+    if (chipY < vp.y + 2) chipY = Math.min(y + 3 * sc, vp.y + vp.height - h - 2);
+    drawChip(segs, chipX, chipY, h, color);
+  }
+
+  // -- drawing: bottom-left status bar ---------------------------------------
+  function drawStatusBar(count) {
+    var vp = viewport();
+    var h = 42 * sc, padX = 14 * sc, gap = 10 * sc;
+    var iconW = 18 * sc;
+    var label = "人数";
+    var numTxt = String(count);
+    var w = padX * 2 + iconW + gap + textW(label, 13.5 * sc, "500") +
+            8 * sc + textW(numTxt, 20 * sc, "700");
+    var x = vp.x + 16 * sc;
+    var y = vp.y + vp.height - 16 * sc - h;
+
+    roundRect(x, y, w, h, 12 * sc);
+    ctx.fillStyle = C.panel;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = C.border;
+    ctx.stroke();
+
+    // person glyph: head + shoulders (head kept clear of the shoulder arc so
+    // the two strokes do not read as one glyph)
+    var ix = x + padX, iy = y + h / 2;
+    ctx.strokeStyle = C.muted;
+    ctx.lineWidth = 1.8 * sc;
+    ctx.beginPath();
+    ctx.arc(ix + iconW * 0.5, iy - 5 * sc, 2.9 * sc, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(ix + iconW * 0.5, iy + 9.4 * sc, 6.6 * sc, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+
+    ctx.textBaseline = "middle";
+    var tx = ix + iconW + gap;
+    fillTextShadow(label, tx, iy + 0.5 * sc, C.muted, 13.5 * sc, "500");
+    tx += textW(label, 13.5 * sc, "500") + 8 * sc;
+    fillTextShadow(numTxt, tx, iy + 0.5 * sc, C.accent, 20 * sc, "700");
+  }
+
+  // -- drawing: right-hand transcript panel ----------------------------------
+  function drawMic(ix, iy, s) {
+    ctx.strokeStyle = C.muted;
+    ctx.lineWidth = 1.7 * s;
+    ctx.lineCap = "round";
+    roundRect(ix - 2.6 * s, iy - 7 * s, 5.2 * s, 9 * s, 2.6 * s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(ix, iy - 1.4 * s, 4.8 * s, Math.PI * 0.12, Math.PI * 0.88);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ix, iy + 3.4 * s);
+    ctx.lineTo(ix, iy + 6.4 * s);
+    ctx.stroke();
+  }
+
+  function drawWaveform(px, py, pw, ph) {
+    roundRect(px, py, pw, ph, 6 * sc);
+    ctx.fillStyle = "rgba(255,255,255,0.035)";
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
+    ctx.stroke();
+
+    var mid = py + ph / 2;
+    var n = S.wave.length, i, peak = 0;
+    for (i = 0; i < n; i++) peak = Math.max(peak, S.wave[i]);
+    // No level data, or a level that never leaves the noise floor: one static
+    // baseline reads as "listening, quiet" instead of a broken bar strip.
+    if (!S.hasLevel || peak < 0.05) {
+      ctx.strokeStyle = "rgba(255,255,255,0.22)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px + 6 * sc, mid);
+      ctx.lineTo(px + pw - 6 * sc, mid);
+      ctx.stroke();
+      return;
+    }
+    var inner = pw - 12 * sc;
+    var bw = Math.max(1.5 * sc, inner / WAVE_N - 1.4 * sc);
+    var maxH = ph / 2 - 4 * sc;
+    var v, bh, bx, idx;
+    for (i = 0; i < WAVE_N; i++) {
+      idx = n - WAVE_N + i;                    // newest sample sits at the right
+      v = (idx >= 0 && idx < n) ? S.wave[idx] : 0;
+      bx = px + 6 * sc + i * (inner / WAVE_N);
+      bh = Math.max(1.2 * sc, v * maxH);
+      ctx.fillStyle = "rgba(0,200,83," + (0.28 + 0.62 * Math.min(1, v * 1.6)).toFixed(3) + ")";
+      roundRect(bx, mid - bh, bw, bh * 2, bw / 2);
+      ctx.fill();
+    }
+  }
+
+  function drawTranscriptPanel() {
+    var vp = viewport();
+    var px = vp.x + 16 * sc;
+    var py = vp.y + 16 * sc;
+    var pw = clamp(vp.width * 0.30, 220 * sc, 470 * sc);
+    var ph = vp.height - 32 * sc;
+    px = vp.x + vp.width - 16 * sc - pw;
+
+    roundRect(px, py, pw, ph, 14 * sc);
+    ctx.fillStyle = C.panel;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = C.border;
+    ctx.stroke();
+
+    var pad = 14 * sc;
+    var innerW = pw - pad * 2;
+    var hx = px + pad;
+
+    // header
+    var hy = py + pad + 9 * sc;
+    drawMic(hx + 7 * sc, hy, sc);
+    ctx.textBaseline = "middle";
+    var title = "实时语音转录";
+    fillTextShadow(title, hx + 18 * sc, hy + 0.5 * sc, C.text, 13.5 * sc, "600");
+
+    var listening = (nowMs() - S.lastVoiceAt) < LISTEN_HOLD_MS;
+    var stTxt = listening ? "正在聆听" : "待机";
+    var stColor = listening ? C.accent : C.idle;
+    var stW = textW(stTxt, 12 * sc, "500");
+    var dot = 7 * sc;
+    var sx = px + pw - pad - stW - dot - 6 * sc;
+    ctx.beginPath();
+    ctx.arc(sx + dot / 2, hy, dot / 2, 0, Math.PI * 2);
+    ctx.fillStyle = stColor;
+    ctx.fill();
+    if (listening) {
+      ctx.beginPath();
+      ctx.arc(sx + dot / 2, hy, dot / 2 + 2.6 * sc, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(0,200,83,0.35)";
+      ctx.lineWidth = 1.2 * sc;
+      ctx.stroke();
+    }
+    fillTextShadow(stTxt, sx + dot + 6 * sc, hy + 0.5 * sc, stColor, 12 * sc, "500");
+
+    // waveform strip
+    var wy = py + pad + 22 * sc;
+    var wh = 42 * sc;
+    drawWaveform(hx, wy, innerW, wh);
+
+    // rows
+    var rowTop = wy + wh + 10 * sc;
+    var rowBottom = py + ph - pad;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(px + 1, rowTop, pw - 2, rowBottom - rowTop);
+    ctx.clip();
+
+    if (!S.rows.length) {
+      ctx.textBaseline = "middle";
+      setFont(13 * sc, "400");
+      ctx.fillStyle = C.faint;
+      var empty = "等待语音…";
+      ctx.fillText(empty, hx, rowTop + 26 * sc);
+    } else {
+      var y = rowTop;
+      var shown = Math.min(VISIBLE_ROWS, S.rows.length);
+      for (var i = 0; i < shown; i++) {
+        var row = S.rows[i];
+        if (i > 0) {
+          ctx.strokeStyle = C.divider;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(hx, y);
+          ctx.lineTo(hx + innerW, y);
+          ctx.stroke();
+          y += 9 * sc;
+        }
+        ctx.textBaseline = "middle";
+        var metaY = y + 7 * sc;
+        fillTextShadow(row.time, hx, metaY, C.muted, 11.5 * sc, "500");
+        var tw = textW(row.time, 11.5 * sc, "500");
+        fillTextShadow("  ·  " + SPEAKER, hx + tw, metaY,
+                       "rgba(0,200,83,0.82)", 11.5 * sc, "500");
+        y += 17 * sc;
+
+        ctx.textBaseline = "top";
+        var lines = wrapText(row.text, innerW, 15.5 * sc, "400");
+        var maxLines = 3;
+        for (var j = 0; j < lines.length && j < maxLines; j++) {
+          var lineTxt = lines[j];
+          if (j === maxLines - 1 && lines.length > maxLines) {
+            lineTxt = ellipsize(lineTxt + "…", innerW, 15.5 * sc, "400");
+          }
+          fillTextShadow(lineTxt, hx, y, "rgba(255,255,255,0.94)", 15.5 * sc, "400");
+          y += 21 * sc;
+        }
+        y += 6 * sc;
+        if (y > rowBottom) break;
+      }
+    }
+    ctx.restore();
+    ctx.textBaseline = "alphabetic";
+  }
+
+  // -- frame loop ------------------------------------------------------------
+  function tickWave(dt) {
+    if (!S.hasLevel) return false;
+    S.waveAcc += dt;
+    var moved = false;
+    while (S.waveAcc >= WAVE_STEP_MS) {
+      S.waveAcc -= WAVE_STEP_MS;
+      var v = S.pendingLevel;
+      if (v === null) {
+        var last = S.wave.length ? S.wave[S.wave.length - 1] : 0;
+        v = last * 0.72;
+      } else {
+        S.pendingLevel = null;
+        moved = true;
+      }
+      S.wave.push(v);
+      if (S.wave.length > WAVE_N) S.wave.shift();
+      if (v > 0.02) moved = true;
+    }
+    var i, tail = 0;
+    for (i = 0; i < S.wave.length; i++) tail = Math.max(tail, S.wave[i]);
+    return moved || tail > 0.02;
+  }
+
+  function resize() {
+    var vp = viewport();
+    var dpr = num(S.dpr) && S.dpr > 0 ? S.dpr : (window.devicePixelRatio || 1);
+    var w = Math.max(1, Math.round(vp.width));
+    var h = Math.max(1, Math.round(vp.height));
+    S.pxW = w; S.pxH = h;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    S.dirty = true;
+  }
+
+  function syncSize() {
+    var vp = viewport();
+    var dpr = num(S.dpr) && S.dpr > 0 ? S.dpr : (window.devicePixelRatio || 1);
+    var w = Math.max(1, Math.round(vp.width));
+    var h = Math.max(1, Math.round(vp.height));
+    var bw = Math.max(1, Math.round(w * dpr));
+    var bh = Math.max(1, Math.round(h * dpr));
+    if (canvas.width === bw && canvas.height === bh && S.pxW === w && S.pxH === h) {
+      return;
+    }
+    S.pxW = w; S.pxH = h;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+
+  function draw() {
+    syncSize();
+    var dpr = num(S.dpr) && S.dpr > 0 ? S.dpr : (window.devicePixelRatio || 1);
+    var w = S.pxW, h = S.pxH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    sc = scaleOf();
+    var people = collectPeople();
+    for (var i = 0; i < people.length; i++) drawPerson(people[i]);
+    drawStatusBar(people.length);
+    drawTranscriptPanel();
+  }
+
+  var lastT = 0;
+  var lastWaveDraw = -1e9;
+  function loop(t) {
+    requestAnimationFrame(loop);
+    var dt = lastT ? Math.min(100, t - lastT) : 16;
+    lastT = t;
+    var moving = tickWave(dt);
+    // Two independent reasons to repaint, both rate-bounded: new data (window
+    // resize / frame / geometry) and the audio meter, which advances at its own
+    // sample step instead of once per display refresh.
+    var need = S.dirty ||
+      (moving && (t - lastWaveDraw) >= WAVE_STEP_MS);
+    if (need) {
+      S.dirty = false;
+      lastWaveDraw = t;
+      draw();
+    }
+  }
+
+  // -- host wiring -----------------------------------------------------------
+  function sendReady() {
+    if (!port) return;
+    seq += 1;
+    try {
+      port.postMessage({
+        protocol: PROTOCOL,
+        channel: CHANNEL,
+        type: "ready",
+        seq: seq
+      });
+    } catch (err) { /* port already closed */ }
+  }
+
+  window.addEventListener("resize", function () { resize(); });
+
+  resize();
+  requestAnimationFrame(loop);
+  if (port) {
+    port.onmessage = onMessage;
+    S.started = nowMs();
+    sendReady();
+  }
+})();
+</script>
+</body>
+</html>
