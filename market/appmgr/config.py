@@ -307,8 +307,49 @@ def _fsync_parent(pathname: str) -> None:
         os.close(fd)
 
 
+# The canonical user config is the one file appmgr's write path owns
+# (write_user_config <- do_set_config <- panel POST / CLI `appmgr config`) and
+# the only one a user edit can reach.  See _user_config_appeared_since.
+_USER_CONFIG_SNAPSHOT_RECORD = ("appdata", "config.json")
+
+
+def _user_config_appeared_since(scope: str, name: str, pathname: str) -> bool:
+    """Whether a config POST created the file after this snapshot was taken.
+
+    A rollback journal outlives the state it captured: only the installs that
+    fail synchronously are rolled back in place, and one interrupted mid-flight
+    is rolled back by the next boot.  A config POST saved through the panel or
+    the CLI in between lands on the canonical path, and the record says the file
+    was ABSENT -- so the replay used to unlink the file the user had just saved
+    (192.168.10.33, 2026-09-29: POST audited 14:29:15, rollback replayed
+    14:30:21, `find /userdata -name config.json -path '*eldercare*'` empty).
+
+    Only the canonical <appdata>/<id>/config.json is guarded, and only the
+    absent-then-present transition.  A file the snapshot DID capture is still
+    restored byte-exactly even when it changed in between, because the install
+    transaction rewrites this same file itself (it drops keys the new manifest
+    no longer declares) and that rewrite must be reverted for the rolled-back
+    app to find its own keys again.  A POST that only changed a VALUE while a
+    journal was pending is therefore still reverted; separating the two writers
+    needs the journal's snapshot rebased at write time.
+
+    Keeping the migrated copy is not a regression: the install's only other way
+    to create this file is migrating the legacy one, whose restored content is
+    the same user data (load_user_config prefers the canonical and retires the
+    legacy file on the next read).
+    """
+    if (scope, name) != _USER_CONFIG_SNAPSHOT_RECORD:
+        return False
+    return os.path.isfile(pathname)
+
+
 def restore_upgrade_config(snapshot: dict) -> None:
-    """Restore :func:`snapshot_upgrade_config` exactly and idempotently."""
+    """Restore :func:`snapshot_upgrade_config`, minus a later config POST.
+
+    Idempotent, and byte-exact for every file the transaction itself touched;
+    a canonical user config that appeared after the snapshot is left in place
+    (:func:`_user_config_appeared_since`).
+    """
     if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
         raise ValueError("invalid upgrade config snapshot")
     app_id = snapshot.get("app_id")
@@ -354,6 +395,8 @@ def restore_upgrade_config(snapshot: dict) -> None:
                 raise ValueError("upgrade config snapshot exceeds size limit")
             _atomic_write_bytes(pathname, data, mode)
         elif record.get("present") is False:
+            if _user_config_appeared_since(*key, pathname):
+                continue
             try:
                 if current is not None:
                     os.unlink(pathname)
