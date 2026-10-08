@@ -296,6 +296,43 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
                          {"note_a": "a", "note_b": "b" * (1024 * 1024)})
 
+    def test_failed_quarantine_write_keeps_the_user_edit(self):
+        """No place to park the rejected edit: stop before the overwrite."""
+        snapshot = self._present_snapshot_then_prune()
+        appconfig.write_user_config(APP, {LIVE_KEY: {"min": 0.1}})
+        before = self._canonical_bytes()
+        real = appconfig._atomic_write_bytes
+
+        def no_space(pathname, data, mode):
+            if pathname.endswith(ROLLBACK_QUARANTINE):
+                raise OSError(28, "No space left on device")
+            return real(pathname, data, mode)
+
+        appconfig._atomic_write_bytes = no_space
+        try:
+            with self.assertRaises(OSError):
+                appconfig.restore_upgrade_config(snapshot)
+        finally:
+            appconfig._atomic_write_bytes = real
+        self.assertEqual(self._canonical_bytes(), before)
+        appconfig.restore_upgrade_config(snapshot)     # space back: replay
+        self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
+                         {LIVE_KEY: {"min": 0.1}})
+
+    def test_boolean_enum_edit_is_not_mistaken_for_numeric_snapshot(self):
+        """1 == True in Python; a typed enum edit 1 -> true must survive."""
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest["config_schema"]["groups"][0]["items"].append(
+            {"key": "mode", "type": "enum", "options": [1, True], "default": 1})
+        with open(os.path.join(paths.app_dir(APP), "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+        appconfig.write_user_config(APP, {"mode": 1})
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        appconfig.write_user_config(APP, {"mode": True})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertIs(self._saved()["mode"], True)
+        self.assertIsNone(self._rollback_quarantine())
+
     # -- provenance: the transaction's own migration is not a user save ---- #
     def _legacy_only(self, values):
         with open(appconfig.legacy_config_path(APP), "w") as f:

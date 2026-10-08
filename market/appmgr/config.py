@@ -421,12 +421,24 @@ _ROLLBACK_QUARANTINE_NAME = "config.rollback-quarantine.json"
 def _write_rollback_quarantine(app_id: str, payload: Dict[str, Any]) -> None:
     """Same shape as config.quarantine.json ({"ts", "dropped", ...}), durable."""
     pathname = os.path.join(paths.appdata_dir(app_id), _ROLLBACK_QUARANTINE_NAME)
-    try:
-        _atomic_write_bytes(pathname, (json.dumps(
-            {"ts": int(time.time()), **payload}, indent=2, ensure_ascii=False)
-            + "\n").encode("utf-8"), 0o600)
-    except OSError as exc:
-        _log.warning("rollback: cannot write %s: %s", pathname, exc)
+    # Raises: the caller must not overwrite the config once the edit it is
+    # about to replace could not be parked; the journal stays for a replay.
+    _atomic_write_bytes(pathname, (json.dumps(
+        {"ts": int(time.time()), **payload}, indent=2, ensure_ascii=False)
+        + "\n").encode("utf-8"), 0o600)
+
+
+def _json_equal(a: Any, b: Any) -> bool:
+    """JSON equality: unlike ``==``, True is not 1 and 1.0 is not True."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_json_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        return False
+    return a == b
 
 
 def _load_restored_manifest(app_id: str) -> Optional[dict]:
@@ -495,14 +507,14 @@ def _merge_user_config_edit(app_id: str, pathname: str, snapshot_data: bytes
     merged = dict(base)
     rejected: Dict[str, Any] = {}
     for key, value in current.items():
-        if key in base and base[key] == value:
+        if key in base and _json_equal(base[key], value):
             continue
         spec = specs.get(key)
         if spec is not None and _validate_one(spec, value)[0]:
             merged[key] = value
         else:
             rejected[key] = value
-    if merged == base:
+    if _json_equal(merged, base):
         data = snapshot_data
     else:
         data = (json.dumps(merged, indent=2, ensure_ascii=False)
