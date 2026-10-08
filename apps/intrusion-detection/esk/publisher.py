@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 
 from kit.adapters.mqtt_sink import MqttClient
@@ -106,6 +107,12 @@ class Publisher:
         self.snapshot_count = 0
         self.published = 0
         self._last_status = 0.0
+        # Orders the retained status writes: once shutdown() has taken this
+        # lock and set _closing, no `online: true` can follow the goodbye
+        # (an _on_connect racing shutdown would otherwise re-announce the
+        # device after it said offline, and the DISCONNECT suppresses the will).
+        self._status_lock = threading.Lock()
+        self._closing = False
 
         base = f"{topic_prefix}/{device_id}"
         self.topic_detections = f"{base}/detections/{stream_id}"
@@ -153,7 +160,9 @@ class Publisher:
     def shutdown(self) -> None:
         """Goodbye then DISCONNECT, in that order. See the module docstring."""
         try:
-            self.publish_status(online=False)
+            with self._status_lock:
+                self._closing = True
+                self._publish_status_locked(online=False)
         except Exception as exc:  # pragma: no cover - teardown only
             LOG.warning("goodbye status failed: %s", exc)
         try:
@@ -203,6 +212,20 @@ class Publisher:
     # -------------------------------------------------------------- status
 
     def publish_status(self, online: bool = True) -> dict:
+        """Publish the retained status. After shutdown() began, an online
+        heartbeat is built but not sent (the goodbye must stay last)."""
+        with self._status_lock:
+            if online and self._closing:
+                return self._status_payload(online)
+            return self._publish_status_locked(online)
+
+    def _publish_status_locked(self, online: bool) -> dict:
+        payload = self._status_payload(online)
+        self.client.publish(self.topic_status, json.dumps(payload), qos=1, retain=True)
+        self._last_status = time.monotonic()
+        return payload
+
+    def _status_payload(self, online: bool) -> dict:
         payload = {
             "schema": STATUS_SCHEMA,
             "timestamp": now_ms(),
@@ -226,8 +249,6 @@ class Publisher:
             payload["health"] = health
             payload["versions"] = {"app": self.app_version, "model": self.model_id}
             payload["uptime_s"] = round(time.monotonic() - self.started_at, 1)
-        self.client.publish(self.topic_status, json.dumps(payload), qos=1, retain=True)
-        self._last_status = time.monotonic()
         return payload
 
     def status_due(self) -> bool:
