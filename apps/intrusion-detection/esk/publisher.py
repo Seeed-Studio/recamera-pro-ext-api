@@ -17,6 +17,10 @@ identical to the RK3588 and generic platforms:
 * ``cmd/snapshot`` is the only downlink and is answered with raw JPEG bytes on
   ``snapshot/<event_id>``, capped at 200 KB;
 * detections are QoS0/no-retain, status is QoS1/retained, snapshots are QoS1.
+
+The MQTT client is ``kit.adapters.mqtt_sink.MqttClient`` (stdlib sockets), so
+the app package ships without a third-party MQTT library. Its callbacks run on
+the client's reader thread.
 """
 
 from __future__ import annotations
@@ -26,6 +30,8 @@ import json
 import logging
 import os
 import time
+
+from kit.adapters.mqtt_sink import MqttClient
 
 from .preview import SNAPSHOT_MAX_BYTES, encode_jpeg
 
@@ -107,37 +113,42 @@ class Publisher:
         self.topic_snapshot = f"{base}/snapshot"
         self.topic_cmd_snapshot = f"{base}/cmd/snapshot"
 
-        # Imported here, not at module load: kit.run imports every shipped app
-        # to find its App class, and that must not need paho on the host.
-        import paho.mqtt.client as mqtt
-
-        self.client = mqtt.Client(client_id=f"esk-{device_id}-{self.session_id}")
-        if username:
-            self.client.username_pw_set(username, password)
         # Registered at CONNECT, so its timestamp is necessarily connect time;
         # consumers use broker receipt time as the offline instant.
-        self.client.will_set(
-            self.topic_status,
-            json.dumps(
-                {
-                    "schema": STATUS_SCHEMA,
-                    "timestamp": now_ms(),
-                    "session_id": self.session_id,
-                    "device_id": device_id,
-                    "online": False,
-                }
-            ),
-            qos=1,
-            retain=True,
+        will = json.dumps(
+            {
+                "schema": STATUS_SCHEMA,
+                "timestamp": now_ms(),
+                "session_id": self.session_id,
+                "device_id": device_id,
+                "online": False,
+            }
         )
-        self.client.on_connect = self._on_connect
-        self.client.on_message = self._on_message
+        self.client = MqttClient(
+            self.host,
+            self.port,
+            client_id=f"esk-{device_id}-{self.session_id}",
+            keepalive=self.keepalive,
+            username=username,
+            password=password if username else "",
+            will_topic=self.topic_status,
+            will_payload=will.encode("utf-8"),
+            will_qos=1,
+            will_retain=True,
+            on_connect=self._on_connect,
+            on_message=self._on_message,
+            logger=lambda msg: LOG.info("mqtt: %s", msg),
+        )
+        # Re-sent by the client on every (re)connect, before _on_connect runs.
+        self.client.subscribe(self.topic_cmd_snapshot, qos=1)
 
     # ----------------------------------------------------------- lifecycle
 
     def connect(self) -> None:
-        self.client.connect(self.host, self.port, self.keepalive)
-        self.client.loop_start()
+        # First CONNECT is synchronous and raises on failure (the app does not
+        # start against an unreachable broker); later drops reconnect in the
+        # background.
+        self.client.connect(blocking=True)
 
     def shutdown(self) -> None:
         """Goodbye then DISCONNECT, in that order. See the module docstring."""
@@ -147,25 +158,22 @@ class Publisher:
             LOG.warning("goodbye status failed: %s", exc)
         try:
             self.client.disconnect()
-            self.client.loop_stop()
         except Exception:  # pragma: no cover - teardown only
             pass
 
     # ---------------------------------------------------------------- MQTT
 
-    def _on_connect(self, client, _userdata, _flags, rc) -> None:
-        if rc != 0:
-            LOG.error("mqtt connect failed rc=%s", rc)
-            return
-        LOG.info("mqtt connected, subscribing %s", self.topic_cmd_snapshot)
-        client.subscribe(self.topic_cmd_snapshot, qos=1)
+    def _on_connect(self, _client) -> None:
+        # Only called after a successful CONNACK (a refused CONNECT raises in
+        # the client instead); the cmd/snapshot SUBSCRIBE is already sent.
+        LOG.info("mqtt connected, subscribed %s", self.topic_cmd_snapshot)
         self.publish_status()
 
-    def _on_message(self, _client, _userdata, msg) -> None:
-        if msg.topic != self.topic_cmd_snapshot:
+    def _on_message(self, topic: str, payload: bytes) -> None:
+        if topic != self.topic_cmd_snapshot:
             return
         try:
-            request = json.loads(msg.payload.decode("utf-8"))
+            request = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
             LOG.warning("bad cmd/snapshot payload: %s", exc)
             return
