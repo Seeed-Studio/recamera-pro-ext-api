@@ -391,9 +391,12 @@ def _user_config_written_since(snapshot: dict, *, legacy: bool) -> bool:
       restored legacy file instead of preferring the pruned canonical copy.
     * PRESENT in the snapshot: restored byte-exactly when no user write
       happened (legacy journal: byte-exact).  After a user write the snapshot
-      object is overlaid with the current file's top-level keys -- the user's
-      values win, keys the failed release pruned come back.  Remaining edge: a
-      key the user REMOVED after the snapshot comes back from the snapshot.
+      object is overlaid with the current file's top-level keys that the
+      restored (old) manifest accepts -- those user values win, keys the failed
+      release pruned come back, edits the old schema rejects keep the snapshot
+      value and are quarantined (:func:`_merge_user_config_edit`).  Remaining
+      edge: a key the user REMOVED after the snapshot comes back from the
+      snapshot.
     """
     if _USER_CONFIG_TOKEN_KEY not in snapshot:
         return legacy
@@ -409,28 +412,110 @@ def _read_json_object(data: bytes) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
-def _merge_user_config_edit(pathname: str, snapshot_data: bytes) -> Optional[bytes]:
-    """Snapshot object overlaid with the current file's keys, or None.
+# Where a rollback parks user edits it cannot keep.  Deliberately NOT one of
+# _UPGRADE_CONFIG_FILES: config.quarantine.json is restored from the snapshot
+# by every replay, which would erase what an earlier replay parked there.
+_ROLLBACK_QUARANTINE_NAME = "config.rollback-quarantine.json"
 
-    None (either side not a JSON object, or the current file unreadable) tells
-    the caller to fall back to the byte-exact restore.
+
+def _write_rollback_quarantine(app_id: str, payload: Dict[str, Any]) -> None:
+    """Same shape as config.quarantine.json ({"ts", "dropped", ...}), durable."""
+    pathname = os.path.join(paths.appdata_dir(app_id), _ROLLBACK_QUARANTINE_NAME)
+    try:
+        _atomic_write_bytes(pathname, (json.dumps(
+            {"ts": int(time.time()), **payload}, indent=2, ensure_ascii=False)
+            + "\n").encode("utf-8"), 0o600)
+    except OSError as exc:
+        _log.warning("rollback: cannot write %s: %s", pathname, exc)
+
+
+def _load_restored_manifest(app_id: str) -> Optional[dict]:
+    """The manifest the rollback restored, or None.
+
+    Every restore_upgrade_config caller (server.py upgrade rollback, publish
+    rollback, new-install rollback, boot replay) first puts the previous app
+    files back (installer.restore_prev / rollback_install_transaction_files),
+    so <app_dir>/manifest.json is the OLD manifest here.
+    """
+    try:
+        with open(os.path.join(paths.app_dir(app_id), "manifest.json"), "rb") as f:
+            return _read_json_object(f.read(_MAX_UPGRADE_CONFIG_TOTAL_BYTES))
+    except OSError:
+        return None
+
+
+def _merge_user_config_edit(app_id: str, pathname: str, snapshot_data: bytes
+                            ) -> Tuple[bytes, Optional[Dict[str, Any]]]:
+    """Bytes to restore for a canonical config a user wrote after the snapshot.
+
+    Returns (data, quarantine): the snapshot object overlaid with the user's
+    keys that are valid for the restored (old) manifest, plus a quarantine
+    payload for the edits that cannot be kept, or None.  A user value is kept
+    only when its key is in the old schema and passes the same per-key check
+    as revalidate_user_config (_validate_one); otherwise the snapshot's value
+    stays, so the rolled-back app never reads a value only the failed release
+    accepted.  Falls back to the snapshot bytes, quarantining the user's whole
+    file, when either side is not a JSON object within the size cap, when the
+    old manifest is unreadable, or when the merge would exceed the cap.  When
+    nothing differs from the snapshot the snapshot bytes are written, so a
+    second replay is a no-op and does not touch the quarantine.
     """
     try:
         with open(pathname, "rb") as source:
-            current_data = source.read(_MAX_UPGRADE_CONFIG_FILE_BYTES + 1)
+            current_data = source.read(_MAX_UPGRADE_CONFIG_TOTAL_BYTES + 1)
     except OSError:
-        current_data = None
+        _log.warning("rollback: cannot read user config %s; restoring the "
+                     "snapshot bytes", pathname)
+        return snapshot_data, None
+    if current_data == snapshot_data:
+        return snapshot_data, None
+
+    def whole_file(reason: str) -> Tuple[bytes, Dict[str, Any]]:
+        _log.warning("rollback: user config %s %s; restoring the snapshot "
+                     "bytes and quarantining the user's file in %s",
+                     pathname, reason, _ROLLBACK_QUARANTINE_NAME)
+        parsed = _read_json_object(current_data)
+        payload: Dict[str, Any] = {"reason": reason,
+                                   "dropped": parsed if parsed is not None else {}}
+        if parsed is None:
+            payload["raw_b64"] = base64.b64encode(current_data).decode("ascii")
+        if len(current_data) > _MAX_UPGRADE_CONFIG_TOTAL_BYTES:
+            payload["truncated"] = True
+        return snapshot_data, payload
+
     base = _read_json_object(snapshot_data)
     current = (_read_json_object(current_data)
-               if current_data is not None
-               and len(current_data) <= _MAX_UPGRADE_CONFIG_FILE_BYTES else None)
+               if len(current_data) <= _MAX_UPGRADE_CONFIG_FILE_BYTES else None)
     if base is None or current is None:
-        _log.warning("rollback: user config %s changed since the snapshot but "
-                     "cannot be merged (not a JSON object); restoring the "
-                     "snapshot bytes", pathname)
-        return None
-    base.update(current)
-    return (json.dumps(base, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        return whole_file("is not a JSON object within the size limit")
+    manifest = _load_restored_manifest(app_id)
+    if manifest is None:
+        return whole_file("cannot be checked: restored manifest unreadable")
+    specs = schema_specs(manifest)
+    merged = dict(base)
+    rejected: Dict[str, Any] = {}
+    for key, value in current.items():
+        if key in base and base[key] == value:
+            continue
+        spec = specs.get(key)
+        if spec is not None and _validate_one(spec, value)[0]:
+            merged[key] = value
+        else:
+            rejected[key] = value
+    if merged == base:
+        data = snapshot_data
+    else:
+        data = (json.dumps(merged, indent=2, ensure_ascii=False)
+                + "\n").encode("utf-8")
+        if len(data) > _MAX_UPGRADE_CONFIG_FILE_BYTES:
+            return whole_file("merged with the snapshot exceeds the size limit")
+    if not rejected:
+        return data, None
+    _log.warning("rollback: user config keys %s are not valid for the restored "
+                 "manifest of %s; kept the snapshot values, quarantined in %s",
+                 sorted(rejected), app_id, _ROLLBACK_QUARANTINE_NAME)
+    return data, {"reason": "not valid for the restored manifest",
+                  "dropped": rejected}
 
 
 def restore_upgrade_config(snapshot: dict) -> None:
@@ -485,7 +570,11 @@ def restore_upgrade_config(snapshot: dict) -> None:
                 raise ValueError("upgrade config snapshot exceeds size limit")
             if (key == _USER_CONFIG_SNAPSHOT_RECORD and current is not None
                     and _user_config_written_since(snapshot, legacy=False)):
-                data = _merge_user_config_edit(pathname, data) or data
+                data, quarantine = _merge_user_config_edit(app_id, pathname, data)
+                if quarantine is not None:
+                    # Before the overwrite: a crash in between must not lose
+                    # the edit (the next replay no longer sees it).
+                    _write_rollback_quarantine(app_id, quarantine)
             _atomic_write_bytes(pathname, data, mode)
         elif record.get("present") is False:
             if (key == _USER_CONFIG_SNAPSHOT_RECORD and current is not None
