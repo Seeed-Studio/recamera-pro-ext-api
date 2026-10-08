@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import os
 import secrets
@@ -24,6 +25,8 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import paths
+
+_log = logging.getLogger(__name__)
 
 
 _MAX_TEMPLATE_CHARS = 16 * 1024  # mirrors kit.adapters.output_sink
@@ -355,56 +358,87 @@ def _fsync_parent(pathname: str) -> None:
 
 # The canonical user config is the one file appmgr's write path owns
 # (write_user_config <- do_set_config <- panel POST / CLI `appmgr config`) and
-# the only one a user edit can reach.  See _user_config_appeared_since.
+# the only one a user edit can reach.  See _user_config_written_since.
 _USER_CONFIG_SNAPSHOT_RECORD = ("appdata", "config.json")
 
 
-def _user_config_appeared_since(snapshot: dict, scope: str, name: str,
-                                pathname: str) -> bool:
-    """Whether a user/config-API write created the file after this snapshot.
+def _user_config_written_since(snapshot: dict, *, legacy: bool) -> bool:
+    """Whether a user/config-API write hit the canonical config after the snapshot.
 
     A rollback journal outlives the state it captured: only the installs that
     fail synchronously are rolled back in place, and one interrupted mid-flight
     is rolled back by the next boot.  A config POST saved through the panel or
-    the CLI in between lands on the canonical path, and the record says the file
-    was ABSENT -- so the replay used to unlink the file the user had just saved
-    (192.168.10.33, 2026-09-29: POST audited 14:29:15, rollback replayed
-    14:30:21, `find /userdata -name config.json -path '*eldercare*'` empty).
+    the CLI in between lands on the canonical <appdata>/<id>/config.json, and a
+    plain replay of the snapshot would destroy it (192.168.10.33, 2026-09-29:
+    POST audited 14:29:15, rollback replayed 14:30:21, the record said ABSENT so
+    the replay unlinked the file;
+    `find /userdata -name config.json -path '*eldercare*'` empty).
 
-    The transaction itself can ALSO create this file: commit_prepared migrates
-    a legacy <app_dir>/config.json into it and revalidate_user_config then
-    prunes it against the new schema.  Keeping that copy on rollback would make
-    load_user_config prefer the pruned canonical over the restored legacy file
-    and retire the legacy one, so the keys the failed release dropped stay
-    lost.  The writer is told apart by the user-write token
+    The transaction ALSO writes this file itself, and those writes must be
+    undone: commit_prepared migrates a legacy <app_dir>/config.json into it, and
+    revalidate_user_config prunes keys the new manifest no longer declares.
+    The writer is told apart by the user-write token
     (:func:`read_user_config_token`): only write_user_config changes it, so a
-    token different from the one the snapshot saw means a user write happened
-    and the file is kept.  A snapshot without the token field (journal written
-    by an older appmgr) keeps the previous behaviour: the file is kept.
+    token different from the one the snapshot saw means a user write happened.
+    ``legacy`` is the answer for a snapshot without the token field (journal
+    written by an older appmgr).
 
-    Only the canonical <appdata>/<id>/config.json is guarded, and only the
-    absent-then-present transition.  A file the snapshot DID capture is still
-    restored byte-exactly even when it changed in between, because the install
-    transaction rewrites this same file itself (it drops keys the new manifest
-    no longer declares) and that rewrite must be reverted for the rolled-back
-    app to find its own keys again.
+    One policy for both snapshot states (see restore_upgrade_config):
+
+    * ABSENT in the snapshot, present now: kept when a user write happened
+      (legacy journal: kept).  Otherwise the transaction created it (migration
+      + prune) and it is removed, so load_user_config falls back to the
+      restored legacy file instead of preferring the pruned canonical copy.
+    * PRESENT in the snapshot: restored byte-exactly when no user write
+      happened (legacy journal: byte-exact).  After a user write the snapshot
+      object is overlaid with the current file's top-level keys -- the user's
+      values win, keys the failed release pruned come back.  Remaining edge: a
+      key the user REMOVED after the snapshot comes back from the snapshot.
     """
-    if (scope, name) != _USER_CONFIG_SNAPSHOT_RECORD:
-        return False
-    if not os.path.isfile(pathname):
-        return False
     if _USER_CONFIG_TOKEN_KEY not in snapshot:
-        return True
+        return legacy
     return (read_user_config_token(snapshot["app_id"])
             != snapshot[_USER_CONFIG_TOKEN_KEY])
 
 
+def _read_json_object(data: bytes) -> Optional[Dict[str, Any]]:
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _merge_user_config_edit(pathname: str, snapshot_data: bytes) -> Optional[bytes]:
+    """Snapshot object overlaid with the current file's keys, or None.
+
+    None (either side not a JSON object, or the current file unreadable) tells
+    the caller to fall back to the byte-exact restore.
+    """
+    try:
+        with open(pathname, "rb") as source:
+            current_data = source.read(_MAX_UPGRADE_CONFIG_FILE_BYTES + 1)
+    except OSError:
+        current_data = None
+    base = _read_json_object(snapshot_data)
+    current = (_read_json_object(current_data)
+               if current_data is not None
+               and len(current_data) <= _MAX_UPGRADE_CONFIG_FILE_BYTES else None)
+    if base is None or current is None:
+        _log.warning("rollback: user config %s changed since the snapshot but "
+                     "cannot be merged (not a JSON object); restoring the "
+                     "snapshot bytes", pathname)
+        return None
+    base.update(current)
+    return (json.dumps(base, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def restore_upgrade_config(snapshot: dict) -> None:
-    """Restore :func:`snapshot_upgrade_config`, minus a later config POST.
+    """Restore :func:`snapshot_upgrade_config`, keeping a later config POST.
 
     Idempotent, and byte-exact for every file the transaction itself touched;
-    a canonical user config that a user write created after the snapshot is
-    left in place (:func:`_user_config_appeared_since`).
+    a canonical user config that a user write created or changed after the
+    snapshot is kept or merged (:func:`_user_config_written_since`).
     """
     if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 1:
         raise ValueError("invalid upgrade config snapshot")
@@ -449,9 +483,13 @@ def restore_upgrade_config(snapshot: dict) -> None:
             total_bytes += len(data)
             if total_bytes > _MAX_UPGRADE_CONFIG_TOTAL_BYTES:
                 raise ValueError("upgrade config snapshot exceeds size limit")
+            if (key == _USER_CONFIG_SNAPSHOT_RECORD and current is not None
+                    and _user_config_written_since(snapshot, legacy=False)):
+                data = _merge_user_config_edit(pathname, data) or data
             _atomic_write_bytes(pathname, data, mode)
         elif record.get("present") is False:
-            if _user_config_appeared_since(snapshot, *key, pathname):
+            if (key == _USER_CONFIG_SNAPSHOT_RECORD and current is not None
+                    and _user_config_written_since(snapshot, legacy=True)):
                 continue
             try:
                 if current is not None:

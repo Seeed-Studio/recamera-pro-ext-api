@@ -24,6 +24,7 @@ package is imported (paths.py snapshots the env at import time), mirroring
 test_config_merge.py.  Runnable with plain stdlib:
 ``python3 tests/test_config_rollback_replay.py`` (or pytest).
 """
+import base64
 import json
 import os
 import sys
@@ -155,20 +156,70 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         with open(legacy) as f:
             self.assertEqual(json.load(f), {"zone": [[0, 0], [1, 1]]})
 
-    def test_replayed_rollback_still_reverts_the_transactions_own_rewrite(self):
-        """A file the snapshot captured is restored even if it changed since.
+    # -- snapshot PRESENT: revert the prune, keep a later user edit ------- #
+    def _prune_manifest(self):
+        """What revalidate_user_config sees from a release that drops RESTART_KEY."""
+        return {"id": APP, "config_schema": {"groups": [{
+            "key": "general", "title": "General",
+            "items": [MANIFEST["config_schema"]["groups"][0]["items"][1]]}]}}
 
-        The upgrade rewrites the canonical file itself (it drops keys the new
-        manifest no longer declares); that rewrite MUST be reverted, so this
-        transition is deliberately not guarded.
-        """
-        appconfig.write_user_config(APP, {RESTART_KEY: 0.6})
+    def _present_snapshot_then_prune(self):
+        appconfig.write_user_config(APP, {RESTART_KEY: 0.6, LIVE_KEY: 0.5})
         snapshot = appconfig.snapshot_upgrade_config(APP)
         self.assertEqual(_record(snapshot, *CANONICAL).get("present"), True)
-        appconfig.write_user_config(APP, {RESTART_KEY: None})  # upgrade pruned
-        self.assertEqual(self._saved(), {})
+        # The install transaction's own rewrite: prune, no user-write token.
+        result = appconfig.revalidate_user_config(self._prune_manifest(), APP)
+        self.assertEqual(set(result["dropped"]), {RESTART_KEY})
+        self.assertEqual(self._saved(), {LIVE_KEY: 0.5})
+        return snapshot
+
+    def _canonical_bytes(self):
+        with open(appconfig.config_path(APP), "rb") as f:
+            return f.read()
+
+    def test_replayed_rollback_still_reverts_the_transactions_own_rewrite(self):
+        """Token unchanged since the snapshot: the prune is reverted byte-exactly."""
+        snapshot = self._present_snapshot_then_prune()
         appconfig.restore_upgrade_config(snapshot)
-        self.assertEqual(self._saved().get(RESTART_KEY), 0.6)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.5})
+
+    def test_replayed_rollback_merges_user_post_into_restored_snapshot(self):
+        """Token changed: user values win, keys the release pruned come back."""
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})                 # user saves meanwhile
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.9})
+        self.assertEqual(
+            kitconfig.effective_config(paths.app_dir(APP)).get(LIVE_KEY), 0.9)
+
+    def test_replayed_rollback_merge_is_idempotent(self):
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})
+        appconfig.restore_upgrade_config(snapshot)
+        first = self._canonical_bytes()
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(), first)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.9})
+
+    def test_journal_without_token_field_restores_present_config_byte_exactly(self):
+        snapshot = self._present_snapshot_then_prune()
+        snapshot.pop("user_config_token")
+        self._post({LIVE_KEY: 0.9})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
+
+    def test_unmergeable_user_config_falls_back_to_byte_exact_restore(self):
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})                 # token changes
+        with open(appconfig.config_path(APP), "w") as f:
+            json.dump([1, 2, 3], f)                 # not a JSON object
+        with self.assertLogs("appmgr.config", level="WARNING"):
+            appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
 
     # -- provenance: the transaction's own migration is not a user save ---- #
     def _legacy_only(self, values):
@@ -178,10 +229,7 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         self.assertEqual(_record(snapshot, *CANONICAL).get("present"), False)
         # What commit_prepared + revalidate_user_config do inside the install.
         self.assertTrue(appconfig.migrate_legacy_config(APP))
-        pruned_manifest = {"id": APP, "config_schema": {"groups": [{
-            "key": "general", "title": "General",
-            "items": [MANIFEST["config_schema"]["groups"][0]["items"][1]]}]}}
-        result = appconfig.revalidate_user_config(pruned_manifest, APP)
+        result = appconfig.revalidate_user_config(self._prune_manifest(), APP)
         self.assertEqual(set(result["dropped"]), {RESTART_KEY})
         return snapshot
 
