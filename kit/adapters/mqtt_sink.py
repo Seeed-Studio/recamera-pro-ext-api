@@ -354,7 +354,11 @@ class MqttClient:
         A no-op while already running. If the reader of a previous generation
         is still winding down (e.g. stuck in a CONNACK wait), it is joined for
         up to connect_timeout + 1 s, and RuntimeError is raised if it is still
-        alive, rather than running two readers."""
+        alive, rather than running two readers.
+
+        `on_connect` runs after the lifecycle lock is released, so the
+        callback may itself call `disconnect()`."""
+        conn = None
         with self._lifecycle:
             old = self._thread
             if old is not None and old.is_alive():
@@ -371,7 +375,7 @@ class MqttClient:
                 self._stop = stop
             if blocking:
                 try:
-                    self._open(gen, stop)
+                    conn = self._open(gen, stop)
                 except Exception:
                     stop.set()
                     raise
@@ -379,6 +383,8 @@ class MqttClient:
                                       daemon=True, name=f"mqtt-{self.client_id}")
             self._thread = thread
             thread.start()
+        if conn is not None:
+            self._announce(conn, gen)
 
     def is_connected(self) -> bool:
         return self._connected.is_set()
@@ -420,7 +426,9 @@ class MqttClient:
                     self._thread = None
 
     # -- internals -------------------------------------------------------- #
-    def _open(self, gen: int, stop: threading.Event) -> None:
+    def _open(self, gen: int, stop: threading.Event) -> _MqttConnection:
+        """Handshake, install and subscribe; the caller then runs
+        `_announce` outside any lock (on_connect is user code)."""
         conn = _MqttConnection(
             self.host, self.port, client_id=self.client_id,
             keepalive=self.keepalive, username=self.username,
@@ -450,15 +458,20 @@ class MqttClient:
         except Exception:
             self._drop(conn)
             raise
-        if self.on_connect is not None:
-            with self._lock:
-                current = self._conn is conn
-            if not current:
-                return
-            try:
-                self.on_connect(self)
-            except Exception as e:
-                self._log(f"on_connect callback failed: {e}")
+        return conn
+
+    def _announce(self, conn: _MqttConnection, gen: int) -> None:
+        """Run on_connect unless that connection's generation has ended."""
+        if self.on_connect is None:
+            return
+        with self._lock:
+            current = self._conn is conn and gen == self._gen
+        if not current:
+            return
+        try:
+            self.on_connect(self)
+        except Exception as e:
+            self._log(f"on_connect callback failed: {e}")
 
     def _drop(self, conn: _MqttConnection) -> None:
         with self._lock:
@@ -496,9 +509,10 @@ class MqttClient:
                 conn = self._conn if gen == self._gen else None
             if conn is None:
                 try:
-                    self._open(gen, stop)
+                    opened = self._open(gen, stop)
                     backoff = 1.0
                     self._log(f"connected {self.host}:{self.port}")
+                    self._announce(opened, gen)
                 except Exception as e:
                     if stop.is_set():
                         break
@@ -522,7 +536,9 @@ class MqttClient:
                     # rx-idle: probe the broker; tx-idle: keep the broker's
                     # own keepalive timer satisfied (MQTT 3.1.1 s3.1.2.10).
                     conn.ping()
-                    conn.ping_sent = now
+                    # Deadline counts from send completion, not from the
+                    # decision: send-lock waits must not eat the allowance.
+                    conn.ping_sent = time.monotonic()
             except Exception as e:
                 if not stop.is_set():
                     self._log(f"link dropped: {e}")

@@ -98,6 +98,7 @@ def test_fall_contract_matches_cross_platform_shape():
 # MqttClient: SUBSCRIBE / inbound PUBLISH / QoS1 / keepalive / reconnect,
 # against an in-process fake broker on a socketpair (no network).
 # --------------------------------------------------------------------------- #
+import json  # noqa: E402
 import queue  # noqa: E402
 import socket  # noqa: E402
 import struct  # noqa: E402
@@ -156,6 +157,8 @@ class FakeBroker:
         self.log = []                 # every (session, header0) in arrival order
         self.answer_ping = True       # False: a broker that ignores PINGREQ
         self.connack_gates = {}       # session -> Event: hold CONNACK until set
+        self.packets = []             # every (session, header0, body)
+        self.ping_delay = 0.0         # seconds before answering a PINGREQ
 
     def create_connection(self, _addr, timeout=None):
         client, server = socket.socketpair()
@@ -177,6 +180,7 @@ class FakeBroker:
                 return
             h, body = pkt
             self.log.append((n, h))
+            self.packets.append((n, h, body))
             self.rx.put((n, h, body))
             ptype = h >> 4
             try:
@@ -189,6 +193,8 @@ class FakeBroker:
                     pid = body[:2]
                     sock.sendall(bytes([0x90, 3]) + pid + bytes([body[-1]]))
                 elif ptype == 12 and self.answer_ping:
+                    if self.ping_delay:
+                        time.sleep(self.ping_delay)
                     sock.sendall(b"\xd0\x00")
             except OSError:
                 return
@@ -456,5 +462,58 @@ def test_unanswered_pingreq_triggers_reconnect(broker):
         # the drop followed an unanswered PINGREQ on the first session
         assert (0, 0xC0) in before
         t.join()
+    finally:
+        client.disconnect()
+
+
+# -- regression: on_connect may call disconnect() (no lifecycle deadlock) --- #
+def test_on_connect_disconnect_does_not_deadlock_blocking_connect(broker):
+    client = MqttClient("broker", client_id="cid",
+                        on_connect=lambda c: c.disconnect())
+    t = threading.Thread(target=client.connect, daemon=True)
+    t.start()
+    t.join(3.0)
+    assert not t.is_alive(), "connect() deadlocked in on_connect -> disconnect()"
+    assert not client.is_connected()
+
+
+def test_on_connect_disconnect_does_not_deadlock_on_reconnect(broker):
+    done = threading.Event()
+    calls = []
+
+    def on_connect(c):
+        calls.append(1)
+        if len(calls) == 2:                              # the reconnect
+            c.disconnect()
+            done.set()
+
+    client = MqttClient("broker", client_id="cid", on_connect=on_connect)
+    client.connect()
+    broker.sessions[0].shutdown(socket.SHUT_RDWR)
+    assert done.wait(5.0), "disconnect() from a reconnect on_connect hung"
+    deadline = time.monotonic() + 3
+    while _reader_threads() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not _reader_threads() and not client.is_connected()
+
+
+# -- regression: the PINGREQ deadline counts from send completion ----------- #
+def test_ping_deadline_starts_after_the_send_completes(broker, monkeypatch):
+    real_ping = _MqttConnection.ping
+
+    def slow_ping(self):
+        time.sleep(0.7)                                  # send-lock contention
+        real_ping(self)
+
+    monkeypatch.setattr(_MqttConnection, "ping", slow_ping)
+    # Answered 0.75 s after it went out: inside keepalive=1 counted from the
+    # send, but 1.45 s after the decision to ping (0.7 s send + 0.75 s).
+    broker.ping_delay = 0.75
+    client = MqttClient("broker", client_id="cid", keepalive=1)
+    client.connect()
+    try:
+        time.sleep(2.5)
+        assert sum(1 for n, h in broker.log if n == 0 and h == 0xC0) >= 1
+        assert len(broker.sessions) == 1                 # never dropped
     finally:
         client.disconnect()
