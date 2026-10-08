@@ -75,7 +75,10 @@ import numpy as np
 
 # --- RK_FORMAT_* (include/rga.h). VERIFY against your device's rga.h. -------- #
 RK_FORMAT_RGB_888 = 0x2 << 8          # 0x200  packed 24-bit R,G,B
-# NV12 has interleaved CbCr (UV). 0xE00 is YCrCb_420_SP / NV21 (VU).
+# RV1126B librga v1.10.5_[11] 实测枚举映射（扫描设备错误日志确认）：
+#   0x800=cbcr422sp 0x900=cbcr422p 0xA00=cbcr420sp(NV12) 0xB00=cbcr420p
+#   0xC00=crcb422sp 0xD00=crcb422p 0xE00=crcb420sp(NV21) 0xF00=crcb420p
+# 0xE<<8 是 NV21 不是 NV12：误用会让 UV 互换、整帧偏蓝（手势检测全灭）。
 RK_FORMAT_YCbCr_420_SP = 0xA << 8     # 0xa00  NV12 (Y plane + interleaved CbCr)
 
 # --- IM_STATUS (im2d_api/im2d_type.h). SUCCESS == 1. ------------------------- #
