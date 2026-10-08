@@ -103,16 +103,20 @@ class _MqttConnection:
         self._send_lock = threading.Lock()
         self._next_pid = 0
         self.last_tx = 0.0   # monotonic time of the last packet sent
+        self.last_rx = 0.0   # monotonic time of the last packet received
+        self.ping_sent: Optional[float] = None  # outstanding PINGREQ time
 
     def _packet_id(self) -> int:
         self._next_pid = self._next_pid % 0xFFFF + 1   # 1..65535, never 0
         return self._next_pid
 
     def _send(self, data: bytes) -> None:
-        sock = self._sock
-        if sock is None:
-            raise ConnectionError("not connected")
         with self._send_lock:
+            # Re-read under the lock: close() clears _sock while holding it,
+            # so nothing can be written after the DISCONNECT.
+            sock = self._sock
+            if sock is None:
+                raise ConnectionError("not connected")
             sock.sendall(data)
             self.last_tx = time.monotonic()
 
@@ -230,13 +234,14 @@ class _MqttConnection:
         return hdr[0], body
 
     def close(self) -> None:
-        sock, self._sock = self._sock, None
-        if sock is not None:
-            try:
-                with self._send_lock:
+        with self._send_lock:
+            sock, self._sock = self._sock, None
+            if sock is not None:
+                try:
                     sock.sendall(b"\xe0\x00")   # DISCONNECT
-            except OSError:
-                pass
+                except OSError:
+                    pass
+        if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)  # wakes a reader in select()
             except OSError:
@@ -265,14 +270,23 @@ class MqttClient:
     PUBLISH dispatch, keepalive and reconnect, on stdlib sockets only.
 
     One background thread owns the socket's read side: it reads inbound
-    packets, answers QoS 1 deliveries with PUBACK, sends PINGREQ every
-    keepalive/2 of send-idleness, treats 1.5x keepalive without any inbound
-    packet as a dead link, and reconnects with the same 1 s -> 30 s backoff as
-    MqttSink. Subscriptions registered with `subscribe` are re-sent on every
-    (re)connect, after which `on_connect(client)` runs. `on_message(topic,
-    payload)` runs on the reader thread. `publish` is best-effort: it returns
-    False (never raises) while the link is down; nothing is queued or
-    retransmitted.
+    packets and answers QoS 1 deliveries with PUBACK. Liveness is judged on
+    the broker's answers, never on our own sends: a PINGREQ goes out after
+    keepalive/2 without any inbound packet (outbound PUBLISHes do not defer
+    it -- QoS 0 is never answered) or keepalive/2 without any outbound
+    packet, and the link is declared dead only when a PINGREQ stays
+    unanswered for a whole keepalive. Reconnects use the same
+    1 s -> 30 s backoff as MqttSink. Subscriptions registered with `subscribe`
+    are re-sent on every (re)connect, after which `on_connect(client)` runs.
+    `on_message(topic, payload)` runs on the reader thread. `publish` is
+    best-effort: it returns False (never raises) while the link is down;
+    nothing is queued or retransmitted.
+
+    Lifecycle: `connect`/`disconnect` are serialised. Each `connect` starts a
+    new generation; `disconnect` ends it, so a handshake still in flight from
+    an ended generation is closed on completion without subscribing or
+    running `on_connect`. The reader thread handle is kept until that thread
+    has really exited, and `connect` never starts a second reader beside it.
     """
 
     def __init__(
@@ -309,11 +323,13 @@ class MqttClient:
         self._log = logger or (lambda _msg: None)
         self._subs: List[Tuple[str, int]] = []
         self._conn: Optional[_MqttConnection] = None
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()          # guards _conn / _gen / _subs
+        self._lifecycle = threading.Lock()     # serialises connect/disconnect
         self._connected = threading.Event()
-        self._stop = threading.Event()
+        self._gen = 0                          # current generation
+        self._stop = threading.Event()         # stop event of current generation
+        self._stop.set()                       # not started
         self._thread: Optional[threading.Thread] = None
-        self._last_rx = 0.0
 
     # -- public API ------------------------------------------------------- #
     def subscribe(self, topic: str, qos: int = 0) -> None:
@@ -331,17 +347,38 @@ class MqttClient:
                 self._drop(conn)
 
     def connect(self, blocking: bool = True) -> None:
-        """Start the client. With `blocking`, the first CONNECT happens on the
-        caller's thread and its failure raises (no thread is left running);
-        later drops reconnect in the background either way."""
-        if self._thread is not None:
-            return
-        self._stop.clear()
-        if blocking:
-            self._open()
-        self._thread = threading.Thread(target=self._run, daemon=True,
-                                        name=f"mqtt-{self.client_id}")
-        self._thread.start()
+        """Start a new generation. With `blocking`, its first CONNECT happens
+        on the caller's thread and a failure raises (no thread is left
+        running); later drops reconnect in the background either way.
+
+        A no-op while already running. If the reader of a previous generation
+        is still winding down (e.g. stuck in a CONNACK wait), it is joined for
+        up to connect_timeout + 1 s, and RuntimeError is raised if it is still
+        alive, rather than running two readers."""
+        with self._lifecycle:
+            old = self._thread
+            if old is not None and old.is_alive():
+                if not self._stop.is_set():
+                    return                       # already running
+                old.join(self.connect_timeout + 1.0)
+                if old.is_alive():
+                    raise RuntimeError("previous MQTT reader thread still running")
+            self._thread = None
+            stop = threading.Event()
+            with self._lock:
+                self._gen += 1
+                gen = self._gen
+                self._stop = stop
+            if blocking:
+                try:
+                    self._open(gen, stop)
+                except Exception:
+                    stop.set()
+                    raise
+            thread = threading.Thread(target=self._run, args=(gen, stop),
+                                      daemon=True, name=f"mqtt-{self.client_id}")
+            self._thread = thread
+            thread.start()
 
     def is_connected(self) -> bool:
         return self._connected.is_set()
@@ -364,18 +401,26 @@ class MqttClient:
             return False
 
     def disconnect(self, timeout: float = 2.0) -> None:
-        """Send DISCONNECT (the broker then discards the will) and stop."""
-        self._stop.set()
-        with self._lock:
-            conn = self._conn
-        if conn is not None:
-            self._drop(conn)
-        thread, self._thread = self._thread, None
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout)
+        """Send DISCONNECT (the broker then discards the will) and stop.
+
+        Ends the current generation first, so a reconnect handshake still in
+        flight can no longer install itself or run on_connect. The thread
+        handle is kept if the reader outlives `timeout`; `connect` joins it."""
+        with self._lifecycle:
+            with self._lock:
+                self._stop.set()
+                self._gen += 1
+                conn = self._conn
+            if conn is not None:
+                self._drop(conn)
+            thread = self._thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout)
+                if not thread.is_alive():
+                    self._thread = None
 
     # -- internals -------------------------------------------------------- #
-    def _open(self) -> None:
+    def _open(self, gen: int, stop: threading.Event) -> None:
         conn = _MqttConnection(
             self.host, self.port, client_id=self.client_id,
             keepalive=self.keepalive, username=self.username,
@@ -385,10 +430,20 @@ class MqttClient:
         )
         conn.connect(timeout=self.connect_timeout)
         with self._lock:
-            self._conn = conn
-            self._connected.set()
-            subs = list(self._subs)
-        self._last_rx = time.monotonic()
+            current = (gen == self._gen and not stop.is_set())
+            if current:
+                self._conn = conn
+                self._connected.set()
+                subs = list(self._subs)
+        if not current:
+            # Handshake of an ended generation: never subscribe/announce.
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise ConnectionAbortedError("connect cancelled by disconnect()")
+        conn.last_rx = time.monotonic()
+        conn.ping_sent = None
         try:
             for topic, qos in subs:
                 conn.subscribe(topic, qos)
@@ -396,6 +451,10 @@ class MqttClient:
             self._drop(conn)
             raise
         if self.on_connect is not None:
+            with self._lock:
+                current = self._conn is conn
+            if not current:
+                return
             try:
                 self.on_connect(self)
             except Exception as e:
@@ -430,39 +489,47 @@ class MqttClient:
                 self._log("broker refused a subscription (SUBACK 0x80)")
         # PUBACK / PINGRESP / anything else: liveness only
 
-    def _run(self) -> None:
+    def _run(self, gen: int, stop: threading.Event) -> None:
         backoff = 1.0
-        while not self._stop.is_set():
+        while not stop.is_set():
             with self._lock:
-                conn = self._conn
+                conn = self._conn if gen == self._gen else None
             if conn is None:
                 try:
-                    self._open()
+                    self._open(gen, stop)
                     backoff = 1.0
                     self._log(f"connected {self.host}:{self.port}")
                 except Exception as e:
+                    if stop.is_set():
+                        break
                     self._log(f"connect failed: {e} (retry {backoff:.0f}s)")
-                    self._stop.wait(backoff)
+                    stop.wait(backoff)
                     backoff = min(backoff * 2, 30.0)
                 continue
             try:
-                tick = min(1.0, self.keepalive / 2.0)
+                tick = min(1.0, self.keepalive / 4.0)
                 if conn.wait_readable(tick):
                     header0, body = conn.read_packet()
-                    self._last_rx = time.monotonic()
+                    conn.last_rx = time.monotonic()
+                    conn.ping_sent = None        # any inbound packet answers
                     self._handle(conn, header0, body)
                 now = time.monotonic()
-                if now - conn.last_tx >= self.keepalive / 2.0:
+                if conn.ping_sent is not None:
+                    if now - conn.ping_sent > self.keepalive:
+                        raise ConnectionError("PINGREQ unanswered for a keepalive")
+                elif (now - conn.last_rx >= self.keepalive / 2.0
+                      or now - conn.last_tx >= self.keepalive / 2.0):
+                    # rx-idle: probe the broker; tx-idle: keep the broker's
+                    # own keepalive timer satisfied (MQTT 3.1.1 s3.1.2.10).
                     conn.ping()
-                if now - self._last_rx > self.keepalive * 1.5:
-                    raise ConnectionError("no packet from broker within 1.5x keepalive")
+                    conn.ping_sent = now
             except Exception as e:
-                if not self._stop.is_set():
+                if not stop.is_set():
                     self._log(f"link dropped: {e}")
                 self._drop(conn)
         # A reconnect that raced disconnect() must not leave a live socket.
         with self._lock:
-            conn = self._conn
+            conn = self._conn if gen == self._gen else None
         if conn is not None:
             self._drop(conn)
 

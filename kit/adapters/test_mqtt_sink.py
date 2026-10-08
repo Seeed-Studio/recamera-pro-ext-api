@@ -153,6 +153,9 @@ class FakeBroker:
         self.rc = rc
         self.rx = queue.Queue()
         self.sessions = []
+        self.log = []                 # every (session, header0) in arrival order
+        self.answer_ping = True       # False: a broker that ignores PINGREQ
+        self.connack_gates = {}       # session -> Event: hold CONNACK until set
 
     def create_connection(self, _addr, timeout=None):
         client, server = socket.socketpair()
@@ -173,15 +176,19 @@ class FakeBroker:
                 self.rx.put((n, None, b""))
                 return
             h, body = pkt
+            self.log.append((n, h))
             self.rx.put((n, h, body))
             ptype = h >> 4
             try:
                 if ptype == 1:
+                    gate = self.connack_gates.get(n)
+                    if gate is not None:
+                        gate.wait(5.0)
                     sock.sendall(bytes([0x20, 2, 0, self.rc]))
                 elif ptype == 8:
                     pid = body[:2]
                     sock.sendall(bytes([0x90, 3]) + pid + bytes([body[-1]]))
-                elif ptype == 12:
+                elif ptype == 12 and self.answer_ping:
                     sock.sendall(b"\xd0\x00")
             except OSError:
                 return
@@ -189,15 +196,17 @@ class FakeBroker:
     def send(self, n, data):
         self.sessions[n].sendall(data)
 
-    def expect(self, ptype, timeout=3.0):
-        """Next packet of `ptype` (others are skipped) -> (session, h, body)."""
+    def expect(self, ptype, timeout=3.0, session=None):
+        """Next packet of `ptype` (others, and other sessions when `session`
+        is given, are skipped) -> (session, h, body)."""
         deadline = time.monotonic() + timeout
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise AssertionError(f"no packet type {ptype} within {timeout}s")
             n, h, body = self.rx.get(timeout=left)
-            if h is not None and h >> 4 == ptype:
+            if (h is not None and h >> 4 == ptype
+                    and (session is None or n == session)):
                 return n, h, body
 
 
@@ -357,3 +366,95 @@ def test_connection_read_packet_parses_multibyte_length():
     finally:
         a.close()
         b.close()
+
+
+# -- regression: lifecycle races (disconnect vs. in-flight reconnect) ------- #
+def _reader_threads():
+    return [t for t in threading.enumerate()
+            if t.name == "mqtt-cid" and t.is_alive()]
+
+
+def _drop_and_hold_reconnect(broker, client):
+    """Kill session 0 and hold session 1's CONNACK; return its gate."""
+    gate = threading.Event()
+    broker.connack_gates[1] = gate
+    broker.sessions[0].shutdown(socket.SHUT_RDWR)
+    broker.expect(1, timeout=5.0, session=1)           # reconnect CONNECT
+    return gate
+
+
+def test_disconnect_cancels_in_flight_reconnect_handshake(broker):
+    announced = []
+
+    def on_connect(c):
+        announced.append(1)
+        c.publish("a/status", b"online", qos=1, retain=True)
+
+    client = MqttClient("broker", client_id="cid", on_connect=on_connect)
+    client.subscribe("a/cmd", qos=1)
+    client.connect()
+    broker.expect(3)                                     # first "online"
+    gate = _drop_and_hold_reconnect(broker, client)
+    client.disconnect(timeout=0.05)                      # returns mid-handshake
+    gate.set()                                           # CONNACK arrives late
+    deadline = time.monotonic() + 3
+    while _reader_threads() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not _reader_threads()
+    assert announced == [1]                              # no second on_connect
+    session1 = [h >> 4 for n, h in broker.log if n == 1]
+    assert 3 not in session1 and 8 not in session1       # no PUBLISH/SUBSCRIBE
+    assert not client.is_connected()
+
+
+def test_connect_right_after_disconnect_runs_one_reader(broker):
+    client = MqttClient("broker", client_id="cid")
+    client.connect()
+    gate = _drop_and_hold_reconnect(broker, client)
+    client.disconnect(timeout=0.05)
+    threading.Timer(0.2, gate.set).start()               # old handshake ends late
+    client.connect()                                     # waits for old reader
+    try:
+        time.sleep(0.2)
+        assert len(_reader_threads()) == 1
+        assert client.is_connected()
+        assert client.publish("x", b"1")
+    finally:
+        client.disconnect()
+
+
+# -- regression: liveness is judged on broker answers, not our own sends ---- #
+def _publish_for(client, seconds, period=0.05):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        client.publish("t/det", b"d", qos=0)
+        time.sleep(period)
+
+
+def test_busy_qos0_publisher_on_healthy_link_is_not_dropped(broker):
+    client = MqttClient("broker", client_id="cid", keepalive=1)
+    client.connect()
+    try:
+        _publish_for(client, 2.6)                        # > 2 keepalive periods
+        assert len(broker.sessions) == 1                 # never reconnected
+        pings = [h for n, h in broker.log if n == 0 and h == 0xC0]
+        assert len(pings) >= 2                           # PINGREQ not deferred
+        assert client.is_connected()
+    finally:
+        client.disconnect()
+
+
+def test_unanswered_pingreq_triggers_reconnect(broker):
+    client = MqttClient("broker", client_id="cid", keepalive=1)
+    client.connect()
+    try:
+        broker.answer_ping = False
+        t = threading.Thread(target=_publish_for, args=(client, 3.0))
+        t.start()
+        broker.expect(1, timeout=5.0, session=1)         # reconnect CONNECT
+        before = broker.log[:broker.log.index((1, 0x10))]
+        # the drop followed an unanswered PINGREQ on the first session
+        assert (0, 0xC0) in before
+        t.join()
+    finally:
+        client.disconnect()
