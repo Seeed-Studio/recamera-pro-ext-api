@@ -305,11 +305,11 @@ verify_tar_member "$FW_TAR" "./entry.cgi"                "$ENTRY_MD5"
 # The mode matters as much as the content: an extracted package or a plain
 # `cp` into a rootfs image keeps the tar member's mode, and a CGI without the
 # execute bit answers 403 on every request.
-verify_tar_exec() { # tar arcname
-  perms=$(tar tvf "$FW_TAR" "$2" 2>/dev/null | awk '{print $1}' | head -1)
+verify_tar_exec() { # arcname (inside $FW_TAR)
+  perms=$(tar tvf "$FW_TAR" "$1" 2>/dev/null | awk '{print $1}' | head -1)
   case "$perms" in
-    -rwxr-xr-x) echo "  OK  tar member $2 mode $perms" ;;
-    *) echo "FATAL: $FW_TAR member $2 mode=$perms is not executable -- devices would ship a CGI that answers 403" >&2; exit 1 ;;
+    -rwxr-xr-x) echo "  OK  tar member $1 mode $perms" ;;
+    *) echo "FATAL: $FW_TAR member $1 mode=$perms is not executable -- devices would ship a CGI that answers 403" >&2; exit 1 ;;
   esac
 }
 verify_tar_exec "./rkipc"
