@@ -24,6 +24,7 @@ package is imported (paths.py snapshots the env at import time), mirroring
 test_config_merge.py.  Runnable with plain stdlib:
 ``python3 tests/test_config_rollback_replay.py`` (or pytest).
 """
+import base64
 import json
 import os
 import sys
@@ -67,6 +68,7 @@ MANIFEST = {
 }
 
 CANONICAL = ("appdata", "config.json")
+ROLLBACK_QUARANTINE = "config.rollback-quarantine.json"
 
 
 def _record(snapshot, scope, name):
@@ -88,6 +90,8 @@ class ConfigRollbackReplayTests(unittest.TestCase):
                          appconfig.legacy_config_path(APP) + ".migrated",
                          os.path.join(paths.appdata_dir(APP),
                                       "config.quarantine.json"),
+                         os.path.join(paths.appdata_dir(APP),
+                                      ROLLBACK_QUARANTINE),
                          appconfig._user_config_token_path(APP)):
             try:
                 os.remove(pathname)
@@ -155,20 +159,179 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         with open(legacy) as f:
             self.assertEqual(json.load(f), {"zone": [[0, 0], [1, 1]]})
 
-    def test_replayed_rollback_still_reverts_the_transactions_own_rewrite(self):
-        """A file the snapshot captured is restored even if it changed since.
+    # -- snapshot PRESENT: revert the prune, keep a later user edit ------- #
+    def _prune_manifest(self):
+        """What revalidate_user_config sees from a release that drops RESTART_KEY."""
+        return {"id": APP, "config_schema": {"groups": [{
+            "key": "general", "title": "General",
+            "items": [MANIFEST["config_schema"]["groups"][0]["items"][1]]}]}}
 
-        The upgrade rewrites the canonical file itself (it drops keys the new
-        manifest no longer declares); that rewrite MUST be reverted, so this
-        transition is deliberately not guarded.
-        """
-        appconfig.write_user_config(APP, {RESTART_KEY: 0.6})
+    def _present_snapshot_then_prune(self):
+        appconfig.write_user_config(APP, {RESTART_KEY: 0.6, LIVE_KEY: 0.5})
         snapshot = appconfig.snapshot_upgrade_config(APP)
         self.assertEqual(_record(snapshot, *CANONICAL).get("present"), True)
-        appconfig.write_user_config(APP, {RESTART_KEY: None})  # upgrade pruned
-        self.assertEqual(self._saved(), {})
+        # The install transaction's own rewrite: prune, no user-write token.
+        result = appconfig.revalidate_user_config(self._prune_manifest(), APP)
+        self.assertEqual(set(result["dropped"]), {RESTART_KEY})
+        self.assertEqual(self._saved(), {LIVE_KEY: 0.5})
+        return snapshot
+
+    def _canonical_bytes(self):
+        with open(appconfig.config_path(APP), "rb") as f:
+            return f.read()
+
+    def test_replayed_rollback_still_reverts_the_transactions_own_rewrite(self):
+        """Token unchanged since the snapshot: the prune is reverted byte-exactly."""
+        snapshot = self._present_snapshot_then_prune()
         appconfig.restore_upgrade_config(snapshot)
-        self.assertEqual(self._saved().get(RESTART_KEY), 0.6)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.5})
+
+    def test_replayed_rollback_merges_user_post_into_restored_snapshot(self):
+        """Token changed: user values win, keys the release pruned come back."""
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})                 # user saves meanwhile
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.9})
+        self.assertEqual(
+            kitconfig.effective_config(paths.app_dir(APP)).get(LIVE_KEY), 0.9)
+        self.assertIsNone(self._rollback_quarantine())
+
+    def test_replayed_rollback_merge_is_idempotent(self):
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})
+        appconfig.restore_upgrade_config(snapshot)
+        first = self._canonical_bytes()
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(), first)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.9})
+
+    def test_journal_without_token_field_restores_present_config_byte_exactly(self):
+        snapshot = self._present_snapshot_then_prune()
+        snapshot.pop("user_config_token")
+        self._post({LIVE_KEY: 0.9})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
+
+    def test_unmergeable_user_config_falls_back_to_byte_exact_restore(self):
+        snapshot = self._present_snapshot_then_prune()
+        self._post({LIVE_KEY: 0.9})                 # token changes
+        with open(appconfig.config_path(APP), "w") as f:
+            json.dump([1, 2, 3], f)                 # not a JSON object
+        with self.assertLogs("appmgr.config", level="WARNING"):
+            appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(),
+                         base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"]))
+
+    # -- snapshot PRESENT: the old manifest decides which edits survive ---- #
+    def _rollback_quarantine(self):
+        pathname = os.path.join(paths.appdata_dir(APP), ROLLBACK_QUARANTINE)
+        if not os.path.exists(pathname):
+            return None
+        with open(pathname, "rb") as f:
+            return f.read()
+
+    def _snapshot_bytes(self, snapshot):
+        return base64.b64decode(_record(snapshot, *CANONICAL)["data_b64"])
+
+    def test_rollback_quarantines_value_only_the_failed_release_accepts(self):
+        """An object saved under the new schema never reaches the old app."""
+        snapshot = self._present_snapshot_then_prune()
+        # The failed release's schema accepted an object for this key.
+        appconfig.write_user_config(APP, {LIVE_KEY: {"min": 0.1}})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.5})
+        live = kitconfig.effective_config(paths.app_dir(APP)).get(LIVE_KEY)
+        self.assertIsInstance(live, float)
+        self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
+                         {LIVE_KEY: {"min": 0.1}})
+
+    def test_rollback_does_not_merge_key_unknown_to_the_old_schema(self):
+        snapshot = self._present_snapshot_then_prune()
+        appconfig.write_user_config(APP, {"added_by_new_release": 3,
+                                          LIVE_KEY: 0.9})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved(), {RESTART_KEY: 0.6, LIVE_KEY: 0.9})
+        self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
+                         {"added_by_new_release": 3})
+        first = (self._canonical_bytes(), self._rollback_quarantine())
+        appconfig.restore_upgrade_config(snapshot)   # replay: no change
+        self.assertEqual((self._canonical_bytes(), self._rollback_quarantine()),
+                         first)
+
+    def _string_manifest(self):
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest["config_schema"]["groups"][0]["items"] += [
+            {"key": "note_a", "type": "string", "default": ""},
+            {"key": "note_b", "type": "string", "default": ""}]
+        with open(os.path.join(paths.app_dir(APP), "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+
+    def test_oversized_merge_restores_snapshot_and_quarantines_user_file(self):
+        self._string_manifest()
+        appconfig.write_user_config(APP, {"note_a": "a" * 600000})
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        # Each file is within the cap; their union is not.
+        appconfig.write_user_config(APP, {"note_a": None, "note_b": "b" * 600000})
+        with self.assertLogs("appmgr.config", level="WARNING"):
+            appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(), self._snapshot_bytes(snapshot))
+        quarantine = self._rollback_quarantine()
+        self.assertEqual(json.loads(quarantine)["dropped"],
+                         {"note_b": "b" * 600000})
+        appconfig.restore_upgrade_config(snapshot)   # replay: identical
+        self.assertEqual(self._canonical_bytes(), self._snapshot_bytes(snapshot))
+        self.assertEqual(self._rollback_quarantine(), quarantine)
+
+    def test_oversized_user_file_is_quarantined_not_discarded(self):
+        self._string_manifest()
+        appconfig.write_user_config(APP, {"note_a": "a"})
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        appconfig.write_user_config(APP, {"note_b": "b" * (1024 * 1024)})
+        with self.assertLogs("appmgr.config", level="WARNING"):
+            appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._canonical_bytes(), self._snapshot_bytes(snapshot))
+        self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
+                         {"note_a": "a", "note_b": "b" * (1024 * 1024)})
+
+    def test_failed_quarantine_write_keeps_the_user_edit(self):
+        """No place to park the rejected edit: stop before the overwrite."""
+        snapshot = self._present_snapshot_then_prune()
+        appconfig.write_user_config(APP, {LIVE_KEY: {"min": 0.1}})
+        before = self._canonical_bytes()
+        real = appconfig._atomic_write_bytes
+
+        def no_space(pathname, data, mode):
+            if pathname.endswith(ROLLBACK_QUARANTINE):
+                raise OSError(28, "No space left on device")
+            return real(pathname, data, mode)
+
+        appconfig._atomic_write_bytes = no_space
+        try:
+            with self.assertRaises(OSError):
+                appconfig.restore_upgrade_config(snapshot)
+        finally:
+            appconfig._atomic_write_bytes = real
+        self.assertEqual(self._canonical_bytes(), before)
+        appconfig.restore_upgrade_config(snapshot)     # space back: replay
+        self.assertEqual(json.loads(self._rollback_quarantine())["dropped"],
+                         {LIVE_KEY: {"min": 0.1}})
+
+    def test_boolean_enum_edit_is_not_mistaken_for_numeric_snapshot(self):
+        """1 == True in Python; a typed enum edit 1 -> true must survive."""
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest["config_schema"]["groups"][0]["items"].append(
+            {"key": "mode", "type": "enum", "options": [1, True], "default": 1})
+        with open(os.path.join(paths.app_dir(APP), "manifest.json"), "w") as f:
+            json.dump(manifest, f)
+        appconfig.write_user_config(APP, {"mode": 1})
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        appconfig.write_user_config(APP, {"mode": True})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertIs(self._saved()["mode"], True)
+        self.assertIsNone(self._rollback_quarantine())
 
     # -- provenance: the transaction's own migration is not a user save ---- #
     def _legacy_only(self, values):
@@ -178,10 +341,7 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         self.assertEqual(_record(snapshot, *CANONICAL).get("present"), False)
         # What commit_prepared + revalidate_user_config do inside the install.
         self.assertTrue(appconfig.migrate_legacy_config(APP))
-        pruned_manifest = {"id": APP, "config_schema": {"groups": [{
-            "key": "general", "title": "General",
-            "items": [MANIFEST["config_schema"]["groups"][0]["items"][1]]}]}}
-        result = appconfig.revalidate_user_config(pruned_manifest, APP)
+        result = appconfig.revalidate_user_config(self._prune_manifest(), APP)
         self.assertEqual(set(result["dropped"]), {RESTART_KEY})
         return snapshot
 
