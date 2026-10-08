@@ -161,7 +161,7 @@
           },
           {
             "key": "status_interval",
-            "type": "number",
+            "type": "integer",
             "apply": "restart",
             "title": "Status heartbeat (s)",
             "title_zh": "状态心跳（秒）",

@@ -27,8 +27,6 @@ import logging
 import os
 import time
 
-import paho.mqtt.client as mqtt
-
 from .preview import SNAPSHOT_MAX_BYTES, encode_jpeg
 
 LOG = logging.getLogger("esk.recamera")
@@ -108,6 +106,10 @@ class Publisher:
         self.topic_status = f"{base}/status"
         self.topic_snapshot = f"{base}/snapshot"
         self.topic_cmd_snapshot = f"{base}/cmd/snapshot"
+
+        # Imported here, not at module load: kit.run imports every shipped app
+        # to find its App class, and that must not need paho on the host.
+        import paho.mqtt.client as mqtt
 
         self.client = mqtt.Client(client_id=f"esk-{device_id}-{self.session_id}")
         if username:
