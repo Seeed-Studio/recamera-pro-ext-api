@@ -1144,6 +1144,10 @@ def do_icon(app_id: str):
     return data, info["media_type"]
 
 
+class OverlayHashMismatch(Exception):
+    """Installed overlay bytes differ from the manifest's ui.overlay.sha256."""
+
+
 def do_overlay(app_id: str) -> tuple[bytes, str]:
     """Return (bytes, sha256hex) of an installed app's ui.overlay entry.
 
@@ -1182,6 +1186,12 @@ def do_overlay(app_id: str) -> tuple[bytes, str]:
     except (OSError, ValueError) as exc:
         raise FileNotFoundError(
             f"app {app_id!r} has no readable overlay entry") from exc
+    if digest != overlay["sha256"]:
+        # The bytes on disk no longer match what the installed manifest
+        # declares (modified install tree, or an upgrade swapping files): never
+        # serve undeclared content, even to a caller that asks for its hash.
+        raise OverlayHashMismatch(
+            f"app {app_id!r} overlay entry does not match its declared sha256")
     return data, digest
 
 
@@ -4156,6 +4166,11 @@ class _Handler(BaseHTTPRequestHandler):
                 })
             try:
                 data, digest = do_overlay(overlay_match.group(1))
+            except OverlayHashMismatch:
+                # Same answer as a stale ?h=: the host drops what it holds.
+                return self._send(409, {
+                    "error": "overlay content hash does not match",
+                })
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
             except FileNotFoundError as e:
@@ -4163,9 +4178,10 @@ class _Handler(BaseHTTPRequestHandler):
             except OSError as e:
                 return self._send(500, {"error": repr(e)})
             if digest != requested_hash:
-                # Declared digest vs actual bytes diverged (upgrade window or a
-                # modified install): never hand the bytes out under the old
-                # key -- 409 tells the host to drop them and fall back.
+                # The caller's digest is stale (upgrade window): the served
+                # bytes must match BOTH the declaration (checked in
+                # do_overlay) and ?h= -- 409 tells the host to drop them and
+                # fall back.
                 return self._send(409, {
                     "error": "overlay content hash does not match",
                 })

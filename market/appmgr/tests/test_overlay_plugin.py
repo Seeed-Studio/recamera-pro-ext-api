@@ -262,19 +262,37 @@ def test_route_returns_409_on_hash_mismatch(httpd):
 def test_route_serves_upgraded_bytes_and_rejects_stale_hash(httpd):
     _install_tree(ui=overlay_ui())
     replacement = OVERLAY_DOC + b"<b>v2</b>"
+    new_sha = hashlib.sha256(replacement).hexdigest()
     with open(os.path.join(paths.app_dir(APP_ID), "web", "overlay.html"),
               "wb") as sink:
         sink.write(replacement)
     server.cache_clear()
+    # Bytes replaced but the manifest still declares the old digest: neither
+    # the declared (stale) hash nor the hash of the new bytes is served.
+    for requested in (GOOD_SHA, new_sha):
+        status, headers, body = _get(
+            httpd, f"/api/app-center/v1/apps/{APP_ID}/overlay?h={requested}")
+        assert status == 409, requested
+        assert headers["Content-Type"] == "application/json"
+        assert body != replacement
+    # Declaration updated too (a complete upgrade): new hash served, old 409.
+    _install_tree(ui=overlay_ui(sha=new_sha), overlay_bytes=replacement)
     status, headers, body = _get(
-        httpd, f"/api/app-center/v1/apps/{APP_ID}/overlay?h={GOOD_SHA}")
-    assert status == 409
-    assert body != replacement
-    new_sha = hashlib.sha256(replacement).hexdigest()
-    status, _headers, body = _get(
         httpd, f"/api/app-center/v1/apps/{APP_ID}/overlay?h={new_sha}")
     assert status == 200
     assert body == replacement
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    status, _headers, body = _get(
+        httpd, f"/api/app-center/v1/apps/{APP_ID}/overlay?h={GOOD_SHA}")
+    assert status == 409
+    assert body != replacement
+
+
+def test_do_overlay_rejects_bytes_that_differ_from_declaration(httpd):
+    _install_tree(ui=overlay_ui(), overlay_bytes=OVERLAY_DOC + b"tampered")
+    with pytest.raises(server.OverlayHashMismatch):
+        server.do_overlay(APP_ID)
 
 
 def test_route_404_without_install_or_without_declaration(httpd):
