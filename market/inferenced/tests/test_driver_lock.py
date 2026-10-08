@@ -29,7 +29,8 @@ def test_threads_are_serialized(tmp_path):
     assert entered.is_set()
 
 
-def test_other_process_times_out_and_crash_releases_kernel_fence(tmp_path):
+@pytest.mark.parametrize("kind", ["hold", "inference"])
+def test_other_process_times_out_and_crash_releases_kernel_fence(tmp_path, kind):
     path = str(tmp_path / "npu.lock")
     ready_read, ready_write = os.pipe()
     child = os.fork()
@@ -37,7 +38,7 @@ def test_other_process_times_out_and_crash_releases_kernel_fence(tmp_path):
         os.close(ready_read)
         try:
             coordinator = NpuDriverCoordinator(path)
-            with coordinator.hold(timeout=1):
+            with getattr(coordinator, kind)(timeout=1):
                 os.write(ready_write, b"1")
                 while True:
                     time.sleep(10)
@@ -84,3 +85,40 @@ def test_fail_closed_retention_preserves_primary_exception_and_faults_process(
     os.close(coordinator._quarantine_fd)
     coordinator._quarantine_fd = None
     coordinator._local.release()
+
+
+def test_shared_inferences_overlap_but_each_retains_its_kernel_fence(tmp_path):
+    path = str(tmp_path / 'npu.lock')
+    coordinator = NpuDriverCoordinator(path)
+    entered = [threading.Event(), threading.Event()]
+    proceed = [threading.Event(), threading.Event()]
+    def reader(i):
+        with coordinator.inference(timeout=1):
+            entered[i].set()
+            assert proceed[i].wait(3)
+    threads = [threading.Thread(target=reader, args=(i,)) for i in range(2)]
+    try:
+        for t in threads: t.start()
+        assert all(e.wait(1) for e in entered)
+        # Models can infer concurrently, but old IPC and maintenance still use EX.
+        with pytest.raises(TimeoutError):
+            with NpuDriverCoordinator(path).hold(timeout=.03): pass
+        proceed[0].set(); threads[0].join(1)
+        with pytest.raises(TimeoutError):
+            with coordinator.hold(timeout=.03): pass
+        proceed[1].set(); threads[1].join(1)
+        with coordinator.hold(timeout=.1): pass
+    finally:
+        for e in proceed: e.set()
+        for t in threads: t.join(2)
+
+
+def test_quarantine_rejects_shared_inference(tmp_path):
+    c = NpuDriverCoordinator(str(tmp_path/'npu.lock'))
+    with c.hold() as token: token.retain_fail_closed('teardown failed')
+    try:
+        with pytest.raises(DriverLockError, match='quarantined'):
+            with c.inference(timeout=.01): pass
+    finally:
+        os.close(c._quarantine_fd)
+        c._local.release()

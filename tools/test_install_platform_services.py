@@ -52,6 +52,10 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     assert (rootfs / "usr/lib/recamera/appmgr/inference_auth.py").is_file()
     assert (rootfs / "usr/lib/recamera/appmgr/trust.py").is_file()
     assert (rootfs / "usr/lib/recamera/inferenced/server.py").is_file()
+    assert (rootfs / "usr/lib/recamera/inferenced/_memory.py").read_bytes() == (
+        REPO / "market/inferenced/_memory.py").read_bytes()
+    assert (rootfs / "usr/lib/recamera/inferenced/_concurrency.py").read_bytes() == (
+        REPO / "market/inferenced/_concurrency.py").read_bytes()
     assert (rootfs / "usr/lib/recamera/inferenced/authorization.py").is_file()
     vendor_key = rootfs / "usr/lib/recamera/appmgr/keys/release_pub.pem"
     assert stat.S_IMODE(vendor_key.stat().st_mode) == 0o644

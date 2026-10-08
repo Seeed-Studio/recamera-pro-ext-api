@@ -43,8 +43,8 @@ from kit.adapters.result_sink import MultiSink, OutputChannel  # noqa: E402
 
 APPS = [
     "face-analysis", "facemesh-reader", "fall-detection", "fitness-trainer",
-    "ppocr-reader", "qrcode-reader", "retail-vision", "voice-transcribe",
-    "yolo-detector",
+    "hand-gesture", "ppocr-reader", "qrcode-reader", "retail-vision",
+    "voice-transcribe", "yolo-detector",
 ]
 
 
@@ -161,6 +161,17 @@ FIXTURES = {
          {"kind": "wake", "type": "wake", "t": 0.5, "keyword": "hello camera",
           "backend": "kws", "score": 1.5}],
     ),
+    "hand-gesture": (
+        [{"kind": "hand", "box": [1, 2, 3, 4], "score": 0.9,
+          "gesture": "Victory", "label": "Victory", "class_name": "Victory",
+          "gesture_conf": 0.87, "hand": "Right", "presence": 0.99,
+          "keypoints": [[0.1, 0.2]], "gesture_raw": "Victory",
+          "vote_count": 4}],
+        [{"kind": "gesture", "gesture": "Victory", "gesture_conf": 0.87,
+          "hand": "Right", "score": 0.9, "box": [1, 2, 3, 4],
+          "keypoints": [[0.1, 0.2]], "gesture_raw": "Victory",
+          "vote_count": 4}],
+    ),
 }
 
 _VALID_MODES = {"ha", "custom", "raw"}
@@ -252,6 +263,10 @@ def test_render_snapshots():
     assert out["recamera/voice-transcribe/state"] == {"state": "transcribing"}
     assert out["recamera/voice-transcribe/transcript"] == {"transcript": "hello world"}
     assert out["recamera/voice-transcribe/wake"] == {"wake": "hello camera"}
+
+    out = _render("hand-gesture", *FIXTURES["hand-gesture"])
+    assert out["recamera/hand-gesture/count"] == {"hand_count": 1}
+    assert out["recamera/hand-gesture/gesture"]["gesture"]["gesture"] == "Victory"
     print("PASS test_render_snapshots")
 
 

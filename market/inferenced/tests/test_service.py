@@ -69,7 +69,7 @@ class _TestAuthorizer:
 
 class RunningService:
     def __init__(self, tmp_path, *, backend=None, memory_mb=128,
-                 authorizer=None, client_idle_timeout=60.0):
+                 authorizer=None, client_idle_timeout=60.0, max_concurrent_models=4):
         self.socket = str(tmp_path / "inferenced.sock")
         self.backend = backend or FakeBackend()
         self.service = InferenceService(
@@ -79,6 +79,7 @@ class RunningService:
             memory_budget_mb=memory_mb,
             authorizer=authorizer or _TestAuthorizer(tmp_path),
             client_idle_timeout=client_idle_timeout,
+            max_concurrent_models=max_concurrent_models,
         )
         self.thread = threading.Thread(target=self.service.serve_forever, daemon=True)
         self.thread.start()
@@ -480,12 +481,13 @@ def test_queued_inference_revalidates_after_driver_admission(tmp_path):
 
     try:
         authorizer.arm()
-        with running.service._driver_lock:
+        cached_model = next(iter(running.service._models.values()))
+        with cached_model.operation_lock:
             thread = threading.Thread(target=infer, daemon=True)
             thread.start()
             assert authorizer.request_validated.wait(1.0)
             # The scheduler worker must not validate execution admission until
-            # it owns the same lock that fences all vendor driver calls.
+            # it owns the context lock which fences this model's native calls.
             assert not authorizer.execution_validated.wait(0.1)
             authorizer.revoked = True
         thread.join(timeout=2)

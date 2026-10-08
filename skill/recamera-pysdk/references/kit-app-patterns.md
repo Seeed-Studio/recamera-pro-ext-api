@@ -183,10 +183,13 @@ RKNNLite for unsupported graphs, including multiple inputs and undeclared
 image inputs. Initialization/cleanup failures do not allow an unsafe fallback.
 Local sessions without input metadata continue to select RKNNLite in `auto`.
 
-Kit's RKNNLite wrapper copies outputs and collects vendor buffer cycles on
-return/error and teardown. This bounds retained native buffers at an additional
-copy/GC cost; ctypes paths do not use that wrapper. Do not bypass the model
-factory with direct vendor RKNNLite imports to avoid this protection.
+Local Kit sessions keep the RKNNLite wrapper that copies outputs and collects
+vendor buffer cycles on return/error and teardown. The shared inference service
+instead sends vendor outputs without that extra copy, collects pending cycles
+before the next inference, and coalesces idle/error/teardown cleanup after
+response and worker references are released. This does not remove socket copies
+or alter DMA ownership. ctypes-only workloads do not schedule this RKNNLite
+cleanup. Do not bypass the model factory with direct vendor RKNNLite imports.
 
 For scheduled/brokered inference, backend selection occurs in the inference
 service process. Setting `ESK_RKNN_BACKEND` only in an App's environment does

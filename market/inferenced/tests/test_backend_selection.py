@@ -199,6 +199,10 @@ def test_rknnlite_fallback_handles_are_still_collected(native, monkeypatch):
     calls = []
     monkeypatch.setattr(gc, "collect", lambda *args: calls.append(args) or 0)
     backend.infer(handle, [np.zeros((1, 3), np.float32), np.zeros((1, 4), np.float32)])
+    # Initialization has already collected; the first inference leaves work
+    # for the next inference or the service's bounded idle maintenance.
+    assert calls == []
+    backend.infer(handle, [np.zeros((1, 3), np.float32), np.zeros((1, 4), np.float32)])
     assert calls == [()]
 
 
@@ -350,4 +354,3 @@ def test_fake_backend_status_names_backend(tmp_path):
         remote.release()
     finally:
         running.close()
-

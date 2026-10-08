@@ -359,6 +359,22 @@ class IoUTracker:
         return sum(1 for tr in self._tracks.values() if tr.visible)
 
 
+# A repeated fall edge counts as the same place when its box centre is within
+# this multiple of the larger box side (either box) of a recent event.
+_LOCATION_RADIUS_SCALE = 0.75
+# Upper bound on remembered emitted events (expired ones are dropped first).
+_RECENT_FALLS_MAX = 32
+
+
+def _boxes_near(a: Sequence[float], b: Sequence[float]) -> bool:
+    ax1, ay1, ax2, ay2 = (float(v) for v in a[:4])
+    bx1, by1, bx2, by2 = (float(v) for v in b[:4])
+    side = max(ax2 - ax1, ay2 - ay1, bx2 - bx1, by2 - by1, 0.0)
+    dx = (ax1 + ax2 - bx1 - bx2) * 0.5
+    dy = (ay1 + ay2 - by1 - by2) * 0.5
+    return math.hypot(dx, dy) <= _LOCATION_RADIUS_SCALE * side
+
+
 class FallDetectionApp(App):
     id = "fall-detection"
     name = "Fall Detection"
@@ -393,6 +409,7 @@ class FallDetectionApp(App):
     recovery_aspect_ratio = 1.10
     recovery_window_sec = 2.00
     cooldown_sec = 3.00
+    location_cooldown_sec = 10.0
 
     def _build_fall_config(self):
         """One FallConfig from the already-bound `self.<knob>` attributes.
@@ -446,6 +463,9 @@ class FallDetectionApp(App):
             max_lost_sec=cfg.occlusion_grace_sec,
         )
         self.detectors = {}
+        # (pts, box, track_id) of recently EMITTED fall events; survives track
+        # churn, see `_location_cooldown_hit()`.
+        self._recent_falls = []
         print(f"[fall] setup conf={self.confidence} "
               f"kpt_thres={self.keypoint_confidence} "
               f"torso>={cfg.torso_angle_threshold_deg} aspect>="
@@ -501,6 +521,37 @@ class FallDetectionApp(App):
             self.detectors[track_id] = detector
         return detector
 
+    def _location_cooldown_hit(self, track_id, box, now, visible_ids):
+        """True when a fall edge looks like a re-detection of a recent event.
+
+        The per-detector cooldown dies with its track, and the IoU tracker
+        re-issues ids for the same person (partial boxes, short misses), so a
+        person who is still on the floor would re-alarm on every new id.  An
+        edge is suppressed only when an event EMITTED within the last
+        ``location_cooldown_sec`` lies nearby (box centre within
+        ``_LOCATION_RADIUS_SCALE`` x the larger box side) AND that event's
+        track is not visible in the current frame, i.e. its identity was lost.
+        An earlier event whose track is still visible, or one from this same
+        frame, is a different person, never a reason to suppress.  The window
+        runs from the emitted event only; suppressed edges do not extend it.
+        """
+        window = max(0.0, float(self.location_cooldown_sec))
+        if window <= 0.0:
+            self._recent_falls = []
+            return False
+        self._recent_falls = [f for f in self._recent_falls
+                              if 0.0 <= now - f[0] <= window]
+        return any(
+            ts < now and tid != track_id and tid not in visible_ids and
+            _boxes_near(b, box)
+            for ts, b, tid in self._recent_falls)
+
+    def _remember_fall(self, track_id, box, now):
+        if max(0.0, float(self.location_cooldown_sec)) <= 0.0:
+            return
+        self._recent_falls.append((now, list(box), track_id))
+        del self._recent_falls[:-_RECENT_FALLS_MAX]
+
     def _temporal_for(self, track_id):
         classifier = self.temporal_classifiers.get(track_id)
         if classifier is None:
@@ -544,6 +595,8 @@ class FallDetectionApp(App):
         # track advances its own detector; a lost one receives ``None`` so the
         # temporal state machine can apply its post-impact occlusion grace.
         tracks = self.tracker.update(results, frame.pts)
+        visible_ids = {t.track_id for t in tracks
+                       if t.detection_index is not None}
         for track in tracks:
             person = None
             if track.detection_index is not None:
@@ -611,8 +664,16 @@ class FallDetectionApp(App):
                 person["missed_frames"] = 0
                 person["features"] = events[-1]["features"]
 
-            # Edge event: a fall was just confirmed for THIS identity.
-            if out.fall_event:
+            # Edge event: a fall was just confirmed for THIS identity.  A
+            # repeat at the location of a recent event whose track is gone
+            # (same person under a new track id) is logged but not emitted.
+            if out.fall_event and self._location_cooldown_hit(
+                    track.track_id, track.box, frame.pts, visible_ids):
+                print(f"[fall] suppressed FALL track={track.track_id} "
+                      f"#{out.event_id} at pts={frame.pts:.2f} "
+                      f"(location cooldown)", flush=True)
+            elif out.fall_event:
+                self._remember_fall(track.track_id, track.box, frame.pts)
                 request_configured_recording(self, "fall", frame.pts)
                 events.append({
                     "kind": "fall",

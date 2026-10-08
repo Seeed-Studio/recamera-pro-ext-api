@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import gc
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import logging
@@ -34,6 +34,8 @@ from kit.runtime.engine import (
 )
 
 from .driver_lock import NpuDriverCoordinator
+from ._concurrency import NativeOperationGate
+from ._memory import DeferredCycleCollector, service_runtime
 from .authorization import (
     AuthorizationError,
     AuthorizationPending,
@@ -42,6 +44,7 @@ from .authorization import (
     RegistryAuthorizer,
 )
 from .scheduler import (
+    MAX_CONCURRENT_MODELS,
     DeadlineExceededError,
     FairScheduler,
     QueueFullError,
@@ -69,14 +72,17 @@ class Backend(Protocol):
 class RknnBackend:
     """Real target backend.  Every context lives in this daemon process.
 
-    rkipc and this backend use the same crash-safe file lock around vendor
-    load/run/release calls.  Contexts therefore remain resident concurrently,
-    while the RV1126B driver is never entered from both processes at once.
+    Independent contexts may infer concurrently under shared kernel fences.
+    Load/release use an exclusive fence, also honored by existing rkipc builds.
+    The service separately protects each context, its DMA bindings and lifetime.
     """
 
     def __init__(self, *, runtime_factory=None, coordinator=None) -> None:
         self._runtime_factory = runtime_factory
         self.coordinator = coordinator or NpuDriverCoordinator()
+        self._native_gate = NativeOperationGate()
+        self._cycles = DeferredCycleCollector()
+        self._cleanup_local = threading.local()
 
     def _new_runtime(self, model_spec: Optional[ModelSpec] = None):
         if self._runtime_factory is not None:
@@ -84,8 +90,61 @@ class RknnBackend:
         if model_spec is None:
             # Keep the small internal hook source-compatible for diagnostics
             # and vendor tests that instantiate a backend directly.
-            return _default_runtime_factory()
-        return _runtime_for_spec(model_spec)
+            return service_runtime(_default_runtime_factory())
+        return service_runtime(_runtime_for_spec(model_spec))
+
+    @staticmethod
+    def _needs_collection(handle):
+        return (getattr(handle, "backend", None) != "ctypes"
+                and getattr(handle, "collects_output_cycles", False) is not True)
+
+    def _defer_collection(self):
+        self._cycles.request()
+        self._cleanup_local.pending = True
+
+    def output_cleanup(self, handle):
+        if self._needs_collection(handle):
+            # Called on the connection thread before queuing inference. Its
+            # response may finish before a timed-out worker finishes executing.
+            self._cleanup_local.pending = True
+            return self.response_finished
+        return None
+
+    def response_finished(self):
+        if getattr(self._cleanup_local, "pending", False):
+            self._cleanup_local.pending = False
+            self._cycles.request()
+
+    def collect_pending(self, *, force=False, wait=False):
+        # The accept loop must not wait behind a running model. No extra NPU
+        # flock is acquired for GC, and ctypes-only workloads never request it.
+        # Workers wait once GC is due: repeated nonblocking attempts could
+        # starve cleanup forever while unrelated contexts remain busy.
+        if not self._cycles.pending(force=force):
+            return False
+        with self._native_gate.exclusive(blocking=force or wait) as acquired:
+            if not acquired:
+                return False
+            return self._cycles.collect(force=force)
+
+    def _inference_driver(self):
+        # Explicit custom coordinators retain their original hold() contract.
+        return getattr(self.coordinator, "inference", self.coordinator.hold)()
+
+    @contextmanager
+    def admission(self, validate):
+        # A worker can wait for GC or an older process's exclusive driver lock.
+        # Revalidate at the actual native boundary, not just when dequeuing.
+        self._cleanup_local.validate = validate
+        try:
+            yield
+        finally:
+            del self._cleanup_local.validate
+
+    def _validate_admission(self):
+        validate = getattr(self._cleanup_local, "validate", None)
+        if validate is not None:
+            validate()
 
     def _select_runtime(self, model_spec: ModelSpec):
         """Return ``(runtime, may_fall_back_to_rknnlite)``.
@@ -130,19 +189,24 @@ class RknnBackend:
         # Backend selection happens before entering the driver lock and before
         # either implementation performs native model loading.
         runtime, may_fall_back = self._select_runtime(model_spec)
-        with self.coordinator.hold() as token:
+        with self._native_gate.exclusive():
             try:
-                self._initialize(token, runtime, path, model_spec)
-            except CtypesUnsupportedModel as unsupported:
-                # Fall back only after the ctypes context was destroyed; a
-                # failed teardown has already quarantined the driver.
-                if not (may_fall_back and getattr(runtime, "released", False)
-                        and not getattr(runtime, "native_cleanup_failed", False)):
-                    raise
-                log.info("ctypes backend cannot run %s (%s); using RKNNLite",
-                         model_spec.name or path, unsupported)
-                runtime = _default_runtime_factory()
-                self._initialize(token, runtime, path, model_spec)
+                with self.coordinator.hold() as token:
+                    try:
+                        self._initialize(token, runtime, path, model_spec)
+                    except CtypesUnsupportedModel as unsupported:
+                        # Fall back only after safe native context teardown.
+                        if not (may_fall_back and getattr(runtime, "released", False)
+                                and not getattr(runtime, "native_cleanup_failed", False)):
+                            raise
+                        log.info("ctypes backend cannot run %s (%s); using RKNNLite",
+                                 model_spec.name or path, unsupported)
+                        runtime = service_runtime(_default_runtime_factory())
+                        self._initialize(token, runtime, path, model_spec)
+            finally:
+                if self._needs_collection(runtime):
+                    self._defer_collection()
+                    self.collect_pending(force=True)
         return runtime
 
     @staticmethod
@@ -174,40 +238,42 @@ class RknnBackend:
             raise
 
     def infer(self, handle: Any, inputs: Sequence[np.ndarray]) -> list[np.ndarray]:
-        if (getattr(handle, "backend", None) != "ctypes"
-                and getattr(handle, "collects_output_cycles", False) is not True):
-            # RKNNLite 2.3.2 keeps each call's output arrays in reference
-            # cycles, so only the cyclic GC frees them.  GC is triggered by
-            # object counts, not bytes: a 34 MB SenseVoice logits tensor per
-            # call accumulated until the kernel OOM-killed this daemon.  By
-            # now the previous call's outputs have been sent and dropped, so
-            # a full collection here reclaims them without copying the
-            # current outputs. Runs outside the driver lock. Kit's protected
-            # wrapper already collects at return/exception boundaries; only
-            # raw/injected RKNNLite handles need this compatibility fallback.
-            gc.collect()
-        with self.coordinator.hold():
-            outputs = handle.inference(inputs=list(inputs))
-            if outputs is None:
-                raise RuntimeError("RKNNLite.inference returned no outputs")
-            return list(outputs)
+        needs_collection = self._needs_collection(handle)
+        self.collect_pending(force=needs_collection, wait=True)
+        with self._native_gate.shared():
+            try:
+                with self._inference_driver():
+                    self._validate_admission()
+                    outputs = handle.inference(inputs=list(inputs))
+                    if outputs is None:
+                        raise RuntimeError("RKNNLite.inference returned no outputs")
+                    return list(outputs)
+            finally:
+                if needs_collection:
+                    self._defer_collection()
 
     def release(self, handle: Any) -> None:
-        with self.coordinator.hold() as token:
+        with self._native_gate.exclusive():
             try:
-                result = handle.release()
-                if result not in (None, 0):
-                    raise RuntimeError(f"RKNNLite.release returned {result!r}")
-            except BaseException as exc:
-                token.retain_fail_closed(f"RKNN context teardown failed: {exc}")
-                raise
+                with self.coordinator.hold() as token:
+                    try:
+                        result = handle.release()
+                        if result not in (None, 0):
+                            raise RuntimeError(f"RKNNLite.release returned {result!r}")
+                    except BaseException as exc:
+                        token.retain_fail_closed(f"RKNN context teardown failed: {exc}")
+                        raise
+            finally:
+                if self._needs_collection(handle):
+                    self._defer_collection()
+                    self.collect_pending(force=True)
 
     def shared_io_size(self, handle):
         return (int(handle.shared_io_size_bytes)
                 if getattr(handle, "io_mode", None) == "bound" else 0)
 
     def open_shared_io(self, handle):
-        with self.coordinator.hold() as token:
+        with self._native_gate.exclusive(), self.coordinator.hold() as token:
             input_buffer = None
             try:
                 input_buffer = handle.allocate_input_buffer()
@@ -226,7 +292,7 @@ class RknnBackend:
             return input_buffer, outputs
 
     def close_shared_io(self, handle, channel):
-        with self.coordinator.hold() as token:
+        with self._native_gate.exclusive(), self.coordinator.hold() as token:
             try:
                 handle.release_input_buffer(channel.input)
                 handle.release_output_buffers(channel.outputs)
@@ -236,9 +302,14 @@ class RknnBackend:
 
     def infer_shared_io(self, handle, channel):
         started = time.monotonic()
-        with self.coordinator.hold():
-            admitted = time.monotonic()
-            handle.infer_dma_buffers(channel.input, channel.outputs)
+        # Collect before admission: a native reader must not upgrade to a GC
+        # writer while other readers are executing. DMA-only work schedules no GC.
+        self.collect_pending(wait=True)
+        with self._native_gate.shared():
+            with self._inference_driver():
+                self._validate_admission()
+                admitted = time.monotonic()
+                handle.infer_dma_buffers(channel.input, channel.outputs)
         return {
             "driver_wait": (admitted - started) * 1000.0,
             "runtime": (time.monotonic() - admitted) * 1000.0,
@@ -293,6 +364,7 @@ class _Model:
     failures: int = 0
     total_ms: float = 0.0
     last_ms: float = 0.0
+    operation_lock: Any = field(default_factory=threading.RLock, repr=False)
 
 
 @dataclass
@@ -330,6 +402,7 @@ class _Client:
     authorization: Optional[ClientAuthorization] = None
     aliases: dict[str, str] = field(default_factory=dict)
     shared_io: dict[str, _SharedIO] = field(default_factory=dict)
+    closing: bool = False
 
 
 def _error(code: str, message: str, *, retryable: bool = False, **details) -> dict:
@@ -419,6 +492,7 @@ class InferenceService:
         memory_budget_mb: int = 768,
         max_clients: int = 32,
         max_pending_per_client: int = 8,
+        max_concurrent_models: int = MAX_CONCURRENT_MODELS,
         socket_mode: int = 0o660,
         authorizer=None,
         client_idle_timeout: float = 60.0,
@@ -448,7 +522,8 @@ class InferenceService:
         self._stopping = threading.Event()
         self._closed = False
         self._fault: Optional[str] = None
-        self.scheduler = FairScheduler(max_pending_per_client=max_pending_per_client)
+        self.scheduler = FairScheduler(max_pending_per_client=max_pending_per_client,
+                                       max_concurrent_models=max_concurrent_models)
 
     def _record_native_fault(self, exc: BaseException, *, operation: str) -> str:
         """Publish a fail-closed backend quarantine through service status.
@@ -500,8 +575,14 @@ class InferenceService:
     def serve_forever(self) -> None:
         self.start()
         while not self._stopping.is_set():
+            collect = getattr(self.backend, "collect_pending", None)
+            if callable(collect):
+                collect()
+            listener = self._listener
+            if listener is None:
+                break
             try:
-                conn, _ = self._listener.accept()  # type: ignore[union-attr]
+                conn, _ = listener.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -574,6 +655,12 @@ class InferenceService:
                     # and flock on this exact failure by design.
                     self._record_native_fault(exc, operation="shutdown release failed")
                     break
+        finish = getattr(self.backend, "response_finished", None)
+        if callable(finish):
+            finish()
+        collect = getattr(self.backend, "collect_pending", None)
+        if callable(collect):
+            collect(force=True)
         try:
             if stat_is_socket(os.lstat(self.socket_path).st_mode):
                 os.unlink(self.socket_path)
@@ -693,6 +780,9 @@ class InferenceService:
                     # recv, including failed sends. Shared DMA allocations stay
                     # owned by client.shared_io until unload/disconnect.
                     request = tensors = response = outputs = fds = None
+                    finish = getattr(self.backend, "response_finished", None)
+                    if callable(finish):
+                        finish()
         except (EOFError, BrokenPipeError, ConnectionResetError):
             pass
         except ProtocolError as exc:
@@ -718,6 +808,9 @@ class InferenceService:
         finally:
             if client is not None:
                 self._drop_client(client)
+            finish = getattr(self.backend, "response_finished", None)
+            if callable(finish):
+                finish()
             conn.close()
             with self._lock:
                 self._connections.discard(conn)
@@ -907,12 +1000,9 @@ class InferenceService:
                     inputs=policy.inputs,
                 )
                 with self._lock:
-                    existing = self._models.get(key)
-                    if existing is None:
-                        self._models[key] = model
-                    else:
-                        self.backend.release(handle)
-                        model = existing
+                    # The lifecycle mutex serializes cache load/unload; never
+                    # call native release while holding the metadata lock.
+                    self._models[key] = model
             with self._lock:
                 model.aliases.add(owner)
                 client.aliases[alias] = key
@@ -951,6 +1041,17 @@ class InferenceService:
             raise MemoryError("shared IO exceeds application memory budget")
 
     def _open_shared_io(self, client, request):
+        # Channel allocation/rebinding mutates the cached context even when a
+        # different client owns its current buffers. Drain that context first.
+        with self._driver_lock:
+            with self._lock:
+                model = self._models.get(client.aliases.get(str(request.get("alias") or "")))
+                if model is None:
+                    raise KeyError("model alias is not loaded")
+            with model.operation_lock:
+                return self._open_shared_io_locked(client, request)
+
+    def _open_shared_io_locked(self, client, request):
         alias = str(request.get("alias") or "")
         if request.get("version") != SHARED_IO_VERSION:
             raise ValueError("unsupported shared IO version")
@@ -1024,32 +1125,42 @@ class InferenceService:
         deadline = time.monotonic() + timeout_ms / 1000.0
         queued_at = time.monotonic()
         timings = {}
+        elapsed_ms = [0.0]
+
+        def validate_admission():
+            if client.authorization is None:
+                raise AuthorizationError("inference authorization is missing")
+            self.authorizer.validate(client.authorization)
+            with self._lock:
+                if self._fault:
+                    raise RuntimeError(f"inference service is faulted: {self._fault}")
+                if client.closing or self._stopping.is_set():
+                    raise RuntimeError("inference client or service is stopping")
+                if self._models.get(model.key) is not model:
+                    raise RuntimeError("model was unloaded before inference")
+                if (client.aliases.get(alias) != model.key
+                        or (client.id, alias) not in model.aliases):
+                    raise RuntimeError("model alias was unloaded before inference")
+                if shared is not None and (
+                    client.shared_io.get(alias) is not shared or shared.poisoned
+                ):
+                    raise RuntimeError("shared IO was closed before inference")
+            if time.monotonic() >= deadline:
+                raise DeadlineExceededError("inference deadline expired before native execution")
 
         def execute():
             started = time.monotonic()
             timings["queue"] = (started - queued_at) * 1000.0
             try:
-                if client.authorization is None:
-                    raise AuthorizationError("inference authorization is missing")
-                with self._driver_lock:
-                    # A job may have waited behind other applications after its
-                    # request was accepted.  Recheck the launch-generation only
-                    # after it has acquired the driver admission lock: checking
-                    # before this lock would let an already-revoked queued job
-                    # enter RKNN after another model finishes.
-                    self.authorizer.validate(client.authorization)
-                    with self._lock:
-                        if self._models.get(model.key) is not model:
-                            raise RuntimeError("model was unloaded before inference")
-                        if shared is not None and (
-                            client.shared_io.get(alias) is not shared or shared.poisoned
-                        ):
-                            raise RuntimeError("shared IO was closed before inference")
-                    if shared is None:
-                        outputs = self.backend.infer(model.handle, tensors)
-                    else:
-                        timings.update(self.backend.infer_shared_io(model.handle, shared) or {})
-                        outputs = []
+                with model.operation_lock:
+                    validate_admission()
+                    admission = getattr(self.backend, "admission", None)
+                    with admission(validate_admission) if callable(admission) else nullcontext():
+                        if shared is None:
+                            outputs = self.backend.infer(model.handle, tensors)
+                        else:
+                            timings.update(self.backend.infer_shared_io(model.handle, shared) or {})
+                            outputs = []
                     model.next_allowed = (
                         time.monotonic() + 1.0 / model.max_fps if model.max_fps > 0 else 0.0
                     )
@@ -1059,6 +1170,7 @@ class InferenceService:
                 raise
             finally:
                 elapsed = (time.monotonic() - started) * 1000.0
+                elapsed_ms[0] = elapsed
                 model.calls += 1
                 model.last_ms = elapsed
                 model.total_ms += elapsed
@@ -1072,13 +1184,27 @@ class InferenceService:
             deadline=deadline,
             execute=execute,
             ready_at=lambda: model.next_allowed,
+            cleanup=(self.backend.output_cleanup(model.handle)
+                     if callable(getattr(self.backend, "output_cleanup", None)) else None),
+            concurrency_key=model.key,
         )
         self.scheduler.submit(job)
         outputs = job.result(timeout=timeout_ms / 1000.0 + 1.0)
         return {"outputs": outputs, "model_key": model.key,
-                "latency_ms": model.last_ms, "timings_ms": timings}
+                "latency_ms": elapsed_ms[0], "timings_ms": timings}
 
     def _unload(self, client: _Client, alias: str) -> dict:
+        with self._driver_lock:
+            with self._lock:
+                model = self._models.get(client.aliases.get(alias))
+            if model is None:
+                return self._unload_locked(client, alias)
+            # Includes jobs whose caller has timed out: the model/IO must stay
+            # alive until the native call (not merely its response) has ended.
+            with model.operation_lock:
+                return self._unload_locked(client, alias)
+
+    def _unload_locked(self, client: _Client, alias: str) -> dict:
         if not alias:
             raise ValueError("missing model alias")
         owner = (client.id, alias)
@@ -1122,6 +1248,8 @@ class InferenceService:
         return {"alias": alias, "released": True}
 
     def _drop_client(self, client: _Client) -> None:
+        with self._lock:
+            client.closing = True
         self.scheduler.cancel_client(client.id)
         for alias in list(client.aliases):
             try:
@@ -1133,6 +1261,7 @@ class InferenceService:
             self._clients.pop(client.id, None)
 
     def status(self) -> dict:
+        scheduling = self.scheduler.status()
         backend_name = getattr(self.backend, "backend_name", None)
         with self._lock:
             models = [
@@ -1169,6 +1298,7 @@ class InferenceService:
                 "memory_budget_mb": self.memory_budget_mb,
                 "memory_reserved_mb": sum(item.memory_mb for item in self._models.values()),
                 "shared_io_reserved_bytes": self._shared_bytes(),
+                **scheduling,
             }
 
     def __enter__(self) -> "InferenceService":
@@ -1190,6 +1320,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="reCamera multi-model inference service")
     parser.add_argument("--socket", default=DEFAULT_SOCKET)
     parser.add_argument("--memory-mb", type=int, default=768)
+    parser.add_argument("--max-concurrent-models", type=int,
+                        choices=range(1, MAX_CONCURRENT_MODELS + 1),
+                        default=MAX_CONCURRENT_MODELS,
+                        help="independent model contexts in flight (default: 4; 1 for serial mode)")
     parser.add_argument(
         "--authorization-dir",
         default=None,
@@ -1206,6 +1340,7 @@ def main(argv=None) -> int:
         args.socket,
         allowed_roots=args.allowed_roots or DEFAULT_ALLOWED_ROOTS,
         memory_budget_mb=args.memory_mb,
+        max_concurrent_models=args.max_concurrent_models,
         authorizer=RegistryAuthorizer(root=args.authorization_dir),
     )
     previous_handlers = {}

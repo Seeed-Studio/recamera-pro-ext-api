@@ -1,0 +1,446 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 18,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.2,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [
+    {
+      "id": "hand-detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/hand_detector_fp16.rknn",
+      "sha256": "55ba0ce2720ea37be05edc54f2fadb857124863cd08a7c555328fdd473a3e76e",
+      "size": 2714471,
+      "mount": "models/hand_detector_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "hand-landmarker",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/hand_landmarks_detector_fp16.rknn",
+      "sha256": "cfa61ac5f80dd04fcd743ccd1eef179d5552f81c69abc57a8ca18b4b425e9f4a",
+      "size": 5746344,
+      "mount": "models/hand_landmarks_detector_fp16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "gesture-heads",
+      "kind": "data",
+      "source": "bundled",
+      "file": "gesture_heads.npz",
+      "sha256": "0bd98840270ecf619280eb700f7dc3649ba96a537147b5a48a5f127e0e50dc5c",
+      "size": 551962,
+      "mount": "gesture_heads.npz",
+      "required": true,
+      "share_scope": "private"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "exclusive",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 512,
+      "cpu_percent": 300,
+      "storage_mb": 64,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "hand-gesture",
+  "name": "Hand Gesture",
+  "name_zh": "手势识别",
+  "version": "0.2.7",
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "type": "self-hosted",
+  "scene": "Interaction & Control",
+  "scene_zh": "交互控制",
+  "description": "On-device MediaPipe gesture recognition on reCamera Pro: an SSD palm detector (192) finds hands, a rotated-ROI landmark model (224) fits 21 keypoints per hand, and the official gesture embedder + canned classifier heads (numpy-replicated weights) label 8 gestures (None / Closed_Fist / Open_Palm / Pointing_Up / Thumb_Down / Thumb_Up / Victory / ILoveYou) with handedness. End-to-end verified against the official MediaPipe Python task on the official test images.",
+  "description_zh": "reCamera Pro 设备端 MediaPipe 手势识别：SSD 手掌检测（192）找手，旋转 ROI 关键点模型（224）回归 21 个手部关键点，官方手势 embedder + 分类头（numpy 精确复刻权重）输出 8 类手势（None/Closed_Fist/Open_Palm/Pointing_Up/Thumb_Down/Thumb_Up/Victory/ILoveYou）与左右手。已在官方测试图上与官方 mediapipe 包端到端对齐验证。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "capabilities": [
+    "output"
+  ],
+  "models": [
+    {
+      "id": "hand_detector_fp16",
+      "file": "models/hand_detector_fp16.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        192,
+        192,
+        3
+      ],
+      "quant": "fp16",
+      "classes": [
+        "hand"
+      ],
+      "role": "stage1_palm_detector"
+    },
+    {
+      "id": "hand_landmarks_detector_fp16",
+      "file": "models/hand_landmarks_detector_fp16.rknn",
+      "task": "keypoints",
+      "input": [
+        1,
+        224,
+        224,
+        3
+      ],
+      "quant": "fp16",
+      "role": "stage2_hand_landmarks"
+    }
+  ],
+  "x-default_model": "hand_detector_fp16",
+  "render": {
+    "schema_version": 1,
+    "boxes": {
+      "color_by": "gesture",
+      "label": "label",
+      "line_width": 2
+    },
+    "keypoints": {
+      "layout": "hand21",
+      "point_radius": 2,
+      "line_width": 1
+    },
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "results[]{box,score,kind,gesture,gesture_conf,hand,presence,keypoints} + events[]{kind=gesture,...}",
+    "topic": "recamera/hand-gesture/results",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "default_mapping": [
+      {
+        "source": "detection.count",
+        "target": "hand_count",
+        "topic": "recamera/{{ app }}/count",
+        "task": "detection"
+      },
+      {
+        "source": "events.gesture | last",
+        "target": "gesture",
+        "topic": "recamera/{{ app }}/gesture",
+        "task": "classification"
+      }
+    ],
+    "fields": [
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Palm box, original-frame xyxy pixels"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Palm detection confidence"
+      },
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Result kind, always 'hand'"
+      },
+      {
+        "name": "gesture",
+        "from": "results[].gesture",
+        "type": "string",
+        "description": "Gesture label, one of None/Closed_Fist/Open_Palm/Pointing_Up/Thumb_Down/Thumb_Up/Victory/ILoveYou"
+      },
+      {
+        "name": "label",
+        "from": "results[].label",
+        "type": "string",
+        "description": "Frontend-compatible gesture label"
+      },
+      {
+        "name": "gesture_raw",
+        "from": "results[].gesture_raw",
+        "type": "string",
+        "optional": true,
+        "description": "Current-frame gesture label before temporal voting"
+      },
+      {
+        "name": "vote_count",
+        "from": "results[].vote_count",
+        "type": "integer",
+        "optional": true,
+        "description": "Votes for the stable gesture within the current window"
+      },
+      {
+        "name": "class_name",
+        "from": "results[].class_name",
+        "type": "string",
+        "description": "Frontend-compatible class label"
+      },
+      {
+        "name": "gesture_conf",
+        "from": "results[].gesture_conf",
+        "type": "float",
+        "description": "Gesture softmax confidence"
+      },
+      {
+        "name": "hand",
+        "from": "results[].hand",
+        "type": "string",
+        "description": "Left/Right hand (de-mirrored for non-selfie cameras)"
+      },
+      {
+        "name": "presence",
+        "from": "results[].presence",
+        "type": "float",
+        "description": "Landmarker hand-presence score; rows below min_presence are dropped"
+      },
+      {
+        "name": "keypoints",
+        "from": "results[].keypoints",
+        "type": "array",
+        "coord": "normalized_points",
+        "optional": true,
+        "description": "21 hand keypoints as normalized [x,y] pairs in original-frame space"
+      }
+    ]
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Palm detection",
+        "title_zh": "手掌检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Palm confidence",
+            "title_zh": "手掌置信度",
+            "min": 0.1,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          },
+          {
+            "key": "nms",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.3
+          },
+          {
+            "key": "max_hands",
+            "type": "integer",
+            "apply": "live",
+            "title": "Max hands",
+            "title_zh": "最大手数",
+            "min": 1,
+            "max": 4,
+            "step": 1,
+            "default": 2
+          }
+        ]
+      },
+      {
+        "key": "recognition",
+        "title": "Gesture recognition",
+        "title_zh": "手势识别",
+        "items": [
+          {
+            "key": "roi_shift_y",
+            "type": "number",
+            "apply": "live",
+            "title": "ROI vertical shift",
+            "title_zh": "ROI 垂直偏移",
+            "min": -1.0,
+            "max": 0.5,
+            "step": 0.05,
+            "default": -0.55,
+            "help": "MediaPipe hand landmark ROI vertical shift; negative moves the crop toward the fingers.",
+            "help_zh": "MediaPipe 手部关键点 ROI 垂直偏移；负值将裁剪区域向手指方向移动。"
+          },
+          {
+            "key": "roi_scale",
+            "type": "number",
+            "apply": "live",
+            "title": "ROI scale",
+            "title_zh": "ROI 缩放",
+            "min": 1.6,
+            "max": 3.5,
+            "step": 0.1,
+            "default": 2.5,
+            "help": "Size of the rotated landmark crop relative to the palm box.",
+            "help_zh": "旋转关键点裁剪框相对手掌框的大小。"
+          },
+          {
+            "key": "vote_window",
+            "type": "integer",
+            "apply": "live",
+            "title": "Vote window (frames)",
+            "title_zh": "投票窗口（帧数）",
+            "min": 1,
+            "max": 15,
+            "step": 1,
+            "default": 5,
+            "help": "Majority vote over the last N frames per hand; 1 disables voting.",
+            "help_zh": "对每只手最近 N 帧做多数投票防抖；1 表示关闭投票。"
+          },
+          {
+            "key": "vote_min_votes",
+            "type": "integer",
+            "apply": "live",
+            "title": "Vote min votes",
+            "title_zh": "投票最少票数",
+            "min": 0,
+            "max": 15,
+            "step": 1,
+            "default": 0,
+            "help": "Minimum votes to switch the stable gesture; 0 = automatic majority.",
+            "help_zh": "切换稳定手势所需的最少票数；0 表示自动取多数。"
+          },
+          {
+            "key": "min_presence",
+            "type": "number",
+            "apply": "live",
+            "title": "Landmark presence gate",
+            "title_zh": "关键点存在门限",
+            "min": 0.1,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5,
+            "help": "Hands whose landmark presence score falls below this are dropped before gesture classification.",
+            "help_zh": "关键点存在分低于此值的手不做手势分类。"
+          },
+          {
+            "key": "gesture_min_conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Gesture min confidence",
+            "title_zh": "手势最小置信度",
+            "min": 0.1,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5,
+            "help": "Below this the gesture is reported as None.",
+            "help_zh": "低于此置信度时手势报为 None。"
+          }
+        ]
+      }
+    ]
+  },
+  "image": "/appcenter/apps/hand-gesture.png",
+  "ha_entities": [
+    {
+      "component": "sensor",
+      "object_id": "hand_count",
+      "name": "Hand Count",
+      "value_template": "{{ value_json.hand_count }}",
+      "state_class": "measurement",
+      "icon": "mdi:hand-wave"
+    },
+    {
+      "component": "sensor",
+      "object_id": "gesture",
+      "name": "Gesture",
+      "value_template": "{{ value_json.gesture.gesture }}",
+      "icon": "mdi:hand-peace"
+    }
+  ]
+}

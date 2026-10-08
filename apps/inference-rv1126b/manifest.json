@@ -1,0 +1,329 @@
+{
+  "manifest_version": 2,
+  "id": "inference-rv1126b",
+  "name": "Inference RV1126B",
+  "name_zh": "Inference Workflows",
+  "version": "0.3.9",
+  "type": "self-hosted",
+  "description": "Roboflow Workflows with native Builder, RKNN inference and RV1126B camera sources.",
+  "icon": {
+    "path": "icon.jpg",
+    "media_type": "image/jpeg"
+  },
+  "entry": "app.py",
+  "release": {
+    "sequence": 15,
+    "channel": "dev"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": [
+      "inference_edge_probe"
+    ]
+  },
+  "artifacts": [],
+  "models": [],
+  "config_schema": {
+    "revision": 4,
+    "groups": [
+      {
+        "key": "access",
+        "title": "Service access",
+        "title_zh": "服务访问",
+        "items": [
+          {
+            "key": "host",
+            "type": "select",
+            "title": "Listen address",
+            "title_zh": "监听地址",
+            "default": "0.0.0.0",
+            "options": [
+              "127.0.0.1",
+              "0.0.0.0"
+            ],
+            "option_labels": [
+              "Device only",
+              "Local network"
+            ],
+            "option_labels_zh": [
+              "仅设备本机",
+              "局域网访问"
+            ],
+            "apply": "restart",
+            "help": "Local network access is required to open the online canvas from another device.",
+            "help_zh": "默认允许局域网访问，以便在浏览器中打开在线画布。"
+          },
+          {
+            "key": "port",
+            "type": "integer",
+            "title": "HTTP port",
+            "title_zh": "HTTP 端口",
+            "default": 9001,
+            "min": 1024,
+            "max": 65535,
+            "step": 1,
+            "apply": "restart",
+            "help": "Use a port that is not used by another application.",
+            "help_zh": "请选择未被其他应用占用的端口。"
+          },
+          {
+            "key": "api_token",
+            "type": "password",
+            "title": "Access token",
+            "title_zh": "访问口令",
+            "default": "",
+            "apply": "restart",
+            "help": "Generated and saved on first start if empty. Used for direct Workflow page and API access; Edit Workflow signs in automatically.",
+            "help_zh": "留空时首次启动会自动生成并保存，可在此查看或修改。直接访问 Workflow 页面或 API 时使用；从编辑工作流入口进入会自动认证。"
+          },
+          {
+            "key": "roboflow_api_key",
+            "type": "password",
+            "title": "Roboflow API key (optional)",
+            "title_zh": "Roboflow API Key（可选）",
+            "default": "",
+            "apply": "restart",
+            "help": "Optional authorization for cloud Workflows and restricted Roboflow models. Open pretrained models do not need it.",
+            "help_zh": "获取云端工作流或需要授权的 Roboflow 模型时使用；开放预训练模型无需填写。"
+          }
+        ]
+      },
+      {
+        "key": "workflow",
+        "title": "Workflow deployment",
+        "title_zh": "工作流部署",
+        "items": [
+          {
+            "key": "workflow_id",
+            "type": "string",
+            "title": "Workflow",
+            "title_zh": "工作流",
+            "default": "",
+            "apply": "restart",
+            "help_zh": "选择后，应用启动即运行该流程；留空仅启动工作流编辑服务。"
+          },
+          {
+            "key": "workflow_parameters",
+            "type": "string",
+            "title": "Workflow input parameters (JSON)",
+            "title_zh": "Workflow 输入参数（JSON）",
+            "default": "{}",
+            "apply": "restart",
+            "help_zh": "工作流的业务输入参数（JSON 对象）；图像由所选视频输入源提供。"
+          },
+          {
+            "key": "video_source",
+            "type": "select",
+            "title": "Video source",
+            "title_zh": "视频输入源",
+            "default": "camera",
+            "options": [
+              "camera",
+              "rtsp"
+            ],
+            "option_labels": [
+              "Device camera",
+              "RTSP stream"
+            ],
+            "option_labels_zh": [
+              "设备摄像头",
+              "RTSP 视频流"
+            ],
+            "apply": "restart"
+          },
+          {
+            "key": "rtsp_url",
+            "type": "password",
+            "title": "RTSP URL",
+            "title_zh": "RTSP 地址",
+            "default": "",
+            "apply": "restart",
+            "help_zh": "仅 RTSP 输入需要。可包含摄像头认证，例如 rtsp://用户名:密码@主机/路径。"
+          },
+          {
+            "key": "workflow_fps",
+            "type": "number",
+            "title": "Workflow processing FPS limit",
+            "title_zh": "工作流处理帧率上限",
+            "default": 3,
+            "min": 0.1,
+            "max": 60,
+            "step": 0.1,
+            "apply": "restart",
+            "help_zh": "同时受服务最高处理帧率限制；实际速度取决于流程。"
+          }
+        ]
+      },
+      {
+        "key": "limits",
+        "title": "Runtime limits",
+        "title_zh": "运行限制",
+        "description": "Changes apply after the application restarts.",
+        "description_zh": "保存修改后，应用重启生效。",
+        "items": [
+          {
+            "key": "max_fps",
+            "type": "number",
+            "title": "Maximum camera FPS",
+            "title_zh": "相机最高处理帧率",
+            "default": 10,
+            "min": 0.1,
+            "max": 60,
+            "step": 0.1,
+            "apply": "restart",
+            "help": "A rate limit; actual throughput depends on the model and Workflow.",
+            "help_zh": "这是处理帧率上限，实际速度取决于模型和 Workflow。"
+          },
+          {
+            "key": "max_workflow_steps",
+            "type": "integer",
+            "title": "Maximum Workflow steps",
+            "title_zh": "Workflow 最大节点数",
+            "default": 128,
+            "min": 1,
+            "max": 256,
+            "step": 1,
+            "apply": "restart"
+          },
+          {
+            "key": "max_request_mib",
+            "type": "integer",
+            "title": "Maximum request size (MiB)",
+            "title_zh": "请求体上限（MiB）",
+            "default": 32,
+            "min": 1,
+            "max": 64,
+            "step": 1,
+            "apply": "restart"
+          },
+          {
+            "key": "max_response_kib",
+            "type": "integer",
+            "title": "Maximum response size (KiB)",
+            "title_zh": "响应体上限（KiB）",
+            "default": 8192,
+            "min": 64,
+            "max": 16384,
+            "step": 64,
+            "apply": "restart"
+          },
+          {
+            "key": "max_image_pixels",
+            "type": "integer",
+            "title": "Maximum image pixels",
+            "title_zh": "图像最大像素数",
+            "default": 8847360,
+            "min": 65536,
+            "max": 8847360,
+            "step": 65536,
+            "apply": "restart",
+            "help": "Width multiplied by height; applies to uploaded images and camera input.",
+            "help_zh": "按宽×高计算，适用于上传图像与相机输入。"
+          },
+          {
+            "key": "max_video_output_pixels",
+            "type": "integer",
+            "title": "Video preview pixel limit",
+            "title_zh": "视频预览像素上限",
+            "default": 921600,
+            "min": 307200,
+            "max": 2073600,
+            "step": 1,
+            "apply": "restart",
+            "help_zh": "仅缩放WebRTC预览画面，不改变模型输入或检测结果坐标。"
+          }
+        ]
+      }
+    ]
+  },
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 768,
+      "cpu_percent": 200,
+      "storage_mb": 800,
+      "shutdown_grace_sec": 15
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [
+        "inference.http",
+        "inference.webrtc"
+      ],
+      "outbound": [
+        "roboflow.api",
+        "inference.media",
+        "model.conversion"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 60,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "capabilities": [],
+  "x-workflow-ui": {
+    "version": 1
+  }
+}
