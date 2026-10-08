@@ -84,7 +84,11 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         with open(os.path.join(app_dir, "manifest.json"), "w") as f:
             json.dump(MANIFEST, f)
         for pathname in (appconfig.config_path(APP),
-                         appconfig.legacy_config_path(APP)):
+                         appconfig.legacy_config_path(APP),
+                         appconfig.legacy_config_path(APP) + ".migrated",
+                         os.path.join(paths.appdata_dir(APP),
+                                      "config.quarantine.json"),
+                         appconfig._user_config_token_path(APP)):
             try:
                 os.remove(pathname)
             except FileNotFoundError:
@@ -165,6 +169,43 @@ class ConfigRollbackReplayTests(unittest.TestCase):
         self.assertEqual(self._saved(), {})
         appconfig.restore_upgrade_config(snapshot)
         self.assertEqual(self._saved().get(RESTART_KEY), 0.6)
+
+    # -- provenance: the transaction's own migration is not a user save ---- #
+    def _legacy_only(self, values):
+        with open(appconfig.legacy_config_path(APP), "w") as f:
+            json.dump(values, f)
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        self.assertEqual(_record(snapshot, *CANONICAL).get("present"), False)
+        # What commit_prepared + revalidate_user_config do inside the install.
+        self.assertTrue(appconfig.migrate_legacy_config(APP))
+        pruned_manifest = {"id": APP, "config_schema": {"groups": [{
+            "key": "general", "title": "General",
+            "items": [MANIFEST["config_schema"]["groups"][0]["items"][1]]}]}}
+        result = appconfig.revalidate_user_config(pruned_manifest, APP)
+        self.assertEqual(set(result["dropped"]), {RESTART_KEY})
+        return snapshot
+
+    def test_replayed_rollback_undoes_migration_and_prune_of_legacy_config(self):
+        snapshot = self._legacy_only({RESTART_KEY: 1.5, LIVE_KEY: 0.7})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertFalse(os.path.exists(appconfig.config_path(APP)))
+        self.assertEqual(self._saved(), {RESTART_KEY: 1.5, LIVE_KEY: 0.7})
+        self.assertEqual(
+            kitconfig.effective_config(paths.app_dir(APP)).get(RESTART_KEY), 1.5)
+
+    def test_replayed_rollback_keeps_user_post_made_after_migration(self):
+        snapshot = self._legacy_only({RESTART_KEY: 1.5, LIVE_KEY: 0.7})
+        self._post({LIVE_KEY: 0.9})                 # user saves meanwhile
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved().get(LIVE_KEY), 0.9)
+
+    def test_journal_without_token_field_keeps_the_canonical_file(self):
+        """A journal written by an older appmgr keeps the a463d24 behaviour."""
+        snapshot = appconfig.snapshot_upgrade_config(APP)
+        snapshot.pop("user_config_token")
+        appconfig.write_user_config(APP, {RESTART_KEY: 1.1})
+        appconfig.restore_upgrade_config(snapshot)
+        self.assertEqual(self._saved().get(RESTART_KEY), 1.1)
 
 
 if __name__ == "__main__":
