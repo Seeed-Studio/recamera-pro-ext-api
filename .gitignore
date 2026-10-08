@@ -64,3 +64,4 @@ release/**/*.tar
 release/**/*.tar.gz
 release/**/*.bundle
 apps/face-recognition/evaluation/data/
+market/packaging/icons/
