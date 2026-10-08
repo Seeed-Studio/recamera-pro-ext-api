@@ -1,0 +1,225 @@
+{
+  "id": "intrusion-detection",
+  "name": "Intrusion Detection",
+  "name_zh": "入侵检测",
+  "version": "0.1.0",
+  "type": "self-hosted",
+  "scene": "Security",
+  "scene_zh": "安防",
+  "description": "Hub-mode person detector for edge-security-kit. Runs YOLOv8n int8 on the RV1126B NPU, tracks every person with a stable track_id, and publishes sensecraft.detection/1 to MQTT. Zone, loitering and line-cross rules are judged off-device by the hub; this app judges nothing locally.",
+  "description_zh": "edge-security-kit 的 hub 模式人体探测器。在 RV1126B NPU 上运行 YOLOv8n int8，为每个人维持稳定 track_id，按 sensecraft.detection/1 契约发布到 MQTT。区域、徘徊、越线规则由 hub 在设备外判定，本应用不在本地判规则。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "kit": ">=0.1.0",
+  "interpreter": "/userdata/rknnenv/bin/python",
+  "package": {
+    "exclude": [
+      "test_*.py",
+      "*.md"
+    ]
+  },
+  "models": [
+    {
+      "id": "yolov8n_zoo_int8",
+      "file": "models/yolov8n_zoo_int8.rv1126b.rknn",
+      "task": "detect",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "head": "rknn_model_zoo",
+      "classes": [
+        "person"
+      ]
+    }
+  ],
+  "default_model": "yolov8n_zoo_int8",
+  "postproc": "detect",
+  "render": {
+    "box": {
+      "line_width": 2,
+      "label": "track_id"
+    }
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Person confidence",
+            "title_zh": "人体置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.35
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.45
+          },
+          {
+            "key": "track_iou",
+            "type": "number",
+            "apply": "live",
+            "title": "Track association IoU",
+            "title_zh": "跟踪关联 IoU",
+            "min": 0.05,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.2
+          },
+          {
+            "key": "track_max_lost",
+            "type": "number",
+            "apply": "live",
+            "title": "Track expiry (s)",
+            "title_zh": "轨迹保留时长（秒）",
+            "min": 0.1,
+            "max": 5.0,
+            "step": 0.05,
+            "default": 0.75
+          }
+        ]
+      },
+      {
+        "key": "identity",
+        "title": "Hub identity",
+        "title_zh": "Hub 标识",
+        "items": [
+          {
+            "key": "device_id",
+            "type": "string",
+            "apply": "restart",
+            "title": "Device ID",
+            "title_zh": "设备 ID",
+            "default": "recamera-pro-01"
+          },
+          {
+            "key": "stream_id",
+            "type": "string",
+            "apply": "restart",
+            "title": "Stream ID",
+            "title_zh": "视频流 ID",
+            "default": "cam-0"
+          }
+        ]
+      },
+      {
+        "key": "mqtt",
+        "title": "MQTT (edge-security-kit contract)",
+        "title_zh": "MQTT（edge-security-kit 契约）",
+        "items": [
+          {
+            "key": "mqtt_host",
+            "type": "string",
+            "apply": "restart",
+            "title": "Broker host",
+            "title_zh": "Broker 地址",
+            "default": "127.0.0.1"
+          },
+          {
+            "key": "mqtt_port",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Broker port",
+            "title_zh": "Broker 端口",
+            "min": 1,
+            "max": 65535,
+            "default": 1883
+          },
+          {
+            "key": "mqtt_username",
+            "type": "string",
+            "apply": "restart",
+            "title": "Username",
+            "title_zh": "用户名",
+            "default": ""
+          },
+          {
+            "key": "mqtt_password",
+            "type": "string",
+            "apply": "restart",
+            "title": "Password",
+            "title_zh": "密码",
+            "default": ""
+          },
+          {
+            "key": "status_interval",
+            "type": "number",
+            "apply": "restart",
+            "title": "Status heartbeat (s)",
+            "title_zh": "状态心跳（秒）",
+            "min": 5,
+            "max": 300,
+            "step": 5,
+            "default": 30
+          }
+        ]
+      },
+      {
+        "key": "preview",
+        "title": "Preview endpoint",
+        "title_zh": "预览端点",
+        "items": [
+          {
+            "key": "preview_port",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Preview HTTP port",
+            "title_zh": "预览 HTTP 端口",
+            "min": 1024,
+            "max": 65535,
+            "default": 8099
+          },
+          {
+            "key": "preview_advertise_host",
+            "type": "string",
+            "apply": "restart",
+            "title": "Host advertised to the hub",
+            "title_zh": "向 hub 公布的主机地址",
+            "default": ""
+          }
+        ]
+      },
+      {
+        "key": "advanced",
+        "title": "Advanced / validation",
+        "title_zh": "高级 / 验证",
+        "items": [
+          {
+            "key": "source_file",
+            "type": "string",
+            "apply": "restart",
+            "title": "Replay a local video file instead of the camera",
+            "title_zh": "用本地视频文件回灌替代摄像头",
+            "default": ""
+          },
+          {
+            "key": "annotate_path",
+            "type": "string",
+            "apply": "restart",
+            "title": "Write one annotated evidence JPEG here",
+            "title_zh": "写一张标注证据图到此路径",
+            "default": ""
+          }
+        ]
+      }
+    ]
+  }
+}
