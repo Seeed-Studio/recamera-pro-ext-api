@@ -492,7 +492,11 @@ def do_set_render_override(app_id: str, incoming: dict, *,
         document = apprenderoverride.replace(app_id, revision, override)
         _audit("v1_render_override", id=app_id, op="replace",
                revision=document["revision"])
-    _publish_render_override(app_id, manifest)
+        # Publish under the gate: once it is released an upgrade can install
+        # a new generation, and this manifest's render defaults must never be
+        # applied to it.  The hub path never takes the gate (install already
+        # calls the hub while holding it), so the lock order is unchanged.
+        _publish_render_override(app_id, manifest)
     return apprenderoverride.view(app_id, manifest, document=document)
 
 
@@ -503,7 +507,11 @@ def do_delete_render_override(app_id: str, revision, *,
         document = apprenderoverride.reset(app_id, revision)
         _audit("v1_render_override", id=app_id, op="reset",
                revision=document["revision"])
-    _publish_render_override(app_id, manifest)
+        # Publish under the gate: once it is released an upgrade can install
+        # a new generation, and this manifest's render defaults must never be
+        # applied to it.  The hub path never takes the gate (install already
+        # calls the hub while holding it), so the lock order is unchanged.
+        _publish_render_override(app_id, manifest)
     return apprenderoverride.view(app_id, manifest, document=document)
 
 

@@ -915,3 +915,59 @@ def test_render_override_mutations_write_audit_records(layout):
            for r in records if r["action"] == "v1_render_override"]
     assert ops == [("v1_render_override", "replace", 1),
                    ("v1_render_override", "reset", 2)]
+
+
+@pytest.mark.parametrize("operation", ["set", "delete"])
+def test_render_publish_cannot_interleave_with_an_upgrade(
+        layout, monkeypatch, operation):
+    """PUT/DELETE must not publish manifest N's render after N+1 is installed.
+
+    The fake hub starts an "upgrade" (busy-gated manifest swap, as do_install
+    does) at the moment the render is published and gives it time to finish.
+    Publishing after the gate was released let the swap land first, so the
+    hub received the old manifest while the new generation was installed.
+    """
+    _install_dir()
+    if operation == "delete":
+        server.do_set_render_override(
+            APP_ID, {"revision": 0, "override": VALID})
+    upgraded = threading.Event()
+    upgrade_errors = []
+
+    def upgrade():
+        try:
+            with server.busy_gate(wait_timeout=5.0):
+                newer = _manifest(render=dict(_render(), boxes={
+                    "color_by": "label", "label": "label", "line_width": 9}))
+                newer["version"] = "2.0.0"
+                _install_dir(manifest=newer)
+                upgraded.set()
+        except Exception as exc:  # surfaced by the assertion below
+            upgrade_errors.append(exc)
+
+    seen = []
+
+    class _RacingHub:
+        def refresh_app_render(self, app_id, manifest, render_override=None):
+            thread = threading.Thread(target=upgrade)
+            thread.start()
+            upgraded.wait(0.5)
+            with open(os.path.join(paths.app_dir(app_id),
+                                   "manifest.json")) as source:
+                installed = json.load(source)["version"]
+            seen.append((manifest["version"], installed, thread))
+            return True
+
+    monkeypatch.setattr(server, "_result_hub_instance", _RacingHub())
+    if operation == "set":
+        server.do_set_render_override(
+            APP_ID, {"revision": 0, "override": VALID})
+    else:
+        server.do_delete_render_override(APP_ID, 1)
+
+    assert len(seen) == 1
+    published, installed, thread = seen[0]
+    thread.join(5.0)
+    assert not upgrade_errors
+    assert upgraded.is_set()                 # the upgrade still ran, afterwards
+    assert published == installed == "1.0.0"
