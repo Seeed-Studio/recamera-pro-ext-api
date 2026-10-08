@@ -1,0 +1,159 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 1,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 96,
+      "cpu_percent": 100,
+      "storage_mb": 8,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 60,
+    "stabilization_sec": 2,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "overlay-geometry-demo",
+  "name": "Overlay Geometry Demo",
+  "name_zh": "叠加图元演示",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/overlay-geometry-demo.png",
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "type": "self-hosted",
+  "description": "Draws a COCO-17 stick figure, a semi-transparent text panel and a scrolling sine chart on the browser overlay through Result Hub v2 geometry[]. No AI model and no NPU; camera frames are used only for the frame size and stream association.",
+  "description_zh": "通过 Result Hub v2 geometry[] 在浏览器叠加层绘制 COCO-17 骨骼、半透明文字面板和滚动正弦折线。不使用 AI 模型和 NPU；摄像头帧仅用于获取帧尺寸与视频流关联。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "package": {
+    "exclude": [
+      "test_*.py",
+      "*.md"
+    ]
+  },
+  "capabilities": [
+    "output"
+  ],
+  "tags": [
+    "demo",
+    "overlay",
+    "cpu"
+  ],
+  "render": {
+    "schema_version": 1,
+    "geometry": {
+      "types": [
+        "point",
+        "line",
+        "polyline",
+        "polygon"
+      ],
+      "max_items": 64,
+      "max_points": 128,
+      "style": {
+        "color": "#00ff00",
+        "line_width": 2,
+        "opacity": 1
+      }
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "geometry[]{type,points,id,label,style}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "geometry",
+        "from": "geometry[]",
+        "type": "geometry[]",
+        "coord": "pixel_points",
+        "description": "Overlay drawing primitives in original-frame pixels"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "geometry | length",
+        "target": "primitive_count",
+        "topic": "recamera/{{ app }}/summary"
+      }
+    ]
+  },
+  "config_schema": {
+    "groups": []
+  }
+}

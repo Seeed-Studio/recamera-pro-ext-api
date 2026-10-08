@@ -164,6 +164,11 @@ cp "$PKG/MANIFEST.txt" "$PKG/install.sh" "$PKG/rollback.sh" "$PKG/README.md" "$F
 cp "$RKIPC" "$FW/rkipc"
 cp "$ENTRY" "$FW/entry.cgi"
 cp "$SDK_SRC/lib/$SO_NAME" "$FW/sdk/lib/$SO_NAME"
+# Binaries must be executable both in the package and for every consumer that
+# copies them without preserving modes (the firmware image build does a plain
+# cp). A non-executable entry.cgi makes fcgiwrap answer 403 for every CGI call,
+# which takes the whole web API -- login included -- offline on the device.
+chmod 755 "$FW/rkipc" "$FW/entry.cgi" "$FW/sdk/lib/$SO_NAME"
 cp "$SDK_SRC/include/recamera_ext.h" "$FW/sdk/recamera_ext.h"
 cp -R "$SDK_SRC/python/recamera_ext" "$FW/sdk/python/recamera_ext"
 cp -R "$WHEELS_SRC" "$FW/wheels"                 # rknnlite runtime wheels (offline install)
@@ -297,6 +302,18 @@ verify_tar_member() { # tar arcname expected-md5
 }
 verify_tar_member "$FW_TAR" "./rkipc"                    "$RKIPC_MD5"
 verify_tar_member "$FW_TAR" "./entry.cgi"                "$ENTRY_MD5"
+# The mode matters as much as the content: an extracted package or a plain
+# `cp` into a rootfs image keeps the tar member's mode, and a CGI without the
+# execute bit answers 403 on every request.
+verify_tar_exec() { # arcname (inside $FW_TAR)
+  perms=$(tar tvf "$FW_TAR" "$1" 2>/dev/null | awk '{print $1}' | head -1)
+  case "$perms" in
+    -rwxr-xr-x) echo "  OK  tar member $1 mode $perms" ;;
+    *) echo "FATAL: $FW_TAR member $1 mode=$perms is not executable -- devices would ship a CGI that answers 403" >&2; exit 1 ;;
+  esac
+}
+verify_tar_exec "./rkipc"
+verify_tar_exec "./entry.cgi"
 verify_tar_member "$FW_TAR" "./sdk/lib/$SO_NAME"         "$SO_MD5"
 
 # ---- completeness: every git-tracked source file is really inside the kit pkg --

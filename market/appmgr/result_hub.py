@@ -60,6 +60,7 @@ from kit.geometry import (
 from . import config as appconfig
 from . import manifest as appmanifest
 from . import paths
+from . import render_override as apprenderoverride
 from . import visualization as appvisualization
 
 
@@ -2084,12 +2085,20 @@ class ResultHub:
         self._retired_app_generations = set()
         self._retired_app_generation_order = deque()
         # app_id -> (instance_id, generation, immutable manifest render copy,
-        #            compiled geometry contract, trusted stream contract).
+        #            compiled geometry contract, trusted stream contract,
+        #            render revision).
         # This cache is populated only after the gateway has authenticated the
         # exact live coordinator identity.  Result ingress never stats or opens
         # a manifest, and an old generation cannot inherit a new declaration.
+        # The revision is a hub-wide monotonic counter bumped on every cache
+        # write.  A publish that read its render outside the fence compares
+        # this cheap integer under the state lock and rebinds only when the
+        # effective render actually changed while the frame was in flight.
         self._app_render_cache: Dict[
-            str, Tuple[str, int, dict, dict, dict]] = {}
+            str, Tuple[str, int, dict, dict, dict, int]] = {}
+        self._render_revision = 0
+        self._render_rebound = 0
+        self._render_replay_refreshed = 0
         # Exact-generation event kinds declared for recording.  They receive
         # ingress queue priority even when Result Hub models their replay form
         # as state (for example a stable QR value).  The canonical envelope's
@@ -2124,6 +2133,10 @@ class ResultHub:
         self._stale_manifest_refresh_ignored = 0
         self._retired_manifest_refresh_ignored = 0
         self._stale_app_rejected = 0
+
+    def _next_render_revision_locked(self) -> int:
+        self._render_revision += 1
+        return self._render_revision
 
     def _next_source_seq(self, source_id: str) -> int:
         with self._state_lock:
@@ -2181,6 +2194,59 @@ class ResultHub:
         return self._control(
             "source_invalidated", source=source,
             extensions={"reason": "lifecycle", "scope": "source"})
+
+    def render_updated_envelope(self, app_id: str, identity, render: dict) -> dict:
+        """Control message: the effective render of one live source changed.
+
+        Only the appmgr control plane emits it (after a device-level override
+        write); application payloads have no path to control messages.
+        """
+        current = identity if isinstance(identity, tuple) else ("", None)
+        source = {
+            "kind": "app", "id": str(app_id), "app_id": str(app_id),
+            "instance": str(current[0] or ""), "trust": "local",
+        }
+        if current[1] is not None:
+            source["generation"] = int(current[1])
+        envelope = self._control(
+            "render_updated", source=source,
+            extensions={"reason": "render_override", "scope": "source"})
+        envelope["render"] = copy.deepcopy(render or {})
+        return envelope
+
+    def refresh_app_render(self, app_id: str, manifest: dict,
+                           render_override: Optional[dict] = None) -> bool:
+        """Replace the cached effective render for the current generation.
+
+        Unlike :meth:`refresh_app_manifest` this does not retire generations,
+        purge replay or reset observers: only presentation changed.  Returns
+        ``False`` when no live generation is cached for ``app_id``.
+        """
+        app_id = str(app_id or "")
+        if (not app_id or not isinstance(manifest, dict)
+                or manifest.get("manifest_version") != 2
+                or str(manifest.get("id") or "") != app_id):
+            return False
+        if render_override is None:
+            render_override = apprenderoverride.load_override(app_id)
+        render = appvisualization.effective_render(
+            manifest, override=render_override)
+        with self._publish_fence:
+            with self._state_lock:
+                cached = self._app_render_cache.get(app_id)
+                current = self._app_generations.get(app_id)
+                if (cached is None or current is None
+                        or (cached[0], cached[1]) != current):
+                    return False
+                self._app_render_cache[app_id] = (
+                    cached[0], cached[1], copy.deepcopy(render),
+                    cached[3], cached[4],
+                    self._next_render_revision_locked())
+                ws = self._ws
+            if ws is not None:
+                ws.broadcast_control(self.render_updated_envelope(
+                    app_id, current, render))
+        return True
 
     def _prepare_system_path(self) -> None:
         parent = os.path.dirname(self.system_uds_path)
@@ -2473,7 +2539,8 @@ class ResultHub:
                 self._retired_app_generation_order.popleft())
 
     def refresh_app_manifest(self, identity: dict, manifest: dict,
-                             stream_contract: Optional[dict] = None) -> bool:
+                             stream_contract: Optional[dict] = None,
+                             render_override: Optional[dict] = None) -> bool:
         """Cache trusted manifest and launch contracts for one generation.
 
         The caller is the appmgr control plane, after
@@ -2489,6 +2556,10 @@ class ResultHub:
         generation number -- is a successful no-op.  Returning ``True`` for
         that case is intentional: the server treats ``False`` as a malformed
         current manifest and would otherwise invalidate the newer generation.
+
+        The cached render is the *effective* render: manifest defaults merged
+        with the device-level display override (``render_override`` or, when
+        omitted, the persisted override for ``app_id``).
         """
         app_id = str((identity or {}).get("app_id") or "")
         instance = str((identity or {}).get("instance_id") or "")
@@ -2503,7 +2574,10 @@ class ResultHub:
         raw_render = manifest.get("render") if valid else None
         if raw_render is not None and not isinstance(raw_render, dict):
             valid = False
-        render = (appvisualization.effective_render(manifest)
+        if valid and render_override is None:
+            render_override = apprenderoverride.load_override(app_id)
+        render = (appvisualization.effective_render(
+                      manifest, override=render_override)
                   if valid else None)
         record_trigger = (appmanifest.effective_record_trigger(manifest)
                           if valid else {})
@@ -2561,7 +2635,8 @@ class ResultHub:
                 if valid:
                     self._app_render_cache[app_id] = (
                         instance, generation, copy.deepcopy(render or {}),
-                        copy.deepcopy(geometry), copy.deepcopy(trusted_stream))
+                        copy.deepcopy(geometry), copy.deepcopy(trusted_stream),
+                        self._next_render_revision_locked())
                     if record_trigger:
                         self._app_record_event_cache[app_id] = (
                             instance, generation, record_event_kinds)
@@ -2673,7 +2748,13 @@ class ResultHub:
             self._generation_client_purged += clients
         return True
 
-    def _trusted_app_contract(self, identity: dict) -> Tuple[dict, dict, dict]:
+    def _trusted_app_contract(
+            self, identity: dict) -> Tuple[dict, dict, dict, int]:
+        """Render/geometry/stream contract plus the render revision read.
+
+        The revision travels with the normalized envelopes so :meth:`_publish`
+        can detect an override applied while this batch was in flight.
+        """
         app_id = str(identity.get("app_id") or "")
         instance = str(identity.get("instance_id") or "")
         generation = _as_int(identity.get("generation"), -1)
@@ -2681,9 +2762,9 @@ class ResultHub:
             cached = self._app_render_cache.get(app_id)
             if (cached is None or cached[0] != instance
                     or cached[1] != generation):
-                return {}, {}, {}
+                return {}, {}, {}, 0
             return (copy.deepcopy(cached[2]), copy.deepcopy(cached[3]),
-                    copy.deepcopy(cached[4]))
+                    copy.deepcopy(cached[4]), cached[5])
 
     def _ingress_loop(self) -> None:
         while True:
@@ -2885,14 +2966,17 @@ class ResultHub:
         fallback = self._next_source_seq(str(identity.get("app_id") or "app"))
         if payload.get("type") == "recording_request":
             return self._publish_recording_request(payload, identity, fallback)
-        render, geometry, stream_contract = self._trusted_app_contract(identity)
+        (render, geometry, stream_contract,
+         render_revision) = self._trusted_app_contract(identity)
         envelopes = normalize_app_payload(
             payload, identity, fallback_seq=fallback,
             trusted_render=render, trusted_geometry=geometry,
             trusted_stream=stream_contract)
         batch = self._make_format_batch(envelopes, payload)
         self._received_app += 1
-        return [value for value in envelopes if self._publish(value, batch)]
+        return [value for value in envelopes
+                if self._publish(value, batch,
+                                 render_revision=render_revision)]
 
     def _publish_recording_request(self, payload, identity, fallback):
         """Private control route: no WS, history, formatting, MQTT or OSD."""
@@ -2984,7 +3068,8 @@ class ResultHub:
                 return False
         return True
 
-    def _publish(self, envelope: dict, format_batch: _FormatBatch) -> bool:
+    def _publish(self, envelope: dict, format_batch: _FormatBatch,
+                 render_revision: Optional[int] = None) -> bool:
         record = _record(envelope, format_batch)
         message_type = record.message_type
         source = envelope.get("source") or {}
@@ -3000,6 +3085,19 @@ class ResultHub:
                     if self._app_generations.get(app_id) != expected:
                         self._stale_app_rejected += 1
                         return False
+                    # The render was read outside this fence.  An override
+                    # committed since then would otherwise be overwritten on
+                    # the browser by this older in-flight frame, so rebind it
+                    # to the current effective render instead of dropping the
+                    # frame.  An int compare keeps the steady path free of any
+                    # per-frame dict comparison or copy.
+                    cached = self._app_render_cache.get(app_id)
+                    if (render_revision is not None and cached is not None
+                            and cached[5] != render_revision
+                            and (cached[0], cached[1]) == expected):
+                        envelope["render"] = copy.deepcopy(cached[2])
+                        self._render_rebound += 1
+                        record = _record(envelope, format_batch)
             if message_type == "event" and not self._event_preflight(envelope):
                 return False
             with self._state_lock:
@@ -3056,12 +3154,43 @@ class ResultHub:
                     self._observer_errors += 1
             return True
 
+    def _replay_render_record_locked(self, record: _Record) -> _Record:
+        """Return ``record`` carrying the *current* effective render.
+
+        Stored records keep the render that was effective when they were
+        published.  A later override changes only presentation, so replay
+        must not hand a reconnecting browser a stale style - especially for
+        an app that has stopped publishing.  Only records whose source is the
+        exact live (instance, generation) are refreshed; the stored record is
+        never mutated and each caller gets its own copy of the render.
+        """
+        source = record.raw.get("source") or {}
+        if source.get("kind") != "app":
+            return record
+        app_id = str(source.get("app_id") or source.get("id") or "")
+        cached = self._app_render_cache.get(app_id)
+        if cached is None:
+            return record
+        identity = (str(source.get("instance") or ""),
+                    _as_int(source.get("generation"), -1))
+        if ((cached[0], cached[1]) != identity
+                or self._app_generations.get(app_id) != identity):
+            return record
+        if record.raw.get("render") == cached[2]:
+            return record
+        raw = copy.deepcopy(record.raw)
+        raw["render"] = copy.deepcopy(cached[2])
+        self._render_replay_refreshed += 1
+        return _record(raw, record.format_batch)
+
     def snapshot_records(self) -> List[_Record]:
         with self._state_lock:
             self._prune_events_locked()
-            return (list(self._latest_frames.values())
-                    + list(self._latest_status.values())
-                    + [record for _timestamp, record in self._events])
+            return [self._replay_render_record_locked(record)
+                    for record in (list(self._latest_frames.values())
+                                   + list(self._latest_status.values())
+                                   + [record for _timestamp, record
+                                      in self._events])]
 
     def add_observer(self, callback: Callable[[dict], None]):
         if not callable(callback):

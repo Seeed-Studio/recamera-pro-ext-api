@@ -87,6 +87,7 @@ from . import (acousticslab, assets, builtin, config as appconfig,
                signing as appsigning, trust as apptrust,
                store_download, store_tasks,
                uploads as appuploads, visualization as appvisualization,
+               render_override as apprenderoverride,
                voiceruntime, workflow_ui)
 
 
@@ -440,6 +441,106 @@ def do_set_app_visualization(app_id: str, incoming: dict, *,
             stream_burn_in={"enabled": requested})
         return _app_visualization_view(
             app_id, manifest=manifest, config=saved)
+
+
+def _render_override_manifest(app_id: str) -> dict:
+    """Installed manifest for a render-override request (404 when absent)."""
+    if app_id == builtin.BUILTIN_ID:
+        raise FileNotFoundError("app not installed: %s" % app_id)
+    _require_installed(app_id)
+    return _read_manifest(app_id) or {}
+
+
+def _publish_render_override(app_id: str, manifest: dict) -> bool:
+    """Refresh the live generation's effective render and notify WS clients."""
+    hub = _result_hub_instance
+    if hub is None or not hasattr(hub, "refresh_app_render"):
+        return False
+    try:
+        return bool(hub.refresh_app_render(app_id, manifest))
+    except Exception as exc:
+        print("[appmgr] render override refresh failed for %s: %r" %
+              (app_id, exc), flush=True)
+        return False
+
+
+def do_get_render_override(app_id: str) -> dict:
+    manifest = _render_override_manifest(app_id)
+    return apprenderoverride.view(app_id, manifest)
+
+
+def _render_override_body(incoming: dict) -> tuple:
+    if not isinstance(incoming, dict):
+        raise apprenderoverride.RenderOverrideError(
+            "body", "must be an object")
+    for key in incoming:
+        if key not in ("revision", "override"):
+            raise apprenderoverride.RenderOverrideError(
+                str(key), "unknown field")
+    if "revision" not in incoming:
+        raise apprenderoverride.RenderOverrideError("revision", "is required")
+    if "override" not in incoming:
+        raise apprenderoverride.RenderOverrideError("override", "is required")
+    return incoming["revision"], incoming["override"]
+
+
+def do_set_render_override(app_id: str, incoming: dict, *,
+                           _busy_timeout: float = 0.0) -> dict:
+    revision, override = _render_override_body(incoming)
+    with busy_gate(wait_timeout=_busy_timeout):
+        manifest = _render_override_manifest(app_id)
+        document = apprenderoverride.replace(app_id, revision, override)
+        _audit("v1_render_override", id=app_id, op="replace",
+               revision=document["revision"])
+        # Publish under the gate: once it is released an upgrade can install
+        # a new generation, and this manifest's render defaults must never be
+        # applied to it.  The hub path never takes the gate (install already
+        # calls the hub while holding it), so the lock order is unchanged.
+        _publish_render_override(app_id, manifest)
+    return apprenderoverride.view(app_id, manifest, document=document)
+
+
+def do_delete_render_override(app_id: str, revision, *,
+                              _busy_timeout: float = 0.0) -> dict:
+    with busy_gate(wait_timeout=_busy_timeout):
+        manifest = _render_override_manifest(app_id)
+        document = apprenderoverride.reset(app_id, revision)
+        _audit("v1_render_override", id=app_id, op="reset",
+               revision=document["revision"])
+        # Publish under the gate: once it is released an upgrade can install
+        # a new generation, and this manifest's render defaults must never be
+        # applied to it.  The hub path never takes the gate (install already
+        # calls the hub while holding it), so the lock order is unchanged.
+        _publish_render_override(app_id, manifest)
+    return apprenderoverride.view(app_id, manifest, document=document)
+
+
+def _remove_render_override(app_id: str, *, reason: str) -> None:
+    """Delete an app's display override; failures are audited, not fatal."""
+    try:
+        if apprenderoverride.remove(app_id):
+            _audit("v1_render_override", id=app_id, op="removed",
+                   reason=reason)
+    except Exception as exc:
+        _audit("v1_render_override_cleanup_failed", id=app_id,
+               reason=reason, error=str(exc))
+        print("[appmgr] render override cleanup failed for %s: %r" %
+              (app_id, exc), flush=True)
+
+
+def _recover_render_overrides() -> dict:
+    """Startup: drop stale pending files, revalidate live overrides."""
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        report = apprenderoverride.recover_startup(
+            _read_manifest,
+            lambda app_id: os.path.isdir(paths.app_dir(app_id)))
+    for app_id, dropped in report.get("revalidated", {}).items():
+        print("[appmgr] render override for %s revalidated; dropped %s" %
+              (app_id, dropped), flush=True)
+    if (report.get("pending_removed") or report.get("orphans_removed")
+            or report.get("revalidated")):
+        _audit("render_override_recovered", **report)
+    return report
 
 
 class RequestOriginError(ValueError):
@@ -880,19 +981,26 @@ def _icon_candidates(manifest: dict) -> tuple[bool, list[dict]]:
     } for ext in paths.ICON_EXTS]
 
 
-def _open_icon_nofollow(app_id: str, relative_path: str):
-    """Open one installed icon without following any path component."""
+def _open_icon_nofollow(app_id: str, relative_path: str, *,
+                        max_bytes: int = None, noun: str = "icon"):
+    """Open one installed package file without following any path component.
+
+    Shared by the icon and the ui.overlay entry readers: ``max_bytes`` selects
+    the size cap (default the icon cap) and ``noun`` only shapes error text.
+    """
+    if max_bytes is None:
+        max_bytes = paths.MAX_ICON_BYTES
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     try:
         relative_path = appmanifest.validate_package_member_path(
             relative_path, "icon.path")
     except appmanifest.ManifestValidationError as exc:
-        raise FileNotFoundError("installed icon path is unsafe") from exc
+        raise FileNotFoundError("installed path is unsafe") from exc
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     if nofollow is None or directory is None:
-        raise OSError(errno.ENOTSUP, "safe no-follow icon open is unsupported")
+        raise OSError(errno.ENOTSUP, "safe no-follow open is unsupported")
     common = nofollow | getattr(os, "O_CLOEXEC", 0)
     current_fd = os.open(paths.app_dir(app_id), os.O_RDONLY | directory | common)
     try:
@@ -909,10 +1017,11 @@ def _open_icon_nofollow(app_id: str, relative_path: str):
         try:
             info = os.fstat(file_fd)
             if not stat.S_ISREG(info.st_mode):
-                raise FileNotFoundError("installed icon is not a regular file")
-            if info.st_size > paths.MAX_ICON_BYTES:
                 raise FileNotFoundError(
-                    f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+                    f"installed {noun} is not a regular file")
+            if info.st_size > max_bytes:
+                raise FileNotFoundError(
+                    f"installed {noun} exceeds {max_bytes} byte limit")
             return file_fd, info
         except BaseException:
             os.close(file_fd)
@@ -922,12 +1031,15 @@ def _open_icon_nofollow(app_id: str, relative_path: str):
 
 
 def _read_icon_fd(file_fd: int, file_info, media_type: str, *,
-                  strict_media: bool) -> tuple[bytes, str]:
+                  strict_media: bool, max_bytes: int = None,
+                  noun: str = "icon") -> tuple[bytes, str]:
+    if max_bytes is None:
+        max_bytes = paths.MAX_ICON_BYTES
     with os.fdopen(file_fd, "rb", closefd=True) as source:
-        data = source.read(paths.MAX_ICON_BYTES + 1)
-    if len(data) > paths.MAX_ICON_BYTES:
+        data = source.read(max_bytes + 1)
+    if len(data) > max_bytes:
         raise FileNotFoundError(
-            f"installed icon exceeds {paths.MAX_ICON_BYTES} byte limit")
+            f"installed {noun} exceeds {max_bytes} byte limit")
     if strict_media and not appmanifest.icon_bytes_match_media_type(
             data[:16], media_type):
         raise FileNotFoundError(
@@ -1038,6 +1150,57 @@ def do_icon(app_id: str):
         raise FileNotFoundError(
             f"app {app_id!r} has no safe bundled icon") from exc
     return data, info["media_type"]
+
+
+class OverlayHashMismatch(Exception):
+    """Installed overlay bytes differ from the manifest's ui.overlay.sha256."""
+
+
+def do_overlay(app_id: str) -> tuple[bytes, str]:
+    """Return (bytes, sha256hex) of an installed app's ui.overlay entry.
+
+    The sandboxed overlay plugin (overlay phase-2 spec §3) is ONE self-contained
+    HTML document; the front end fetches these bytes with ?h=<declared sha256>
+    and inlines them into a sandboxed srcdoc iframe.  The HTTP layer serves them
+    ``text/plain`` so top-level navigation to this URL can never execute the
+    document.  404 (FileNotFoundError) unless the app is installed AND its
+    installed manifest declares ui.overlay; the read reuses the icon's no-follow
+    open (every path component O_NOFOLLOW, regular-file + size-cap checks) so a
+    tampered install tree cannot escape its app dir or hand out a symlink.
+    """
+    if not paths.valid_app_id(app_id):
+        raise ValueError(f"invalid app id {app_id!r}")
+    _require_installed(app_id)
+    manifest = _read_manifest(app_id)
+    if not (isinstance(manifest, dict)
+            and manifest.get("manifest_version") == appmanifest.MANIFEST_VERSION
+            and "ui" in manifest):
+        raise FileNotFoundError(
+            f"app {app_id!r} declares no overlay plugin")
+    try:
+        overlay = appmanifest.validate_overlay_declaration(manifest["ui"])
+    except appmanifest.ManifestValidationError:
+        # Installed metadata was modified/corrupted.  Fail closed instead of
+        # serving whatever the mutated declaration points at (icon precedent).
+        raise FileNotFoundError(
+            f"app {app_id!r} has an invalid overlay declaration") from None
+    try:
+        file_fd, file_info = _open_icon_nofollow(
+            app_id, overlay["entry"], max_bytes=paths.MAX_OVERLAY_BYTES,
+            noun="overlay entry")
+        data, digest = _read_icon_fd(
+            file_fd, file_info, "", strict_media=False,
+            max_bytes=paths.MAX_OVERLAY_BYTES, noun="overlay entry")
+    except (OSError, ValueError) as exc:
+        raise FileNotFoundError(
+            f"app {app_id!r} has no readable overlay entry") from exc
+    if digest != overlay["sha256"]:
+        # The bytes on disk no longer match what the installed manifest
+        # declares (modified install tree, or an upgrade swapping files): never
+        # serve undeclared content, even to a caller that asks for its hash.
+        raise OverlayHashMismatch(
+            f"app {app_id!r} overlay entry does not match its declared sha256")
+    return data, digest
 
 
 def do_assets(paths_param: str) -> dict:
@@ -1183,7 +1346,8 @@ def do_list() -> dict:
                 # shape-driven fallback). Passed through RAW -- appmgr never
                 # interprets a layout / `as` primitive, it only carries the block
                 # so the overlay can read it without fetching the package.
-                "render": (appvisualization.effective_render(man)
+                "render": (appvisualization.effective_render(
+                               man, override=apprenderoverride.load_override(name))
                            if isinstance(man.get("render"), dict)
                            else man.get("render")),
                 "installed": True,
@@ -1580,6 +1744,17 @@ def do_install(pkg_path: str, signature: str = None, *,
                 # would silently opt it into device-wide video burn-in.
                 _remove_app_visualization_source(
                     app_id, reason="fresh_install")
+                # A new installation starts from the author's defaults.
+                apprenderoverride.remove(app_id)
+            else:
+                # Upgrade step 1: revalidate the override for the new release
+                # into <id>.json.pending before any package file is published.
+                staged = apprenderoverride.stage_upgrade(
+                    app_id, candidate.manifest)
+                if staged is not None and staged.get("dropped"):
+                    _audit("v1_render_override", id=app_id,
+                           op="upgrade_revalidated",
+                           dropped=staged["dropped"])
 
             installer.begin_install_transaction(
                 candidate, config_snapshot=config_snapshot,
@@ -1782,6 +1957,14 @@ def do_install(pkg_path: str, signature: str = None, *,
                 raise
 
             installer.clear_install_transaction(candidate)
+            if pre_installed:
+                # Upgrade step 2a: the package transaction committed.
+                try:
+                    if apprenderoverride.commit_upgrade(app_id):
+                        _publish_render_override(app_id, manifest)
+                except Exception as exc:
+                    _audit("v1_render_override_cleanup_failed", id=app_id,
+                           reason="upgrade_commit", error=str(exc))
             if unsigned_install or not pre_installed:
                 state.clear_active_if(app_id)
             # During an upgrade, retain the user's choice only while the newly
@@ -1816,6 +1999,12 @@ def do_install(pkg_path: str, signature: str = None, *,
                     "requires_manual_start": unsigned_install,
                     "signature": sig}
         finally:
+            # Upgrade step 2b: any failed/rolled-back transaction leaves the
+            # previous override untouched (no-op once committed above).
+            try:
+                apprenderoverride.abort_upgrade(app_id)
+            except Exception:
+                pass
             # A retained journal is deliberate when rollback itself failed; it
             # is the boot-time recovery authority.  Candidate cleanup never
             # removes published live code/environment.
@@ -1869,6 +2058,7 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
         if (_result_hub_instance is not None
                 and hasattr(_result_hub_instance, "invalidate_app_manifest")):
             _result_hub_instance.invalidate_app_manifest(app_id)
+        _remove_render_override(app_id, reason="uninstall")
         try:
             _remove_app_visualization_source(app_id, reason="uninstall")
         except Exception as exc:
@@ -2947,7 +3137,8 @@ def do_v1_apps() -> dict:
             # projection keeps the Web capability list consistent with the
             # Result Hub's trusted legacy-box compatibility decision.
             manifest = dict(manifest)
-            manifest["render"] = appvisualization.effective_render(manifest)
+            manifest["render"] = appvisualization.effective_render(
+                manifest, override=apprenderoverride.load_override(app_id))
         status = _v1_status(raw)
         active_operation = operations.active_for(app_id)
         if active_operation:
@@ -3734,6 +3925,20 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": str(exc)})
             return False
 
+    def _render_override_error(self, exc: Exception) -> None:
+        if isinstance(exc, apprenderoverride.RevisionConflict):
+            return self._send(409, {
+                "error": "revision_conflict",
+                "current_revision": exc.current_revision,
+            })
+        if isinstance(exc, apprenderoverride.RenderOverrideError):
+            return self._send(400, {
+                "error": "invalid_override",
+                "field": exc.field,
+                "detail": exc.detail,
+            })
+        return self._v1_error(exc)
+
     def _v1_error(self, exc: Exception) -> None:
         if isinstance(exc, workflow_models.ModelConflict):
             code = 409
@@ -3941,6 +4146,61 @@ class _Handler(BaseHTTPRequestHandler):
                     200, do_get_app_visualization(visualization_match.group(1)))
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                return self._send(
+                    200, do_get_render_override(override_match.group(1)))
+            except Exception as exc:
+                return self._render_override_error(exc)
+        overlay_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/overlay", path)
+        if overlay_match:
+            # ?h=<full sha256> is mandatory: the front end binds its fetch to
+            # the manifest-declared digest, so there is deliberately no
+            # "serve without verification" path (overlay phase-2 spec §3 M4).
+            requested_hashes = parse_qs(
+                parsed.query, keep_blank_values=True).get("h") or []
+            if len(requested_hashes) != 1:
+                return self._send(400, {
+                    "error": "missing required 'h' (overlay content sha256)",
+                })
+            requested_hash = requested_hashes[0]
+            if re.fullmatch(r"[0-9a-f]{64}", requested_hash) is None:
+                return self._send(400, {
+                    "error": "'h' must be exactly 64 lowercase hexadecimal characters",
+                })
+            try:
+                data, digest = do_overlay(overlay_match.group(1))
+            except OverlayHashMismatch:
+                # Same answer as a stale ?h=: the host drops what it holds.
+                return self._send(409, {
+                    "error": "overlay content hash does not match",
+                })
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except FileNotFoundError as e:
+                return self._send(404, {"error": str(e)})
+            except OSError as e:
+                return self._send(500, {"error": repr(e)})
+            if digest != requested_hash:
+                # The caller's digest is stale (upgrade window): the served
+                # bytes must match BOTH the declaration (checked in
+                # do_overlay) and ?h= -- 409 tells the host to drop them and
+                # fall back.
+                return self._send(409, {
+                    "error": "overlay content hash does not match",
+                })
+            # text/plain on purpose: these bytes are only ever interpreted as a
+            # document inside the host-built sandboxed srcdoc, never at this URL.
+            # ETag is the digest's first 16 hex chars, matching the icon
+            # endpoint's cache key convention; this branch already pins
+            # X-Content-Type-Options: nosniff inside _send_bytes.
+            return self._send_bytes(
+                200, data, "text/plain; charset=utf-8", cache="no-store",
+                headers={"ETag": digest[:16]})
         webui_match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/webui",
             path)
@@ -4328,6 +4588,16 @@ class _Handler(BaseHTTPRequestHandler):
                     _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                return self._send(200, do_set_render_override(
+                    override_match.group(1), self._body_json_v1(),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._render_override_error(exc)
         match = re.fullmatch(
             r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/config", path)
         if not match:
@@ -4352,13 +4622,30 @@ class _Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._guard_mutation_origin():
             return
-        path = urlparse(self.path).path.rstrip("/")
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/")
         store_match = re.fullmatch(r"/api/app-center/v1/store/tasks/([0-9a-f]{32})", path)
         if store_match:
             try:
                 return self._send(200, {"task": _store_manager().cancel(store_match.group(1))})
             except Exception as exc:
                 return self._v1_error(exc)
+        override_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/render-override",
+            path)
+        if override_match:
+            try:
+                values = parse_qs(parsed.query, keep_blank_values=True).get(
+                    "revision") or []
+                if len(values) != 1 or not re.fullmatch(r"[0-9]{1,15}",
+                                                        values[0]):
+                    raise apprenderoverride.RenderOverrideError(
+                        "revision", "query parameter must be a non-negative integer")
+                return self._send(200, do_delete_render_override(
+                    override_match.group(1), int(values[0]),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._render_override_error(exc)
         upload_match = re.fullmatch(
             r"/api/app-center/v1/uploads/([0-9a-f]{32})", path)
         if upload_match:
@@ -5017,7 +5304,15 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
         if install_recovery is not None:
             print("[appmgr] reconciled install transaction: %s" %
                   install_recovery, flush=True)
-            _audit("install_transaction_reconciled", **install_recovery)
+            # `_audit` takes the record's action positionally, and the
+            # reconciler's own "action" (committed/rolled_back) is a different
+            # field: splatting it raises TypeError. This runs once per boot and
+            # has no second chance, so the collision is renamed to `op` -- the
+            # same fix the render-override audit calls needed.
+            _audit("install_transaction_reconciled",
+                   op=install_recovery.get("action"),
+                   **{k: v for k, v in install_recovery.items()
+                      if k != "action"})
     except Exception as exc:
         print("[appmgr] install transaction recovery failed: %r" % exc,
               flush=True)
@@ -5036,6 +5331,11 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                   flush=True)
     except Exception as e:
         print(f"[appmgr] install reconciliation skipped: {e!r}", flush=True)
+    try:
+        _recover_render_overrides()
+    except Exception as exc:
+        print("[appmgr] render override recovery skipped: %r" % exc,
+              flush=True)
     coord = _coordinator()
     _result_hub_instance = canonical_results.ResultHub(
         ws_host=paths.RESULT_HUB_HOST,

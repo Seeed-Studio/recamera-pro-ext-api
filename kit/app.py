@@ -31,12 +31,14 @@ collision that a bare `app` module would cause.
 from __future__ import annotations
 
 import argparse
+import collections
 import inspect
 import json
 import os
 import re
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Sequence
@@ -46,7 +48,7 @@ import numpy as np
 from kit.adapters.frame_source import open_frame_source, DEFAULT_SUB_STREAM, Frame
 from kit.adapters.result_sink import ResultSink, open_result_sink
 from kit.diagnostics import get_logger
-from kit.errors import AdapterError
+from kit.errors import AdapterError, InputValidationError
 from kit.runtime.preprocess import letterbox
 from kit.runtime.postprocess.detect import postprocess, COCO80
 # NOTE: RknnModel (kit.runtime.engine) is imported LAZILY inside _load_model(),
@@ -539,6 +541,12 @@ def effective_render(manifest: Optional[dict],
     return out
 
 
+# ★Kit's reserved share of the `metrics` cap★: `frames()` publishes its
+# loop telemetry once per second (`METRICS_PERIOD`), so that is the rate it
+# reserves out of `App.metrics_max_hz`. See `App._metrics_budget`.
+LOOP_METRICS_HZ = 1.0
+
+
 class App:
     """Base application. Subclass with `owns_loop = True` and define `run()`."""
 
@@ -618,6 +626,19 @@ class App:
     # Historical apps retain eager, independent RGB frame storage by default.
     model_dma_input: bool = False
 
+    # ★Metrics rate limit★ (V4-4): typed `metrics` publications are limited
+    # independently of the result-frame rate limit, at 5 per second. 0 disables
+    # the limiter (a producer that already bounds its own rate).
+    metrics_max_hz: float = 5.0
+
+    # ★Publication gate★ (V6-2/V8-1). None for every app whose publications all
+    # come from the thread that also owns shutdown -- such an app always admits.
+    # An app with more than one publishing thread assigns the gate owned by its
+    # lifecycle owner (the merged `eldercare-monitor` assigns the voice state
+    # machine's), which is what makes "zero new publication admission after
+    # closing" hold across threads.
+    publication_gate = None
+
     def __init__(self) -> None:
         # config_schema-backed knobs (defaults; overridden in setup())
         self.conf: float = 0.25
@@ -661,6 +682,18 @@ class App:
         # bumped by each successful reload; `_render_cache` is (version, block).
         self._config_version: int = 0
         self._render_cache: Optional[tuple] = None
+
+        # -- publication serialization (V5-3/V6-2) ------------------------- #
+        # One lock around `sink.emit*` so a multi-threaded app (pose loop +
+        # voice loop) cannot interleave two publications, and so "publish" is
+        # the unit V7-1's callback budget is measured in. Single-threaded apps
+        # pay one uncontended acquire per frame.
+        self._publish_lock = threading.Lock()
+        # Rolling one-second windows of admitted `metrics` publications, one per
+        # producer, together bounded by `metrics_max_hz` -- see
+        # `_metrics_budget` / `_metrics_rate_ok` / `_loop_metrics_rate_ok`.
+        self._metrics_window: "collections.deque[float]" = collections.deque()
+        self._loop_metrics_window: "collections.deque[float]" = collections.deque()
 
     # -- application hooks (override these) -------------------------------- #
     def setup(self, config: Dict[str, Any]) -> None:
@@ -1150,6 +1183,15 @@ class App:
         the normal shape of a second-model or setup failure.  Runtime state is
         detached before invoking user/vendor cleanup so repeated calls remain
         idempotent even if one cleanup callback raises.
+
+        ★What this method does NOT release★ (V5-4): anything the application
+        owns outside the kit registry.  ``self.models`` holds only the models
+        THIS loop loaded, so an app that builds its own backend -- Voice's ASR,
+        which under the default RK backend is a session on the platform
+        inference service -- closes it in its own ``finish()`` BEFORE calling
+        ``super().finish()``.  That ordering is what keeps "no model released
+        while it is in use" true: the app has already drained and joined the
+        thread that could still be calling into that backend.
         """
         rt, self._rt = self._rt, None
         models, self.models = self.models, ModelRegistry()
@@ -1312,32 +1354,43 @@ class App:
             m_now = time.monotonic()
             m_dt = m_now - m_t0
             if m_dt >= METRICS_PERIOD and m_frames:
-                try:
-                    rt["sink"].emit_meta({
-                        "type": "metrics",
-                        "kind": "metrics",
-                        "app": self.id,
-                        "fps": round(m_frames / m_dt, 1),
-                        "latency_ms": {
-                            # Complete application loop body, including all
-                            # emit calls and work after them. Frame acquisition
-                            # and this metrics publication are outside `total`.
-                            "loop": round(m_loop / m_frames * 1000, 1),
-                            # `pre`/`infer`/`post` keep the existing appmgr /
-                            # debug-panel contract; in the new shape the app owns
-                            # post-processing, so `post` IS the app bucket. `app`
-                            # and `emit` are additive detail (spec §4).
-                            "pre": round(m_pre / m_frames * 1000, 1),
-                            "infer": round(m_inf / m_frames * 1000, 1),
-                            "post": round(m_app / m_frames * 1000, 1),
-                            "app": round(m_app / m_frames * 1000, 1),
-                            "emit": round(m_emit / m_frames * 1000, 1),
-                        },
-                        "frames": self._processed,
-                        "pts": frame.pts,
-                    })
-                except Exception:
-                    pass    # telemetry must never break the inference loop
+                # ★Same admission and same budget as every other `metrics`
+                # publication★ (V4-4/V5-3): the loop's telemetry is one more
+                # producer of the `metrics` type, so it is counted against the
+                # shared cap rather than added on top of it, and it stops
+                # entering once the publication gate closes. The measurement
+                # window still closes on schedule -- the counters below are
+                # reset either way, so a dropped envelope never stretches the
+                # interval the NEXT one reports.
+                if self._admit_publication() and self._loop_metrics_rate_ok():
+                    try:
+                        rt["sink"].emit_meta({
+                            "type": "metrics",
+                            "kind": "metrics",
+                            "app": self.id,
+                            "fps": round(m_frames / m_dt, 1),
+                            "latency_ms": {
+                                # Complete application loop body, including all
+                                # emit calls and work after them. Frame
+                                # acquisition and this metrics publication are
+                                # outside `total`.
+                                "loop": round(m_loop / m_frames * 1000, 1),
+                                # `pre`/`infer`/`post` keep the existing appmgr /
+                                # debug-panel contract; in the new shape the app
+                                # owns post-processing, so `post` IS the app
+                                # bucket. `app` and `emit` are additive detail
+                                # (spec §4).
+                                "pre": round(m_pre / m_frames * 1000, 1),
+                                "infer": round(m_inf / m_frames * 1000, 1),
+                                "post": round(m_app / m_frames * 1000, 1),
+                                "app": round(m_app / m_frames * 1000, 1),
+                                "emit": round(m_emit / m_frames * 1000, 1),
+                            },
+                            "frames": self._processed,
+                            "pts": frame.pts,
+                        })
+                    except Exception:
+                        pass    # telemetry must never break the inference loop
                 m_t0 = m_now
                 m_frames = 0
                 m_pre = m_inf = m_emit = m_app = m_loop = 0.0
@@ -1499,6 +1552,179 @@ class App:
             ts = frame.pts if frame is not None else time.monotonic()
         return bool(request(event_kind, float(ts)))
 
+    def _admit_publication(self) -> bool:
+        """Whether a publication may still enter a sink (V6-2/V8-1).
+
+        `publication_gate` is None for an app that publishes from one thread
+        only: such an app always admits, exactly as before. An app with several
+        publishing threads assigns a gate, and then "no new publication after
+        closing" is enforced *here*, at the single entry point every publication
+        goes through. Already-admitted publications are never interrupted.
+        """
+        gate = self.publication_gate
+        return True if gate is None else bool(gate.admit_publication())
+
+    @staticmethod
+    def _rolling_window_ok(window, limit: int, now: float,
+                           period: float = 1.0) -> bool:
+        """Admit one publication if fewer than `limit` fall inside `period`.
+
+        A rolling window rather than a token bucket, so the documented cap is
+        the whole story: there is no burst allowance on top of the sustained
+        rate. At most `limit` admissions in ANY window of `period` seconds,
+        which bounds a half-open window of T seconds at `limit * ceil(T /
+        period)` -- for the device's 30 s acceptance window at 5 Hz that is
+        exactly 150.
+        """
+        if limit <= 0:
+            # The caller has already handled the "no cap configured" case, so a
+            # non-positive limit here means this producer has no share at all.
+            return False
+        while window and now - window[0] >= period:
+            window.popleft()
+        if len(window) >= limit:
+            return False
+        window.append(now)
+        return True
+
+    def _metrics_hz(self) -> float:
+        """The configured cap on `metrics` envelopes, 0 meaning "no cap"."""
+        try:
+            return float(getattr(self, "metrics_max_hz", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _metrics_budget(self) -> int:
+        """How many `metrics` envelopes THIS application may publish per second.
+
+        ★One cap for the whole type, partitioned between its producers★
+        (V4-4). The documented cap bounds `type == "metrics"` envelopes, and
+        kit's own loop telemetry (:meth:`frames` -> `emit_meta`) is one of those
+        producers, so `LOOP_METRICS_HZ` of the cap is reserved for it and the
+        remainder is the application's. Measured on device before this existed,
+        the two paths simply added up -- 5.72 Hz against a documented 5.
+
+        The reservation is not a nicety. With an unpartitioned window the
+        application's publisher -- which attempts on every audio chunk, i.e. an
+        order of magnitude more often than the loop's once-per-second attempt --
+        wins the race for the freed slot, and the loop's telemetry is starved to
+        zero (measured: 0 loop envelopes in 4.4 s while the audio side took
+        every slot). Reserving its 1 Hz keeps both producers publishing while
+        the aggregate stays inside the cap.
+
+        A cap of `LOOP_METRICS_HZ` or less leaves the loop telemetry no share at
+        all: the application's own metrics are the product feature, so they keep
+        the whole cap and the telemetry is dropped until the cap is raised.
+        """
+        hz = self._metrics_hz()
+        if hz <= 0:
+            return 0                        # 0 == unlimited
+        return max(1, int(hz) - int(LOOP_METRICS_HZ))
+
+    def _loop_metrics_budget(self) -> int:
+        """Kit's reserved share of the `metrics` cap (see `_metrics_budget`)."""
+        hz = self._metrics_hz()
+        if hz <= 0:
+            return 0
+        return int(LOOP_METRICS_HZ) if int(hz) > int(LOOP_METRICS_HZ) else 0
+
+    def _metrics_period(self) -> float:
+        """Window length that makes `_metrics_budget()` mean `metrics_max_hz`.
+
+        Only matters below 1 Hz, where a one-second window cannot express the
+        cap ("0.5 per second" is one publication every two seconds).
+        """
+        hz = self._metrics_hz()
+        budget = self._metrics_budget()
+        if hz <= 0 or budget <= 0:
+            return 1.0
+        return max(1.0, budget / hz)
+
+    def _metrics_rate_ok(self) -> bool:
+        """Admission for the APPLICATION's own `metrics` publications."""
+        if self._metrics_hz() <= 0:
+            return True
+        return self._rolling_window_ok(self._metrics_window,
+                                       self._metrics_budget(),
+                                       time.monotonic(),
+                                       self._metrics_period())
+
+    def _loop_metrics_rate_ok(self) -> bool:
+        """Admission for kit's own periodic loop telemetry (reserved share)."""
+        if self._metrics_hz() <= 0:
+            return True
+        return self._rolling_window_ok(self._loop_metrics_window,
+                                       self._loop_metrics_budget(),
+                                       time.monotonic())
+
+    def emit_metrics(self, metrics: Optional[Dict[str, Any]] = None, *,
+                     ts: Optional[float] = None,
+                     extra: Optional[Dict[str, Any]] = None) -> bool:
+        """Publish one typed `metrics` envelope (audio levels, gauges, counters).
+
+        Returns True when the publication was admitted (and handed to the sink),
+        False when the metrics rate limit or the publication gate refused it.
+        Raises outside a started run(), same as :meth:`emit`.
+        """
+        if not self._metrics_rate_ok():
+            return False
+        return self._publish_typed("metrics", "metrics", metrics, ts=ts,
+                                   extra=extra)
+
+    def emit_status(self, summary: Optional[Dict[str, Any]] = None, *,
+                    events=None, ts: Optional[float] = None,
+                    extra: Optional[Dict[str, Any]] = None) -> bool:
+        """Publish one typed `status` envelope: durable state, not a frame.
+
+        `events` (optional) ride the same envelope, which is how a producer that
+        has no results to report still publishes an event -- a transcript, a
+        state transition -- WITHOUT clearing the last frame. :meth:`emit` cannot
+        do that: it always writes an explicit `results` list (possibly empty),
+        and a consumer reads an explicit empty list as "the frame is now empty"
+        (Result Hub, `wants_frame`). The typed envelope omits `results`
+        entirely, so the latest frame survives (V4-4).
+        """
+        payload_extra = dict(extra or {})
+        if events is not None:
+            payload_extra["events"] = [dict(e) for e in events]
+        return self._publish_typed("status", "summary", summary, ts=ts,
+                                   extra=payload_extra)
+
+    def _publish_typed(self, message_type: str, field: str, value, *,
+                       ts: Optional[float], extra) -> bool:
+        rt = self._rt
+        if rt is None:
+            raise RuntimeError(
+                f"emit_{message_type}() called outside a started run()")
+        if not self._admit_publication():
+            return False
+        payload: Dict[str, Any] = {}
+        if value:
+            payload[field] = dict(value)
+        for key, item in (extra or {}).items():
+            payload[key] = item
+        payload["type"] = message_type
+        # A typed publication carrying geometry is indistinguishable from a
+        # frame at the consumer, which would materialise an empty frame and
+        # wipe the live one (V4-4). Reject it at the source.
+        if payload.get("geometry"):
+            raise InputValidationError(
+                f"emit_{message_type}() must not carry geometry",
+                operation="app.emit_typed",
+                code="typed_geometry_forbidden",
+                details={"type": message_type})
+        with self._publish_lock:
+            frame = self._cur_frame
+            if ts is None:
+                ts = frame.pts if frame is not None else time.monotonic()
+            sink = rt["sink"]
+            emit_typed = getattr(sink, "emit_typed", None)
+            if callable(emit_typed):
+                emit_typed(payload, ts)
+            else:                       # third-party sink predating the API
+                sink.emit(payload, ts)
+        return True
+
     def emit(self, events=None, ts: Optional[float] = None, *,
              results=None, geometry=None,
              extra: Optional[Dict[str, Any]] = None) -> None:
@@ -1513,10 +1739,17 @@ class App:
         manifest. `ts` defaults to the current frame's pts.
 
         During the warm-up frame this is a no-op (same as pre-migration).
+
+        This is the FRAME path: it always publishes an explicit `results` list,
+        which a consumer reads as the current frame snapshot (an empty list
+        therefore clears the previous frame). Metrics and status are not frames
+        and do not use it -- see :meth:`emit_metrics` / :meth:`emit_status`.
         """
         rt = self._rt
         if rt is None:
             raise RuntimeError("emit() called outside a started run()")
+        if not self._admit_publication():
+            return
         t0 = time.monotonic()
         try:
             frame = self._cur_frame
@@ -1557,11 +1790,12 @@ class App:
             if not self._warmed:
                 return                      # warm-up frame: output discarded
             sink = rt["sink"]
-            if frame is not None:
-                sink.set_frame_size(frame.w, frame.h)
-            if ts is None:
-                ts = frame.pts if frame is not None else time.monotonic()
-            sink.emit(payload, ts)
+            with self._publish_lock:
+                if frame is not None:
+                    sink.set_frame_size(frame.w, frame.h)
+                if ts is None:
+                    ts = frame.pts if frame is not None else time.monotonic()
+                sink.emit(payload, ts)
         finally:
             self._t_emit += time.monotonic() - t0
 

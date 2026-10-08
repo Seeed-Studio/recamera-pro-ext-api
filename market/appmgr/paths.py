@@ -233,6 +233,15 @@ ICON_CONTENT_TYPES = {
 }
 MAX_ICON_BYTES = int(os.environ.get("APPMGR_MAX_ICON_BYTES", str(1024 * 1024)))  # 1 MiB
 
+# ★Sandboxed overlay plugin entry★ (overlay phase-2 spec §3).  manifest's
+# `ui.overlay` declares one self-contained web/overlay.html inside the package;
+# appmgr serves it from the install dir via
+# GET /api/app-center/v1/apps/<id>/overlay so the front end can inline it into
+# a sandboxed srcdoc iframe.  It is served text/plain (never interpreted as a
+# document at this URL), so the only real risks are traversal/links -- bounded
+# by the no-follow reader -- and size, bounded here and at member-vetting time.
+MAX_OVERLAY_BYTES = int(os.environ.get("APPMGR_MAX_OVERLAY_BYTES", str(256 * 1024)))
+
 APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 HTTP_HOST = os.environ.get("APPMGR_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.environ.get("APPMGR_HTTP_PORT", "8130"))
@@ -365,6 +374,13 @@ def busy_file() -> str:
 
 def audit_log() -> str:
     return os.path.join(APPMGR_DIR, "audit.log")
+
+
+def render_overrides_dir() -> str:
+    """Per-app browser display overrides (outside the replaceable app dir)."""
+    return os.environ.get(
+        "APPMGR_RENDER_OVERRIDES_DIR",
+        os.path.join(APPMGR_DIR, "render-overrides"))
 
 
 def operation_state_file() -> str:

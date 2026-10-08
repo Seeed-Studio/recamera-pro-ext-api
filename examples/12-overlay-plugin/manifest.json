@@ -1,0 +1,159 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 1,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": []
+  },
+  "artifacts": [],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 96,
+      "cpu_percent": 100,
+      "storage_mb": 8,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 60,
+    "stabilization_sec": 2,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "overlay-plugin-demo",
+  "name": "Overlay Plugin Demo",
+  "name_zh": "叠加插件演示",
+  "version": "0.1.0",
+  "type": "self-hosted",
+  "description": "Minimal sandboxed browser overlay plugin: the manifest declares ui.overlay -> web/overlay.html, a self-contained document the App Center mounts in a sandboxed iframe. The app itself only emits two geometry primitives per frame (declarative canvas stays as the fallback). No AI model and no NPU.",
+  "description_zh": "最小沙箱浏览器叠加插件：manifest 声明 ui.overlay -> web/overlay.html，App Center 将该自包含文档挂载进沙箱 iframe。应用本身每帧只发两个 geometry 图元（声明式画布作为回退）。不使用 AI 模型和 NPU。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "package": {
+    "exclude": [
+      "test_*.py",
+      "*.md"
+    ]
+  },
+  "capabilities": [
+    "output"
+  ],
+  "tags": [
+    "demo",
+    "overlay",
+    "plugin",
+    "cpu"
+  ],
+  "ui": {
+    "overlay": {
+      "entry": "web/overlay.html",
+      "sha256": "32656587ed1960fb9731e2d4e5759473956721b2e9f94b732483358fd2363433"
+    }
+  },
+  "render": {
+    "schema_version": 1,
+    "geometry": {
+      "types": [
+        "point",
+        "polygon"
+      ],
+      "max_items": 8,
+      "max_points": 8,
+      "style": {
+        "color": "#64ffda",
+        "line_width": 2,
+        "opacity": 1
+      }
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "geometry[]{type,points,id,label,style}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "geometry",
+        "from": "geometry[]",
+        "type": "geometry[]",
+        "coord": "pixel_points",
+        "description": "Overlay drawing primitives in original-frame pixels"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "geometry | length",
+        "target": "primitive_count",
+        "topic": "recamera/{{ app }}/summary"
+      }
+    ]
+  },
+  "config_schema": {
+    "groups": []
+  }
+}

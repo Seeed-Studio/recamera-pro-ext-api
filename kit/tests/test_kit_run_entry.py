@@ -254,7 +254,7 @@ class TestShippedApps(unittest.TestCase):
                   if os.path.isfile(os.path.join(APPS_DIR, d, "app.py")))
 
     def test_all_shipped_apps_are_present(self):
-        self.assertEqual(len(self.APPS), 12, self.APPS)
+        self.assertEqual(len(self.APPS), 16, self.APPS)
 
     def test_no_app_probes_for_kit_on_sys_path_any_more(self):
         """★The deletion, pinned★ -- one regression here and 40 lines come back."""

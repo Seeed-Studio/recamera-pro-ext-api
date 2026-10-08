@@ -32,6 +32,11 @@ market/packaging/icons/
 *_private*.pem
 *.key
 
+# 签名私钥不入库（私钥只放 ~/.recamera_release_key/；公钥 release_pub.pem 照常追踪）
+*priv*.pem
+*_private*.pem
+*.key
+
 # 大资源目录(应用素材/市场包)
 *.mp4
 *.avi
@@ -65,3 +70,4 @@ release/**/*.tar
 release/**/*.tar.gz
 release/**/*.bundle
 apps/face-recognition/evaluation/data/
+market/packaging/icons/

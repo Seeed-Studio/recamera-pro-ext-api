@@ -366,6 +366,66 @@ def test_ready_failure_restores_every_config_file_byte_exact(
     assert installer.load_install_transaction() is None
 
 
+def test_ready_failure_restores_legacy_only_config_pruned_by_the_release(
+        layout, monkeypatch):
+    """Legacy-only config + schema pruning + failed READY -> legacy wins again.
+
+    commit_prepared migrates <app_dir>/config.json into the canonical appdata
+    file (absent in the snapshot) and revalidate_user_config prunes the key the
+    new schema drops.  The rollback must remove that transaction-made canonical
+    copy instead of treating it as a user save, or load_user_config would
+    prefer it and retire the restored legacy file.
+    """
+    old_schema = {"keep_key": {"type": "number", "default": 1},
+                  "gone_key": {"type": "number", "default": 2}}
+    new_schema = {"keep_key": {"type": "number", "default": 1}}
+    server.do_install(_package(layout, "1.0.0", schema=old_schema))
+    state.set_active(APP_ID, "1.0.0")
+    legacy = appconfig.legacy_config_path(APP_ID)
+    legacy_bytes = b'{"keep_key": 5, "gone_key": 9}\n'
+    with open(legacy, "wb") as output:
+        output.write(legacy_bytes)
+    assert not os.path.exists(appconfig.config_path(APP_ID))
+    running = {APP_ID: 4242}
+    monkeypatch.setattr(
+        server.supervisor, "is_running", lambda app: running.get(app))
+    monkeypatch.setattr(server.supervisor, "has_run_record", lambda _app: False)
+    monkeypatch.setattr(
+        server.supervisor, "owned_pid_is_running", lambda *_args: False)
+
+    def stop(app_id):
+        running.pop(app_id, None)
+        return {"stopped": app_id}
+
+    pruned = []
+
+    def start(app_id, operation, proof=None, **_kwargs):
+        if operation == "upgrade_restart":
+            # The transaction's own migration + prune happened before READY.
+            with open(appconfig.config_path(APP_ID)) as source:
+                pruned.append(json.load(source))
+            raise supervisor.SupervisorError("injected READY failure")
+        running[app_id] = 5252
+        return 5252
+
+    monkeypatch.setattr(server.supervisor, "stop", stop)
+    monkeypatch.setattr(server, "_prepare_external_start", lambda *_args: {})
+    monkeypatch.setattr(server, "_coordinated_legacy_start", start)
+
+    with pytest.raises(supervisor.SupervisorError, match="READY failure"):
+        server.do_install(_package(layout, "2.0.0", schema=new_schema))
+
+    assert pruned == [{"keep_key": 5}]
+    assert _installed_version() == "1.0.0"
+    assert installer.load_install_transaction() is None
+    with open(legacy, "rb") as source:
+        assert source.read() == legacy_bytes
+    assert not os.path.exists(appconfig.config_path(APP_ID))
+    assert not os.path.exists(legacy + ".migrated")
+    # Effective after rollback: the dropped key is back.
+    assert appconfig.load_user_config(APP_ID) == {"keep_key": 5, "gone_key": 9}
+
+
 def test_ready_failure_with_failed_rollback_keeps_reconciler_fence(
         layout, monkeypatch):
     server.do_install(_package(layout, "1.0.0"))

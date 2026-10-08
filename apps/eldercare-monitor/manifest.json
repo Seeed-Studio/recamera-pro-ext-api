@@ -1,0 +1,736 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 5,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.3,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "imports": [
+      "kaldi_native_fbank",
+      "sentencepiece",
+      "sherpa_onnx",
+      "voxedge"
+    ],
+    "wheels": [
+      {
+        "name": "kaldi-native-fbank",
+        "version": "1.22.3",
+        "filename": "kaldi_native_fbank-1.22.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "file": "wheels/kaldi_native_fbank-1.22.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "sha256": "d48e5dd8e897bf4509be2c6eeb4bbab728eaaef1f214ae0510c96219c4253d17",
+        "size": 299054,
+        "tags": [
+          "cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "sentencepiece",
+        "version": "0.2.0",
+        "filename": "sentencepiece-0.2.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "file": "wheels/sentencepiece-0.2.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "sha256": "27f90c55a65013cbb8f4d7aab0599bf925cde4adc67ae43a0d323677b5a1c6cb",
+        "size": 1259182,
+        "tags": [
+          "cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "sherpa-onnx",
+        "version": "1.13.5",
+        "filename": "sherpa_onnx-1.13.5-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "file": "wheels/sherpa_onnx-1.13.5-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "sha256": "dfedcebfe90d5079b98231e0d8ab008460c52cd44199698b464569c90dfd2124",
+        "size": 4166120,
+        "tags": [
+          "cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "sherpa-onnx-core",
+        "version": "1.13.5",
+        "filename": "sherpa_onnx_core-1.13.5-py3-none-manylinux2014_aarch64.whl",
+        "file": "wheels/sherpa_onnx_core-1.13.5-py3-none-manylinux2014_aarch64.whl",
+        "sha256": "4cd751063a378a49f0c72eba5ba959fe375397f5baf93a53f3db64097d00e2aa",
+        "size": 13051193,
+        "tags": [
+          "py3-none-manylinux2014_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "voxedge",
+        "version": "0.0.9a0",
+        "filename": "voxedge-0.0.9a0-py3-none-any.whl",
+        "file": "wheels/voxedge-0.0.9a0-py3-none-any.whl",
+        "sha256": "1af3abb53e149cda35ee637c574393e6e9f383b9c8993be90c8fe6fde17d93d7",
+        "size": 280356,
+        "tags": [
+          "py3-none-any"
+        ],
+        "source": "bundled"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "pose-model",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "sha256": "3629dd1fe6c2229276295ff1050cf4a2cef9892bc87e4d2b50f5bef15bcc8add",
+      "size": 4691086,
+      "mount": "models/yolo11n_pose_rawhead_int8.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "silero-vad",
+      "kind": "onnx",
+      "source": "bundled",
+      "file": "models/asr/silero_vad.onnx",
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "size": 2327524,
+      "mount": "models/asr/silero_vad.onnx",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sensevoice-rknn",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/asr/sensevoice_rv1126b_w4a16.rknn",
+      "sha256": "3fa40ad9ab011f5f4134a355b0104c979d272450a0ff3c17ec34cba97f4f1c12",
+      "size": 133468923,
+      "mount": "models/asr/sensevoice_rv1126b_w4a16.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sensevoice-rknn-t100",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/asr/sensevoice_rv1126b_w4a16_t100.rknn",
+      "sha256": "0a2e450c432cc064da5518f0cac5c4a44bb2e728f45ab5370efb761b6126bc48",
+      "size": 132339323,
+      "mount": "models/asr/sensevoice_rv1126b_w4a16_t100.rknn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sensevoice-cmvn",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/asr/am.mvn",
+      "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5",
+      "size": 11203,
+      "mount": "models/asr/am.mvn",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sensevoice-embedding",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/asr/embedding.npy",
+      "sha256": "83cf1fc5680fdf6d7edb411be5ce351cad4eca03b29a5bf5050aa19dfcc12267",
+      "size": 35968,
+      "mount": "models/asr/embedding.npy",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "sensevoice-tokenizer",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/asr/chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "sha256": "aa87f86064c3730d799ddf7af3c04659151102cba548bce325cf06ba4da4e6a8",
+      "size": 377341,
+      "mount": "models/asr/chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "required": true,
+      "share_scope": "content"
+    }
+  ],
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "audio.capture",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 768,
+      "cpu_percent": 400,
+      "storage_mb": 256,
+      "shutdown_grace_sec": 15
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "audio.read",
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "appdata",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs",
+        "rkipc.rtsp"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 300,
+    "stabilization_sec": 5,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 2,
+      "window_sec": 300,
+      "backoff_sec": [
+        2,
+        10
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "eldercare-monitor",
+  "name": "Elder Care Monitor",
+  "name_zh": "居家养老监控",
+  "version": "0.1.0",
+  "image": "/appcenter/apps/eldercare-monitor.png",
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "type": "self-hosted",
+  "scene": "Safety & Care",
+  "scene_zh": "安全看护",
+  "description": "One process, two data streams: multi-person pose (YOLO11n-Pose on the NPU) for fall detection, and continuous offline voice transcription (silero VAD + SenseVoice) on a daemon thread, published as one application. Requires roughly the CPU, memory and microphone budget of fall-detection plus voice-transcribe together, so it claims an exclusive microphone lease against the standalone voice-transcribe app: only one of the two can run at a time.",
+  "description_zh": "单进程两路数据：多人体姿态（YOLO11n-Pose，跑在 NPU 上）做跌倒检测，同时一个守护线程持续做离线语音转写（silero VAD + SenseVoice），作为一个应用统一发布。它的 CPU、内存与麦克风开销约等于 fall-detection 与 voice-transcribe 之和，因此对独立运行的 voice-transcribe 申请独占麦克风租约：两者同一时间只能运行一个。",
+  "author": "Seeed reCamera Pro",
+  "entry": "app.py",
+  "capabilities": [
+    "audio",
+    "output"
+  ],
+  "needs_model": true,
+  "models": [
+    {
+      "id": "yolo11n_pose_rawhead_int8",
+      "file": "models/yolo11n_pose_rawhead_int8.rknn",
+      "task": "pose",
+      "input": [
+        1,
+        640,
+        640,
+        3
+      ],
+      "quant": "int8",
+      "keypoints": "coco17"
+    }
+  ],
+  "postproc": "pose",
+  "tags": [
+    "pose",
+    "fall",
+    "voice",
+    "asr",
+    "audio",
+    "npu"
+  ],
+  "ui": {
+    "overlay": {
+      "entry": "web/overlay.html",
+      "sha256": "123981122333d577b11c9e990984be8f563edeccd11dd06b3bef988a89f6d845"
+    }
+  },
+  "render": {
+    "schema_version": 1,
+    "boxes": {
+      "color_by": "state",
+      "label": "state",
+      "line_width": 2
+    },
+    "keypoints": {
+      "layout": "coco17",
+      "point_radius": 3,
+      "line_width": 2,
+      "conf_min": 0.3
+    },
+    "events": {
+      "transcript": {
+        "as": "subtitle",
+        "position": "bottom",
+        "max_lines": 2,
+        "duration_sec": 4,
+        "text": "{{ text }}"
+      },
+      "fall": {
+        "as": "toast",
+        "position": "top-center",
+        "duration_sec": 4,
+        "text": "Fall #{{ track_id }}"
+      },
+      "state": {
+        "as": "none"
+      }
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "results[]{box,score,keypoints[17][x,y,conf],kind,track_id,state,fall_detected,event_id} + events[]{kind=pose_state|fall|transcript|state,track_id,state,text} + typed metrics{audio_rms,audio_dbfs} + status{state,text}",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "persistent_summary": true,
+    "fields": [
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "description": "Person box, original-frame xyxy pixels"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Person detection confidence"
+      },
+      {
+        "name": "keypoints",
+        "from": "results[].keypoints",
+        "type": "keypoints<float>[17]",
+        "coord": "pixel_points",
+        "description": "COCO-17 pose keypoints"
+      },
+      {
+        "name": "kind",
+        "from": "results[].kind",
+        "type": "string",
+        "description": "Result kind, always 'person'"
+      },
+      {
+        "name": "track_id",
+        "from": "results[].track_id",
+        "type": "integer",
+        "description": "Stable per-identity track id"
+      },
+      {
+        "name": "state",
+        "from": "results[].state",
+        "type": "string",
+        "description": "Per-identity fall state (drives box colour and label)"
+      },
+      {
+        "name": "fall_detected",
+        "from": "results[].fall_detected",
+        "type": "bool",
+        "description": "Fall confirmed for this identity"
+      },
+      {
+        "name": "event_id",
+        "from": "results[].event_id",
+        "type": "integer",
+        "description": "Fall event id for this identity"
+      },
+      {
+        "name": "pose_state_kind",
+        "from": "events[kind=pose_state].kind",
+        "type": "string",
+        "event_kind": "pose_state",
+        "description": "Per-identity pose state event kind"
+      },
+      {
+        "name": "pose_state_track_id",
+        "from": "events[kind=pose_state].track_id",
+        "type": "integer",
+        "event_kind": "pose_state",
+        "description": "Track id of the pose_state event"
+      },
+      {
+        "name": "pose_state_state",
+        "from": "events[kind=pose_state].state",
+        "type": "string",
+        "event_kind": "pose_state",
+        "description": "State reported by the pose_state event"
+      },
+      {
+        "name": "fall_event_kind",
+        "from": "events[kind=fall].kind",
+        "type": "string",
+        "event_kind": "fall",
+        "description": "Fall edge event kind"
+      },
+      {
+        "name": "fall_event_track_id",
+        "from": "events[kind=fall].track_id",
+        "type": "integer",
+        "event_kind": "fall",
+        "description": "Track id that fell"
+      },
+      {
+        "name": "fall_event_state",
+        "from": "events[kind=fall].state",
+        "type": "string",
+        "event_kind": "fall",
+        "optional": true,
+        "description": "State at the moment of the fall edge"
+      },
+      {
+        "name": "transcript_kind",
+        "from": "events[kind=transcript].kind",
+        "type": "string",
+        "event_kind": "transcript",
+        "description": "Transcript event kind"
+      },
+      {
+        "name": "transcript_text",
+        "from": "events[kind=transcript].text",
+        "type": "string",
+        "event_kind": "transcript",
+        "description": "Transcribed text"
+      },
+      {
+        "name": "transcript_t",
+        "from": "events[kind=transcript].t",
+        "type": "float",
+        "event_kind": "transcript",
+        "optional": true,
+        "description": "Monotonic event timestamp"
+      },
+      {
+        "name": "state_event_kind",
+        "from": "events[kind=state].kind",
+        "type": "string",
+        "event_kind": "state",
+        "description": "Voice state event kind"
+      },
+      {
+        "name": "state_event_state",
+        "from": "events[kind=state].state",
+        "type": "string",
+        "event_kind": "state",
+        "optional": true,
+        "description": "Voice state (idle/listening/transcribing)"
+      },
+      {
+        "name": "summary_state",
+        "from": "summary.state",
+        "type": "string",
+        "description": "Persistent voice state, mirrors the last state event"
+      },
+      {
+        "name": "summary_text",
+        "from": "summary.text",
+        "type": "string",
+        "description": "Persistent last transcript text (survives non-transcript events)"
+      },
+      {
+        "name": "person_count",
+        "from": "person_count",
+        "derived": true,
+        "type": "integer",
+        "description": "Derived count of tracked people in the current frame"
+      },
+      {
+        "name": "fallen_count",
+        "from": "fallen_count",
+        "derived": true,
+        "type": "integer",
+        "description": "Derived count of identities currently in a fallen state"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "(events.transcript | last).text",
+        "target": "transcript",
+        "topic": "recamera/{{ app }}/transcript",
+        "task": "detection"
+      },
+      {
+        "source": "(events.state | last).state",
+        "target": "state",
+        "topic": "recamera/{{ app }}/state",
+        "task": "detection"
+      },
+      {
+        "source": "(events.fall | last).track_id",
+        "target": "fall",
+        "topic": "recamera/{{ app }}/fall",
+        "task": "detection"
+      }
+    ]
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "pose",
+        "title": "Pose & fall detection",
+        "title_zh": "姿态与跌倒检测",
+        "items": [
+          {
+            "key": "confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Person confidence",
+            "title_zh": "人体置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.4
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU",
+            "title_zh": "NMS IoU",
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.45
+          },
+          {
+            "key": "keypoint_confidence",
+            "type": "number",
+            "apply": "live",
+            "title": "Keypoint confidence",
+            "title_zh": "关键点置信度",
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05,
+            "default": 0.5
+          },
+          {
+            "key": "torso_angle_threshold_deg",
+            "type": "number",
+            "apply": "live",
+            "title": "Torso angle threshold (deg)",
+            "title_zh": "躯干角度阈值（度）",
+            "min": 20.0,
+            "max": 89.0,
+            "step": 1.0,
+            "default": 55.0
+          },
+          {
+            "key": "confirmation_sec",
+            "type": "number",
+            "apply": "live",
+            "title": "Confirmation window (s)",
+            "title_zh": "确认窗口（秒）",
+            "min": 0.0,
+            "max": 5.0,
+            "step": 0.1,
+            "default": 0.8
+          },
+          {
+            "key": "cooldown_sec",
+            "type": "number",
+            "apply": "live",
+            "title": "Fall cooldown (s)",
+            "title_zh": "跌倒冷却时间（秒）",
+            "min": 0.0,
+            "max": 60.0,
+            "step": 0.5,
+            "default": 3.0
+          },
+          {
+            "key": "tracker_iou_threshold",
+            "type": "number",
+            "apply": "live",
+            "title": "Tracker IoU threshold",
+            "title_zh": "跟踪 IoU 阈值",
+            "min": 0.05,
+            "max": 0.9,
+            "step": 0.05,
+            "default": 0.2
+          }
+        ]
+      },
+      {
+        "key": "voice",
+        "title": "Voice transcription",
+        "title_zh": "语音转写",
+        "items": [
+          {
+            "key": "asr_backend",
+            "type": "enum",
+            "apply": "restart",
+            "title": "ASR backend",
+            "title_zh": "识别后端",
+            "options": [
+              "rk",
+              "sherpa"
+            ],
+            "option_labels": [
+              "NPU w4a16 (rk)",
+              "CPU sherpa"
+            ],
+            "default": "rk",
+            "help": "rk = NPU w4a16 SenseVoice via the platform inference service (the bundled authenticated model; the model runs in that service, this app holds the session). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
+            "help_zh": "rk = 通过平台推理服务在 NPU 上跑 w4a16 SenseVoice（随包认证模型；模型运行在该服务中，本应用只持有会话）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
+          },
+          {
+            "key": "language",
+            "type": "enum",
+            "apply": "restart",
+            "title": "Language",
+            "title_zh": "语言",
+            "options": [
+              "auto",
+              "zh",
+              "en",
+              "ja",
+              "ko",
+              "yue"
+            ],
+            "option_labels": [
+              "Auto",
+              "Chinese",
+              "English",
+              "Japanese",
+              "Korean",
+              "Cantonese"
+            ],
+            "default": "auto"
+          },
+          {
+            "key": "model_dir",
+            "type": "string",
+            "apply": "restart",
+            "title": "ASR asset directory",
+            "title_zh": "识别资源目录",
+            "default": "models/asr"
+          },
+          {
+            "key": "min_silence_sec",
+            "type": "number",
+            "apply": "restart",
+            "title": "Silence to end utterance (s)",
+            "title_zh": "断句静音时长（秒）",
+            "min": 0.2,
+            "max": 3.0,
+            "step": 0.1,
+            "default": 1.2
+          },
+          {
+            "key": "max_utterance_sec",
+            "type": "number",
+            "apply": "restart",
+            "title": "Max recording length (s)",
+            "title_zh": "最长录音时长（秒）",
+            "min": 2.0,
+            "max": 30.0,
+            "step": 1.0,
+            "default": 15.0
+          },
+          {
+            "key": "preroll_ms",
+            "type": "number",
+            "apply": "restart",
+            "title": "Pre-roll look-back (ms)",
+            "title_zh": "句头回看补偿（毫秒）",
+            "min": 0.0,
+            "max": 800.0,
+            "step": 50.0,
+            "default": 300.0
+          },
+          {
+            "key": "audio_source",
+            "type": "enum",
+            "apply": "restart",
+            "title": "Audio source",
+            "title_zh": "音频来源",
+            "options": [
+              "ai_asr",
+              "rtsp"
+            ],
+            "option_labels": [
+              "ALSA ai_asr (shared capture)",
+              "RTSP audio track"
+            ],
+            "default": "ai_asr"
+          },
+          {
+            "key": "audio_filter",
+            "type": "string",
+            "apply": "restart",
+            "title": "Mic gain filter (ffmpeg -af)",
+            "title_zh": "麦克风增益滤镜（ffmpeg -af）",
+            "default": "loudnorm=I=-16:TP=-1.5"
+          },
+          {
+            "key": "metrics_max_hz",
+            "type": "number",
+            "apply": "live",
+            "title": "Audio level rate (Hz)",
+            "title_zh": "音频电平发布频率（Hz）",
+            "min": 0.5,
+            "max": 5.0,
+            "step": 0.5,
+            "default": 5.0,
+            "help": "Upper bound for typed audio-level metrics. Kit caps this at 5 Hz; raising the config value beyond 5 has no effect.",
+            "help_zh": "音频电平 metrics 的发布频率上限。kit 硬性限制为 5 Hz，配置中写更大的值也不会超过它。"
+          }
+        ]
+      }
+    ]
+  }
+}

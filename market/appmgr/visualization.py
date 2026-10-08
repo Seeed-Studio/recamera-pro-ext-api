@@ -95,12 +95,17 @@ def supports_detection_stream_osd(manifest: Any) -> bool:
             and isinstance(render.get("boxes"), dict))
 
 
-def effective_render(manifest: Any) -> dict:
+def effective_render(manifest: Any, override: Any = None) -> dict:
     """Copy the trusted render declaration and add only the strict legacy shim.
 
     The installed manifest remains byte-identical.  This projection is used by
     the Result Hub and Web API so both data-plane enforcement and presentation
     make the same decision during an OTA that preserves older app packages.
+
+    ``override`` is the device-level display override (render_override.py).  It
+    is merged leaf-by-leaf after the capability projection and is revalidated
+    here, so an unvalidated caller can never touch stream OSD, coordinate
+    spaces or geometry limits.
     """
     render = manifest.get("render") if isinstance(manifest, dict) else None
     projected = copy.deepcopy(render) if isinstance(render, dict) else {}
@@ -122,6 +127,10 @@ def effective_render(manifest: Any) -> dict:
             "supported": ["boxes"],
             "default": False,
         }
+    if override:
+        from . import render_override
+        clean, _ = render_override.sanitize(override)
+        projected = render_override.merge(projected, clean)
     return projected
 
 

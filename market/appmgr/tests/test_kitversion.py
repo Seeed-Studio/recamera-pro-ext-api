@@ -141,6 +141,6 @@ def test_recording_app_packages_require_new_kit_but_old_apps_remain_compatible(t
         manifest = json.loads((root / 'apps' / name / 'manifest.json').read_text())
         with pytest.raises(kitversion.KitIncompatible):
             kitversion.check(manifest, str(old_kit))
-        assert kitversion.check(manifest, str(root / 'kit')) == '0.3.0'
+        assert kitversion.check(manifest, str(root / 'kit')) == '0.4.0'
         manifest['compatibility']['kit_api'] = '>=0.1,<1'
-        assert kitversion.check(manifest, str(root / 'kit')) == '0.3.0'
+        assert kitversion.check(manifest, str(root / 'kit')) == '0.4.0'

@@ -36,6 +36,7 @@ DEFAULT_VERSION = "1.5.0"
 APPS = [
     "crayfish-fight",
     "face-analysis", "facemesh-reader", "fall-detection", "fitness-trainer",
+    "intrusion-detection",
     "ppocr-reader", "qrcode-reader", "retail-vision", "voice-transcribe",
     "yolo-detector",
 ]
@@ -43,10 +44,6 @@ APPS = [
 # Apps that live in apps/ but are NOT shipped yet. Listed so the inventory test
 # can tell "deliberately held back" from "someone forgot to add it to APPS".
 UNSHIPPED_APPS = [
-    # imports paho.mqtt, which the kit deliberately does NOT depend on
-    # (kit/adapters/mqtt_sink.py hand-rolls a client for exactly that reason)
-    # and which the manifest does not declare as a runtime.
-    "intrusion-detection",
     # work in progress; not reviewed for release.
     "face-recognition",
 ]
@@ -57,7 +54,9 @@ UNSHIPPED_APPS = [
 # missing one installs fine and dies at `import` on the first frame. The App
 # Center builder (market/packaging/build.py) already takes "any sibling helper
 # .py"; this list used to name app.py alone, so the two packagers disagreed.
-APP_INCLUDE_TOP = ("manifest.json", "app.py", "README.md", "models")
+# `esk` is intrusion-detection's helper package (a directory, not a sibling
+# .py), so it is named here explicitly; without it the app dies at import.
+APP_INCLUDE_TOP = ("manifest.json", "app.py", "README.md", "models", "esk")
 # ...plus every other top-level .py in the app dir, minus tests.
 APP_INCLUDE_SIBLING_PY = True
 # Big model weights never travel in an app package (shared, via catalog).

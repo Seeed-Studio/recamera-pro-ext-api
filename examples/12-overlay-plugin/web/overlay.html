@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>overlay-plugin-demo</title>
+<!--
+  Sandboxed overlay plugin for overlay-plugin-demo (overlay phase-2 spec).
+
+  The App Center host fetches this document from
+  /api/app-center/v1/apps/<id>/overlay?h=<sha256>, prepends its own CSP meta
+  and a bootstrap <script>, and mounts the result as
+  <iframe sandbox="allow-scripts" srcdoc="...">.  The injected bootstrap
+  creates the MessageChannel BEFORE any package code runs and exposes this
+  document's end as window.__overlayPort.
+
+  This file must stay ONE self-contained document: inline CSS + JS only, no
+  external css/js/img/font, no fetch/WebSocket/storage/parent access.  The
+  channel is port-only: data flows in over __overlayPort after this document
+  posts its single "ready" handshake.
+-->
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  #stage { position: absolute; inset: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  var PROTOCOL = 1;
+  var CHANNEL = "recamera.overlay.plugin";
+  var MAX_DRAWN_RESULTS = 16;
+
+  var port = window.__overlayPort || null;
+  var canvas = document.getElementById("stage");
+  var ctx = canvas.getContext("2d");
+  var seq = 0;
+  var viewport = null;                       // {x, y, width, height} in overlay CSS px
+  var dpr = 1;
+  var stream = null;                         // {width, height, coordinate_space}
+  var results = [];                          // latest frame's results[]
+
+  function nextSeq() {
+    seq += 1;
+    return seq;
+  }
+
+  // The one outbound message shape allowed by the protocol: ready is sent
+  // exactly once, right after this document is up.  Errors would use the same
+  // header {protocol, channel, type, seq}.
+  function sendReady() {
+    if (!port) return;
+    try {
+      port.postMessage({
+        protocol: PROTOCOL,
+        channel: CHANNEL,
+        type: "ready",
+        seq: nextSeq(),
+      });
+    } catch (err) { /* port already closed */ }
+  }
+
+  // -- coordinate mapping (mirror of the declarative canvas) ---------------
+  function toScreen(point) {
+    var x = point[0];
+    var y = point[1];
+    if (stream && typeof stream.width === "number" && stream.width > 0 &&
+        typeof stream.height === "number" && stream.height > 0 &&
+        String(stream.coordinate_space || "").indexOf("pixel_") === 0) {
+      x = x / stream.width;                  // pixel coords -> normalized
+      y = y / stream.height;
+    }
+    var vx = viewport || { x: 0, y: 0,
+                           width: window.innerWidth,
+                           height: window.innerHeight };
+    return [vx.x + x * vx.width, vx.y + y * vx.height];
+  }
+
+  // -- drawing ---------------------------------------------------------------
+  function chip(x, y, w, h, text, fill, stroke) {
+    var r = Math.min(h / 2, 10);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(x, y, w, h, r);
+    } else {
+      ctx.rect(x, y, w, h);                  // pre-roundRect fallback
+    }
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (text) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, x + 10, y + h / 2);
+    }
+  }
+
+  function resultChip(item) {
+    var box = item && item.box;
+    if (!box || box.length < 4) return;
+    var a = toScreen([box[0], box[1]]);
+    var b = toScreen([box[2], box[3]]);
+    var x = Math.min(a[0], b[0]);
+    var y = Math.min(a[1], b[1]) - 26;
+    var w = Math.max(96, Math.abs(b[0] - a[0]));
+    var parts = [String(item.kind || "result")];
+    if (typeof item.score === "number") parts.push(Math.round(item.score * 100) + "%");
+    if (typeof item.track_id !== "undefined" && item.track_id !== null) {
+      parts.push("id " + item.track_id);
+    }
+    chip(x, y, w, 24, parts.join(" · "), "#5c1a1a", "#ffb4a2");
+  }
+
+  function draw() {
+    var w = (viewport && viewport.width) || window.innerWidth;
+    var h = (viewport && viewport.height) || window.innerHeight;
+    ctx.clearRect(0, 0, w, h);
+    // Pipeline check: two rounded chips are on screen as soon as the plugin
+    // mounts, before any app data arrives.
+    chip(16, 16, 156, 28, "overlay plugin ready", "#102a43", "#64ffda");
+    chip(16, 52, 156, 28, results.length ? results.length + " item(s)" : "waiting for frames",
+         "#1d2d44", "#8899aa");
+    for (var i = 0; i < results.length && i < MAX_DRAWN_RESULTS; i++) {
+      resultChip(results[i]);
+    }
+  }
+
+  function resize() {
+    var w = (viewport && viewport.width) || window.innerWidth;
+    var h = (viewport && viewport.height) || window.innerHeight;
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  // -- host -> plugin messages (port only; no window message listener) ------
+  function applyContext(payload) {
+    if (payload.viewport) viewport = payload.viewport;
+    if (payload.dpr) dpr = payload.dpr;
+    if (payload.geometry) {
+      viewport = payload.geometry.viewport || viewport;
+      dpr = payload.geometry.dpr || dpr;
+      stream = payload.geometry.stream || stream;
+    }
+    if (payload.stream) stream = payload.stream;
+  }
+
+  function onMessage(event) {
+    var data = event.data;
+    if (!data || data.protocol !== PROTOCOL || data.channel !== CHANNEL) {
+      return;                                // not ours: ignore, never count
+    }
+    switch (data.type) {
+      case "init":
+        applyContext(data);
+        resize();
+        break;
+      case "geometry":
+        applyContext(data);
+        resize();
+        break;
+      case "frame":
+        results = Array.isArray(data.results) ? data.results : [];
+        applyContext(data);
+        draw();
+        break;
+      case "event":
+        draw();
+        break;
+      case "teardown":
+        results = [];
+        draw();
+        break;
+      default:
+        draw();                              // status/render/visibility: repaint only
+        break;
+    }
+  }
+
+  window.addEventListener("resize", resize);
+  if (!port) {
+    // No injected bootstrap: no channel, no data.  Keep the chips visible so a
+    // broken bootstrap is diagnosable instead of a blank overlay.
+    resize();
+    return;
+  }
+  port.onmessage = onMessage;
+  resize();
+  sendReady();                               // host starts delivering after this
+})();
+</script>
+</body>
+</html>

@@ -332,11 +332,17 @@ class AlsaTakeoverSource(AudioSource):
     _pending: Optional[bytes] = None
 
     def _read_exact(self, n: int) -> Optional[bytes]:
-        if not self._proc or not self._proc.stdout:
+        # Snapshot the subprocess: close() runs on the owner's thread while
+        # this reader is parked here (that is how a blocked read is cancelled),
+        # so re-reading self._proc would race with the attribute being cleared.
+        # A source whose owner closes it mid-read must return a clean
+        # end-of-stream, never raise out of read().
+        proc = self._proc
+        if not proc or not proc.stdout:
             return None
         buf = bytearray()
         while len(buf) < n:
-            chunk = self._proc.stdout.read(n - len(buf))
+            chunk = proc.stdout.read(n - len(buf))
             if not chunk:
                 return None
             buf.extend(chunk)
@@ -465,11 +471,17 @@ class RtspAudioSource(AudioSource):
         return self
 
     def _read_exact(self, n: int) -> Optional[bytes]:
-        if not self._proc or not self._proc.stdout:
+        # Snapshot the subprocess: close() runs on the owner's thread while
+        # this reader is parked here (that is how a blocked read is cancelled),
+        # so re-reading self._proc would race with the attribute being cleared.
+        # A source whose owner closes it mid-read must return a clean
+        # end-of-stream, never raise out of read().
+        proc = self._proc
+        if not proc or not proc.stdout:
             return None
         buf = bytearray()
         while len(buf) < n:
-            chunk = self._proc.stdout.read(n - len(buf))
+            chunk = proc.stdout.read(n - len(buf))
             if not chunk:
                 return None
             buf.extend(chunk)
@@ -717,11 +729,17 @@ class AiAsrAudioSource(AudioSource):
         return " ".join(out)
 
     def _read_exact(self, n: int) -> Optional[bytes]:
-        if not self._proc or not self._proc.stdout:
+        # Snapshot the subprocess: close() runs on the owner's thread while
+        # this reader is parked here (that is how a blocked read is cancelled),
+        # so re-reading self._proc would race with the attribute being cleared.
+        # A source whose owner closes it mid-read must return a clean
+        # end-of-stream, never raise out of read().
+        proc = self._proc
+        if not proc or not proc.stdout:
             return None
         buf = bytearray()
         while len(buf) < n:
-            chunk = self._proc.stdout.read(n - len(buf))
+            chunk = proc.stdout.read(n - len(buf))
             if not chunk:
                 return None
             buf.extend(chunk)
@@ -806,11 +824,18 @@ class WavFileAudioSource(AudioSource):
         return self
 
     def read(self) -> Optional[PcmFrame]:
-        if self._samples is None or self._pos >= self._samples.size:
+        # Snapshot the buffer: close() (owner teardown) may null it while this
+        # reader sleeps below, and a torn read must end the stream rather than
+        # raise into the caller's loop.
+        samples = self._samples
+        if samples is None or self._pos >= samples.size:
             return None
         if self.realtime:
             time.sleep(self.chunk_ms / 1000.0)
-        chunk = self._samples[self._pos:self._pos + self._chunk_samples]
+            samples = self._samples
+            if samples is None or self._pos >= samples.size:
+                return None
+        chunk = samples[self._pos:self._pos + self._chunk_samples]
         self._pos += self._chunk_samples
         return PcmFrame(pcm=chunk.tobytes(), rate=self.target_rate,
                         ch=self.target_ch, pts=time.monotonic())
