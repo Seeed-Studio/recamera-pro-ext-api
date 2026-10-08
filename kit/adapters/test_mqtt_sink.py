@@ -92,3 +92,268 @@ def test_fall_contract_matches_cross_platform_shape():
     assert state["event_id_scope"] == "stream_global_event_id"
     assert state["person_count"] == state["fallen_count"] == 1
     assert len(state["persons"][0]["pose17"]) == 17
+
+
+# --------------------------------------------------------------------------- #
+# MqttClient: SUBSCRIBE / inbound PUBLISH / QoS1 / keepalive / reconnect,
+# against an in-process fake broker on a socketpair (no network).
+# --------------------------------------------------------------------------- #
+import queue  # noqa: E402
+import socket  # noqa: E402
+import struct  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+import pytest  # noqa: E402
+
+from kit.adapters import mqtt_sink  # noqa: E402
+from kit.adapters.mqtt_sink import MqttClient, _MqttConnection  # noqa: E402
+
+
+def _read_pkt(sock):
+    """Broker-side reader: one control packet -> (header0, body) or None."""
+    def exact(n):
+        buf = b""
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                return None
+            buf += chunk
+        return buf
+    h = exact(1)
+    if h is None:
+        return None
+    length, mult = 0, 1
+    while True:
+        b = exact(1)
+        if b is None:
+            return None
+        length += (b[0] & 0x7F) * mult
+        mult *= 128
+        if not b[0] & 0x80:
+            break
+    body = exact(length) if length else b""
+    return None if body is None else (h[0], body)
+
+
+def _wire_str(s):
+    d = s.encode()
+    return struct.pack(">H", len(d)) + d
+
+
+class FakeBroker:
+    """Accepts each `socket.create_connection` as a socketpair session.
+
+    Every packet the client sends lands in `self.rx` as
+    (session_no, header0, body). The broker auto-answers CONNECT with
+    CONNACK(rc), SUBSCRIBE with SUBACK(granted qos) and PINGREQ with PINGRESP.
+    """
+
+    def __init__(self, rc=0):
+        self.rc = rc
+        self.rx = queue.Queue()
+        self.sessions = []
+
+    def create_connection(self, _addr, timeout=None):
+        client, server = socket.socketpair()
+        if timeout is not None:
+            client.settimeout(timeout)
+        n = len(self.sessions)
+        self.sessions.append(server)
+        threading.Thread(target=self._serve, args=(n, server), daemon=True).start()
+        return client
+
+    def _serve(self, n, sock):
+        while True:
+            try:
+                pkt = _read_pkt(sock)
+            except OSError:
+                pkt = None
+            if pkt is None:
+                self.rx.put((n, None, b""))
+                return
+            h, body = pkt
+            self.rx.put((n, h, body))
+            ptype = h >> 4
+            try:
+                if ptype == 1:
+                    sock.sendall(bytes([0x20, 2, 0, self.rc]))
+                elif ptype == 8:
+                    pid = body[:2]
+                    sock.sendall(bytes([0x90, 3]) + pid + bytes([body[-1]]))
+                elif ptype == 12:
+                    sock.sendall(b"\xd0\x00")
+            except OSError:
+                return
+
+    def send(self, n, data):
+        self.sessions[n].sendall(data)
+
+    def expect(self, ptype, timeout=3.0):
+        """Next packet of `ptype` (others are skipped) -> (session, h, body)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise AssertionError(f"no packet type {ptype} within {timeout}s")
+            n, h, body = self.rx.get(timeout=left)
+            if h is not None and h >> 4 == ptype:
+                return n, h, body
+
+
+@pytest.fixture
+def broker(monkeypatch):
+    b = FakeBroker()
+    monkeypatch.setattr(mqtt_sink.socket, "create_connection", b.create_connection)
+    yield b
+    for s in b.sessions:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def _parse_connect(body):
+    pos = 2 + struct.unpack(">H", body[:2])[0]           # protocol name
+    level, flags = body[pos], body[pos + 1]
+    keepalive = struct.unpack(">H", body[pos + 2:pos + 4])[0]
+    return level, flags, keepalive
+
+
+def test_connect_encodes_qos1_retained_will(broker):
+    client = MqttClient("broker", 1883, client_id="cid", keepalive=30,
+                        username="u", password="p", will_topic="a/status",
+                        will_payload=b'{"online":false}', will_qos=1,
+                        will_retain=True)
+    client.connect()
+    try:
+        _, _, body = broker.expect(1)
+        level, flags, keepalive = _parse_connect(body)
+        assert level == 4 and keepalive == 30
+        # username|password|will retain|will QoS1|will flag|clean session
+        assert flags == 0x80 | 0x40 | 0x20 | 0x08 | 0x04 | 0x02
+        assert b"a/status" in body and b'{"online":false}' in body
+    finally:
+        client.disconnect()
+
+
+def test_subscribe_inbound_qos1_dispatch_and_puback(broker):
+    got = []
+    connected = []
+    client = MqttClient("broker", client_id="cid",
+                        on_connect=lambda c: connected.append(c),
+                        on_message=lambda t, p: got.append((t, p)))
+    client.subscribe("base/cmd/snapshot", qos=1)
+    client.connect()
+    try:
+        _, h, body = broker.expect(8)
+        assert h == 0x82                                 # SUBSCRIBE, reserved bits 0010
+        assert body[2:] == _wire_str("base/cmd/snapshot") + b"\x01"
+        assert connected == [client]
+        # broker delivers a QoS1 PUBLISH, packet id 0x1234
+        body = _wire_str("base/cmd/snapshot") + b"\x12\x34" + b'{"event_id":"e1"}'
+        broker.send(0, bytes([0x32, len(body)]) + body)
+        _, h, ack = broker.expect(4)
+        assert (h, ack) == (0x40, b"\x12\x34")           # PUBACK echoes the id
+        deadline = time.monotonic() + 2
+        while not got and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert got == [("base/cmd/snapshot", b'{"event_id":"e1"}')]
+        # QoS0 delivery: dispatched, no PUBACK
+        body = _wire_str("base/cmd/snapshot") + b"x"
+        broker.send(0, bytes([0x30, len(body)]) + body)
+        deadline = time.monotonic() + 2
+        while len(got) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert got[1] == ("base/cmd/snapshot", b"x")
+    finally:
+        client.disconnect()
+
+
+def test_publish_qos_and_retain_flags(broker):
+    client = MqttClient("broker", client_id="cid")
+    client.connect()
+    try:
+        assert client.publish("t/status", '{"a":1}', qos=1, retain=True)
+        _, h, body = broker.expect(3)
+        assert h == 0x33                                 # PUBLISH|QoS1|retain
+        assert body.startswith(_wire_str("t/status"))
+        pid = struct.unpack(">H", body[10:12])[0]
+        assert pid != 0 and body[12:] == b'{"a":1}'
+        assert client.publish("t/det", b"d", qos=0, retain=False)
+        _, h, body = broker.expect(3)
+        assert h == 0x30 and body == _wire_str("t/det") + b"d"
+        with pytest.raises(ValueError):
+            client.publish("t", b"", qos=2)
+    finally:
+        client.disconnect()
+
+
+def test_keepalive_sends_pingreq(broker):
+    client = MqttClient("broker", client_id="cid", keepalive=1)
+    client.connect()
+    try:
+        _, h, body = broker.expect(12, timeout=3.0)      # PINGREQ within keepalive
+        assert (h, body) == (0xC0, b"")
+        assert client.is_connected()
+    finally:
+        client.disconnect()
+
+
+def test_reconnect_resubscribes_and_reruns_on_connect(broker):
+    connects = []
+    client = MqttClient("broker", client_id="cid",
+                        on_connect=lambda c: connects.append(time.monotonic()))
+    client.subscribe("x/cmd", qos=1)
+    client.connect()
+    try:
+        n, _, _ = broker.expect(8)
+        assert n == 0
+        broker.sessions[0].shutdown(socket.SHUT_RDWR)    # broker drops the link
+        n, _, body = broker.expect(8, timeout=5.0)       # SUBSCRIBE again
+        assert n == 1 and body[2:] == _wire_str("x/cmd") + b"\x01"
+        assert len(connects) == 2
+        assert client.publish("x/y", b"1")
+    finally:
+        client.disconnect()
+
+
+def test_publish_while_down_is_false_not_raise(broker):
+    client = MqttClient("broker", client_id="cid")
+    assert client.publish("t", b"x") is False             # never connected
+
+
+def test_refused_connect_raises_and_leaves_no_thread(monkeypatch):
+    b = FakeBroker(rc=5)                                  # not authorised
+    monkeypatch.setattr(mqtt_sink.socket, "create_connection", b.create_connection)
+    client = MqttClient("broker", client_id="cid")
+    with pytest.raises(ConnectionError, match="rc=5"):
+        client.connect()
+    assert client._thread is None and not client.is_connected()
+
+
+def test_disconnect_sends_disconnect_and_stops_thread(broker):
+    client = MqttClient("broker", client_id="cid")
+    client.connect()
+    thread = client._thread
+    client.disconnect()
+    _, h, _ = broker.expect(14)
+    assert h == 0xE0
+    thread.join(2.0)
+    assert not thread.is_alive() and not client.is_connected()
+
+
+def test_connection_read_packet_parses_multibyte_length():
+    a, b = socket.socketpair()
+    try:
+        conn = _MqttConnection("h", 1, "cid")
+        conn._sock = a
+        payload = b"z" * 300                              # remaining length > 127
+        body = _wire_str("t") + payload
+        b.sendall(bytes([0x30]) + mqtt_sink._remaining_length(len(body)) + body)
+        h, got = conn.read_packet()
+        assert h == 0x30
+        assert mqtt_sink._parse_publish(h, got) == ("t", payload, 0, 0)
+    finally:
+        a.close()
+        b.close()

@@ -9,10 +9,13 @@ signal (detection count, fall state, entry/exit counts, QR text, ...).
 
 Why a hand-rolled client (no paho-mqtt)
 ---------------------------------------
-We only ever PUBLISH (QoS 0) -- never subscribe. MQTT 3.1.1 CONNECT + PUBLISH +
-PINGREQ is a few dozen bytes of framing, so we implement it directly on a
-stdlib socket (~150 LOC below). Zero new dependencies enter the shared device
-venv or any app package. A background thread owns the socket: it connects,
+MqttSink only ever PUBLISHes (QoS 0) -- it never subscribes. MQTT 3.1.1 CONNECT
++ PUBLISH + PINGREQ is a few dozen bytes of framing, so we implement it directly
+on a stdlib socket. `MqttClient` (below) adds the small remainder an app with a
+downlink needs -- QoS 0/1 PUBLISH, QoS 0/1 SUBSCRIBE, inbound PUBLISH dispatch
+with PUBACK, and a reader thread that owns keepalive and reconnect -- so apps
+such as intrusion-detection need no paho either. Zero new dependencies enter
+the shared device venv or any app package. A background thread owns the socket: it connects,
 publishes the retained discovery configs + an "online" availability message,
 then keeps the link alive with PINGREQ and transparently reconnects (re-arming
 discovery) after any drop. `emit()` is best-effort and never blocks or raises
@@ -40,17 +43,18 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import struct
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from kit.adapters.result_sink import ResultSink
 
 
 # --------------------------------------------------------------------------- #
-# minimal MQTT 3.1.1 publish-only wire codec
+# minimal MQTT 3.1.1 wire codec
 # --------------------------------------------------------------------------- #
 def _remaining_length(n: int) -> bytes:
     """Encode an MQTT variable-length integer (remaining length field)."""
@@ -72,14 +76,19 @@ def _mqtt_str(s: str) -> bytes:
     return struct.pack(">H", len(data)) + data
 
 
+# MQTT control packet types (high nibble of the fixed header byte)
+_CONNACK, _PUBLISH, _PUBACK, _SUBSCRIBE, _SUBACK, _PINGRESP = 2, 3, 4, 8, 9, 13
+
+
 class _MqttConnection:
-    """A single live MQTT publish-only connection. Not thread-safe on its own;
-    the owning MqttSink serialises access with a lock."""
+    """A single live MQTT 3.1.1 connection (QoS 0/1). Writes are serialised by
+    an internal lock so a reader thread and publishers can share it; reads
+    (`read_packet`) must come from one thread only."""
 
     def __init__(self, host: str, port: int, client_id: str,
                  keepalive: int = 30, username: str = "", password: str = "",
                  will_topic: str = "", will_payload: bytes = b"",
-                 will_retain: bool = True):
+                 will_retain: bool = True, will_qos: int = 0):
         self.host = host
         self.port = port
         self.client_id = client_id
@@ -89,7 +98,23 @@ class _MqttConnection:
         self.will_topic = will_topic
         self.will_payload = will_payload
         self.will_retain = will_retain
+        self.will_qos = will_qos
         self._sock: Optional[socket.socket] = None
+        self._send_lock = threading.Lock()
+        self._next_pid = 0
+        self.last_tx = 0.0   # monotonic time of the last packet sent
+
+    def _packet_id(self) -> int:
+        self._next_pid = self._next_pid % 0xFFFF + 1   # 1..65535, never 0
+        return self._next_pid
+
+    def _send(self, data: bytes) -> None:
+        sock = self._sock
+        if sock is None:
+            raise ConnectionError("not connected")
+        with self._send_lock:
+            sock.sendall(data)
+            self.last_tx = time.monotonic()
 
     def connect(self, timeout: float = 5.0) -> None:
         sock = socket.create_connection((self.host, self.port), timeout=timeout)
@@ -99,6 +124,7 @@ class _MqttConnection:
         payload = _mqtt_str(self.client_id)
         if self.will_topic:
             flags |= 0x04                       # will flag
+            flags |= (self.will_qos & 0x03) << 3  # will QoS
             if self.will_retain:
                 flags |= 0x20                   # will retain
             payload += _mqtt_str(self.will_topic)
@@ -128,6 +154,7 @@ class _MqttConnection:
             sock.close()
             raise ConnectionError(f"MQTT CONNECT refused rc={rc}")
         self._sock = sock
+        self.last_tx = time.monotonic()
 
     @staticmethod
     def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -139,29 +166,305 @@ class _MqttConnection:
             buf += chunk
         return buf
 
-    def publish(self, topic: str, payload: bytes, retain: bool = False) -> None:
+    def publish(self, topic: str, payload: bytes, retain: bool = False,
+                qos: int = 0) -> None:
+        """QoS 0 or 1. A QoS 1 PUBACK is consumed by `read_packet`'s caller;
+        there is no retransmission (fire-once at-least-once framing)."""
         if self._sock is None:
             raise ConnectionError("not connected")
-        header0 = 0x30 | (0x01 if retain else 0x00)   # PUBLISH, QoS0, no dup
-        body = _mqtt_str(topic) + payload             # QoS0 -> no packet id
-        self._sock.sendall(bytes([header0]) + _remaining_length(len(body)) + body)
+        if qos not in (0, 1):
+            raise ValueError(f"unsupported QoS {qos}")
+        header0 = 0x30 | (qos << 1) | (0x01 if retain else 0x00)  # no dup
+        body = _mqtt_str(topic)
+        if qos:
+            body += struct.pack(">H", self._packet_id())
+        body += payload
+        self._send(bytes([header0]) + _remaining_length(len(body)) + body)
+
+    def subscribe(self, topic: str, qos: int = 0) -> int:
+        """Send SUBSCRIBE for one topic filter; returns its packet id."""
+        if qos not in (0, 1):
+            raise ValueError(f"unsupported QoS {qos}")
+        pid = self._packet_id()
+        body = struct.pack(">H", pid) + _mqtt_str(topic) + bytes([qos])
+        self._send(b"\x82" + _remaining_length(len(body)) + body)
+        return pid
+
+    def puback(self, pid: int) -> None:
+        self._send(b"\x40\x02" + struct.pack(">H", pid))
 
     def ping(self) -> None:
         if self._sock is None:
             raise ConnectionError("not connected")
-        self._sock.sendall(b"\xc0\x00")   # PINGREQ (server replies PINGRESP)
+        self._send(b"\xc0\x00")   # PINGREQ (server replies PINGRESP)
+
+    def wait_readable(self, timeout: float) -> bool:
+        sock = self._sock
+        if sock is None:
+            raise ConnectionError("not connected")
+        readable, _, _ = select.select([sock], [], [], timeout)
+        return bool(readable)
+
+    def read_packet(self):
+        """Read one whole control packet -> (fixed_header_byte, body)."""
+        sock = self._sock
+        if sock is None:
+            raise ConnectionError("not connected")
+        hdr = self._recv_exact(sock, 1)
+        if not hdr:
+            raise ConnectionError("broker closed the connection")
+        length, mult = 0, 1
+        for _ in range(4):
+            b = self._recv_exact(sock, 1)
+            if not b:
+                raise ConnectionError("truncated remaining length")
+            length += (b[0] & 0x7F) * mult
+            mult *= 128
+            if not b[0] & 0x80:
+                break
+        else:
+            raise ConnectionError("malformed remaining length")
+        body = self._recv_exact(sock, length)
+        if len(body) != length:
+            raise ConnectionError("truncated packet")
+        return hdr[0], body
 
     def close(self) -> None:
-        if self._sock is not None:
+        sock, self._sock = self._sock, None
+        if sock is not None:
             try:
-                self._sock.sendall(b"\xe0\x00")   # DISCONNECT
+                with self._send_lock:
+                    sock.sendall(b"\xe0\x00")   # DISCONNECT
             except OSError:
                 pass
             try:
-                self._sock.close()
+                sock.shutdown(socket.SHUT_RDWR)  # wakes a reader in select()
             except OSError:
                 pass
-            self._sock = None
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def _parse_publish(header0: int, body: bytes) -> Tuple[str, bytes, int, int]:
+    """PUBLISH body -> (topic, payload, qos, packet_id or 0)."""
+    qos = (header0 >> 1) & 0x03
+    (tlen,) = struct.unpack(">H", body[:2])
+    topic = body[2:2 + tlen].decode("utf-8")
+    pos = 2 + tlen
+    pid = 0
+    if qos:
+        (pid,) = struct.unpack(">H", body[pos:pos + 2])
+        pos += 2
+    return topic, body[pos:], qos, pid
+
+
+class MqttClient:
+    """Small MQTT 3.1.1 client: QoS 0/1 publish, QoS 0/1 subscribe, inbound
+    PUBLISH dispatch, keepalive and reconnect, on stdlib sockets only.
+
+    One background thread owns the socket's read side: it reads inbound
+    packets, answers QoS 1 deliveries with PUBACK, sends PINGREQ every
+    keepalive/2 of send-idleness, treats 1.5x keepalive without any inbound
+    packet as a dead link, and reconnects with the same 1 s -> 30 s backoff as
+    MqttSink. Subscriptions registered with `subscribe` are re-sent on every
+    (re)connect, after which `on_connect(client)` runs. `on_message(topic,
+    payload)` runs on the reader thread. `publish` is best-effort: it returns
+    False (never raises) while the link is down; nothing is queued or
+    retransmitted.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 1883,
+        *,
+        client_id: str,
+        keepalive: int = 30,
+        username: str = "",
+        password: str = "",
+        will_topic: str = "",
+        will_payload: bytes = b"",
+        will_qos: int = 0,
+        will_retain: bool = False,
+        on_connect: Optional[Callable[["MqttClient"], None]] = None,
+        on_message: Optional[Callable[[str, bytes], None]] = None,
+        connect_timeout: float = 5.0,
+        logger: Optional[Callable[[str], None]] = None,
+    ):
+        self.host = host
+        self.port = int(port)
+        self.client_id = client_id
+        self.keepalive = max(1, int(keepalive))
+        self.username = username or ""
+        self.password = password or ""
+        self.will_topic = will_topic
+        self.will_payload = will_payload
+        self.will_qos = will_qos
+        self.will_retain = will_retain
+        self.on_connect = on_connect
+        self.on_message = on_message
+        self.connect_timeout = connect_timeout
+        self._log = logger or (lambda _msg: None)
+        self._subs: List[Tuple[str, int]] = []
+        self._conn: Optional[_MqttConnection] = None
+        self._lock = threading.Lock()
+        self._connected = threading.Event()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last_rx = 0.0
+
+    # -- public API ------------------------------------------------------- #
+    def subscribe(self, topic: str, qos: int = 0) -> None:
+        """Register a subscription; sent now if connected and on every
+        reconnect."""
+        if qos not in (0, 1):
+            raise ValueError(f"unsupported QoS {qos}")
+        with self._lock:
+            self._subs.append((topic, qos))
+            conn = self._conn
+        if conn is not None:
+            try:
+                conn.subscribe(topic, qos)
+            except Exception:
+                self._drop(conn)
+
+    def connect(self, blocking: bool = True) -> None:
+        """Start the client. With `blocking`, the first CONNECT happens on the
+        caller's thread and its failure raises (no thread is left running);
+        later drops reconnect in the background either way."""
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        if blocking:
+            self._open()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"mqtt-{self.client_id}")
+        self._thread.start()
+
+    def is_connected(self) -> bool:
+        return self._connected.is_set()
+
+    def publish(self, topic: str, payload, qos: int = 0,
+                retain: bool = False) -> bool:
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        with self._lock:
+            conn = self._conn
+        if conn is None:
+            return False
+        try:
+            conn.publish(topic, bytes(payload), retain=retain, qos=qos)
+            return True
+        except ValueError:
+            raise
+        except Exception:
+            self._drop(conn)
+            return False
+
+    def disconnect(self, timeout: float = 2.0) -> None:
+        """Send DISCONNECT (the broker then discards the will) and stop."""
+        self._stop.set()
+        with self._lock:
+            conn = self._conn
+        if conn is not None:
+            self._drop(conn)
+        thread, self._thread = self._thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+
+    # -- internals -------------------------------------------------------- #
+    def _open(self) -> None:
+        conn = _MqttConnection(
+            self.host, self.port, client_id=self.client_id,
+            keepalive=self.keepalive, username=self.username,
+            password=self.password, will_topic=self.will_topic,
+            will_payload=self.will_payload, will_retain=self.will_retain,
+            will_qos=self.will_qos,
+        )
+        conn.connect(timeout=self.connect_timeout)
+        with self._lock:
+            self._conn = conn
+            self._connected.set()
+            subs = list(self._subs)
+        self._last_rx = time.monotonic()
+        try:
+            for topic, qos in subs:
+                conn.subscribe(topic, qos)
+        except Exception:
+            self._drop(conn)
+            raise
+        if self.on_connect is not None:
+            try:
+                self.on_connect(self)
+            except Exception as e:
+                self._log(f"on_connect callback failed: {e}")
+
+    def _drop(self, conn: _MqttConnection) -> None:
+        with self._lock:
+            if self._conn is conn:
+                self._conn = None
+                self._connected.clear()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    def _handle(self, conn: _MqttConnection, header0: int, body: bytes) -> None:
+        ptype = header0 >> 4
+        if ptype == _PUBLISH:
+            topic, payload, qos, pid = _parse_publish(header0, body)
+            if qos == 1:
+                conn.puback(pid)
+            elif qos > 1:   # never granted: every subscription is QoS <= 1
+                self._log(f"dropping QoS {qos} delivery on {topic}")
+                return
+            if self.on_message is not None:
+                try:
+                    self.on_message(topic, payload)
+                except Exception as e:
+                    self._log(f"on_message callback failed: {e}")
+        elif ptype == _SUBACK:
+            if any(rc == 0x80 for rc in body[2:]):
+                self._log("broker refused a subscription (SUBACK 0x80)")
+        # PUBACK / PINGRESP / anything else: liveness only
+
+    def _run(self) -> None:
+        backoff = 1.0
+        while not self._stop.is_set():
+            with self._lock:
+                conn = self._conn
+            if conn is None:
+                try:
+                    self._open()
+                    backoff = 1.0
+                    self._log(f"connected {self.host}:{self.port}")
+                except Exception as e:
+                    self._log(f"connect failed: {e} (retry {backoff:.0f}s)")
+                    self._stop.wait(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                continue
+            try:
+                tick = min(1.0, self.keepalive / 2.0)
+                if conn.wait_readable(tick):
+                    header0, body = conn.read_packet()
+                    self._last_rx = time.monotonic()
+                    self._handle(conn, header0, body)
+                now = time.monotonic()
+                if now - conn.last_tx >= self.keepalive / 2.0:
+                    conn.ping()
+                if now - self._last_rx > self.keepalive * 1.5:
+                    raise ConnectionError("no packet from broker within 1.5x keepalive")
+            except Exception as e:
+                if not self._stop.is_set():
+                    self._log(f"link dropped: {e}")
+                self._drop(conn)
+        # A reconnect that raced disconnect() must not leave a live socket.
+        with self._lock:
+            conn = self._conn
+        if conn is not None:
+            self._drop(conn)
 
 
 # --------------------------------------------------------------------------- #
