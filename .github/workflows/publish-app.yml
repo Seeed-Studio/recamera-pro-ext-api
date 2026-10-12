@@ -1,0 +1,204 @@
+name: Publish App to CDN Store
+
+on:
+  # 1. 手动触发（可选指定单个 app，不填则自动扫描所有有版本更新的应用）
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: '指定应用目录名（例如 yolo-detector，留空则自动检测版本递增的应用）'
+        required: false
+        default: ''
+        type: string
+
+  # 2. main 分支提交：只有 apps/ 目录下的文件发生变化时才触发，底层提交完全不触发！
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+
+  # 3. Tag 触发：显式打 Tag 发布单个指定应用
+  push:
+    tags:
+      - 'release/**' # 例如 release/yolo-detector-v1.0.1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code (fetch-depth for diff)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # 保留上一次 commit 以便比较 git diff
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies & ossutil
+        run: |
+          sudo apt-get update && sudo apt-get install -y openssl wget
+          sudo wget -q http://gosspublic.alicdn.com/ossutil/1.7.19/ossutil64 -O /usr/local/bin/ossutil
+          sudo chmod +x /usr/local/bin/ossutil
+
+      - name: Configure Credentials
+        env:
+          PRIV_KEY: ${{ secrets.RECAMERA_RELEASE_PRIV_KEY }}
+          OSS_AK: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_SK: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          if [ -z "$PRIV_KEY" ] || [ -z "$OSS_AK" ] || [ -z "$OSS_SK" ]; then
+            echo "::error::Missing required secrets: RECAMERA_RELEASE_PRIV_KEY, OSS_ACCESS_KEY_ID, or OSS_ACCESS_KEY_SECRET"
+            exit 1
+          fi
+
+          mkdir -p ~/.recamera_release_key
+          echo "$PRIV_KEY" > ~/.recamera_release_key/release_priv.pem
+          chmod 700 ~/.recamera_release_key
+          chmod 600 ~/.recamera_release_key/release_priv.pem
+
+          cat <<EOF > ~/.ossutilconfig
+          [default]
+          accessKeyId = $OSS_AK
+          accessKeySecret = $OSS_SK
+          region = oss-us-east-1
+          endpoint = oss-us-east-1.aliyuncs.com
+          EOF
+          chmod 600 ~/.ossutilconfig
+
+      - name: Detect Apps to Publish
+        id: detector
+        run: |
+          python3 - << 'EOF'
+          import json, os, re, subprocess, sys, urllib.request
+
+          # 1. 获取线上 CDN 当前运行的 catalog
+          live_url = "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/catalog.json"
+          try:
+              req = urllib.request.Request(live_url, headers={"User-Agent": "curl/7.68.0"})
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  live = json.loads(r.read())
+          except Exception as e:
+              print(f"Warning: could not fetch live catalog ({e}), assuming empty")
+              live = {"apps": []}
+          live_apps = {a["id"]: a["version"] for a in live.get("apps", [])}
+
+          def semver(v):
+              m = re.match(r"(\d+)\.(\d+)\.(\d+)", v or "")
+              return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+          ref = os.environ.get("GITHUB_REF", "")
+          manual_app = "${{ inputs.app_id }}".strip()
+
+          to_publish = []
+
+          # 场景 A：Tag 触发 -> 强制发该 Tag 指定的单个 app
+          if ref.startswith("refs/tags/release/"):
+              tag_name = ref[len("refs/tags/release/"):]
+              app_id = re.sub(r"-v[0-9]+.*$", "", tag_name)
+              if os.path.isdir(f"apps/{app_id}"):
+                  to_publish = [app_id]
+              else:
+                  print(f"::error::App apps/{app_id} does not exist!")
+                  sys.exit(1)
+
+          # 场景 B：手动 workflow_dispatch 且指定了 app
+          elif manual_app:
+              if os.path.isdir(f"apps/{manual_app}"):
+                  to_publish = [manual_app]
+              else:
+                  print(f"::error::App apps/{manual_app} does not exist!")
+                  sys.exit(1)
+
+          # 场景 C：main 分支 push 自动检测（必须显式 bump 了版本号才发版）
+          else:
+              try:
+                  diff_out = subprocess.check_output(
+                      ["git", "diff", "--name-only", "HEAD~1", "HEAD", "apps/"]
+                  ).decode("utf-8", "replace").splitlines()
+              except Exception:
+                  diff_out = []
+
+              touched_apps = set()
+              for path in diff_out:
+                  parts = path.split("/")
+                  if len(parts) >= 2 and parts[0] == "apps":
+                      app_id = parts[1]
+                      if os.path.isdir(f"apps/{app_id}") and os.path.isfile(f"apps/{app_id}/manifest.json"):
+                          touched_apps.add(app_id)
+
+              print(f"Touched apps in commit: {list(touched_apps)}")
+
+              for app_id in sorted(touched_apps):
+                  try:
+                      with open(f"apps/{app_id}/manifest.json") as f:
+                          mf = json.load(f)
+                      local_v = mf.get("version", "0.0.0")
+                  except Exception as e:
+                      print(f"Skipping {app_id}: invalid manifest.json ({e})")
+                      continue
+
+                  live_v = live_apps.get(app_id)
+                  # 仅当版本号严格大于线上版本，或线上尚无该应用时，才触发发版！
+                  if live_v is None:
+                      print(f"✓ {app_id}: new application (v{local_v}) -> to publish")
+                      to_publish.append(app_id)
+                  elif semver(local_v) > semver(live_v):
+                      print(f"✓ {app_id}: version bumped {live_v} -> {local_v} -> to publish")
+                      to_publish.append(app_id)
+                  else:
+                      print(f"- {app_id}: code changed but version not bumped (local={local_v}, live={live_v}) -> skipped")
+
+          print(f"Final apps to publish: {to_publish}")
+          # 输出给下一阶段
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"apps_json={json.dumps(to_publish)}\n")
+              f.write(f"count={len(to_publish)}\n")
+          EOF
+
+      - name: Build and Publish Verified Apps
+        if: steps.detector.outputs.count > 0
+        run: |
+          APPS='${{ steps.detector.outputs.apps_json }}'
+          echo "Processing publishing list: $APPS"
+
+          # 逐个发布所有符合发版条件的应用
+          python3 - << EOF
+          import json, subprocess, os, glob
+
+          apps = json.loads('''$APPS''')
+          for app_id in apps:
+              print(f"\n=======================================================")
+              print(f"   Building and Publishing: {app_id}")
+              print(f"=======================================================")
+              
+              # 1. 确定性打包
+              build_cmd = ["python3", "market/packaging/build.py", f"apps/{app_id}", "--out", "market/packaging/dist/"]
+              res = subprocess.run(build_cmd)
+              if res.returncode != 0:
+                  print(f"::error::Build failed for {app_id}")
+                  exit(1)
+
+              # 2. 找到产物
+              pkgs = sorted(glob.glob(f"market/packaging/dist/{app_id}-*-arm64.tar.gz"), key=os.path.getmtime, reverse=True)
+              if not pkgs:
+                  print(f"::error::Package not found for {app_id}")
+                  exit(1)
+              pkg_file = pkgs[0]
+
+              # 3. 签名并推送到应用商店
+              pub_cmd = ["python3", "market/packaging/publish_app.py", pkg_file, "--sign", "--yes"]
+              res = subprocess.run(pub_cmd)
+              if res.returncode != 0:
+                  print(f"::error::Publish failed for {app_id}")
+                  exit(1)
+              print(f"✓ Successfully published {app_id}!")
+          EOF
+
+      - name: No-op Notice
+        if: steps.detector.outputs.count == 0
+        run: |
+          echo "No apps have bumped versions. Nothing to publish."
