@@ -1,93 +1,106 @@
-# reCamera Pro 扩展 API
+# reCamera Pro Extension API
 
-reCamera Pro（RV1126B / recamera_v2）扩展 API：设备先安装包含扩展 endpoint、
-且与 SDK 协议匹配的固件；此后方案商无需为每个 AI 应用重编固件，可把应用
-作为独立进程运行，通过 `/run/recamera/` 下的 Unix domain socket 拿帧、取得
-NPU 租约、回注结果并观测流水线。进程边界即契约。
+English | [简体中文](README.zh-CN.md)
 
-六条 socket 端点：
+The extension API for reCamera Pro (RV1126B / recamera_v2) lets solution providers
+run AI applications as independent processes without rebuilding the firmware for
+each app. The device must first run firmware that includes the extension endpoints
+and matches the SDK protocol. Applications then use Unix domain sockets under
+`/run/recamera/` to receive frames, acquire NPU leases, publish results back to the
+platform, and observe the pipeline. The process boundary defines the API contract.
 
-| 端点 | socket | 作用 |
+Six socket endpoints are available:
+
+| Endpoint | Socket | Purpose |
 |------|--------|------|
-| 帧代理 | `/run/recamera/frame.sock` | 零拷贝拿相机原始帧，自己推理 |
-| 结果注入 | `/run/recamera/result-in.sock` | 把结果回注官方 OSD / 通知 / 公共结果流，不直接触发录像 |
-| 平台 OSD | `/run/recamera/osd-in.sock` | appmgr 专用，只把已授权的应用结果绘制到视频流 |
-| 平台录像触发 | `/run/recamera/record-in.sock` | appmgr 专用，把已安装且由 manifest 声明的应用信号交给 Vigil 录像规则 |
-| 观测面 | `/run/recamera/probe.sock` | 采样内建推理流水线各级张量 |
-| NPU 仲裁 | `/run/recamera/inference-control.sock` | 停妥内建模型后授予单 external owner 的连接生命周期租约 |
+| Frame broker | `/run/recamera/frame.sock` | Receive raw camera frames with zero-copy access for application-side inference |
+| Result injection | `/run/recamera/result-in.sock` | Feed results into the platform OSD, notifications, and public result stream; does not directly trigger recording |
+| Platform OSD | `/run/recamera/osd-in.sock` | Reserved for appmgr; draw only authorized application results onto the video stream |
+| Platform recording triggers | `/run/recamera/record-in.sock` | Reserved for appmgr; pass manifest-declared signals from installed applications to Vigil recording rules |
+| Pipeline observation | `/run/recamera/probe.sock` | Sample tensors at different stages of the built-in inference pipeline |
+| NPU arbitration | `/run/recamera/inference-control.sock` | Grant a single external owner a lease tied to the connection lifetime after the built-in model has fully stopped |
 
-## 目录导航
+## Repository Layout
 
-| 目录 | 作用 |
+| Directory | Purpose |
 |------|------|
-| [`docs/api/`](docs/api/) | 规格与架构：[`spec.md`](docs/api/spec.md)（socket 路径 / protobuf schema / ABI 版本）、[`architecture.md`](docs/api/architecture.md)（系统分层与数据流）。 |
-| [`docs/guide/`](docs/guide/) | 开发指南：[总入口](docs/guide/README.md) + 各专题手册（控制 API、结果推送、GPIO、音频 PCM、前端扩展、FFmpeg / GStreamer 集成、应用中心上架、部署运维）+ Kit 设计 / 适配器路径 / 语音应用设计；AI 结果叠加自定义见 [`overlay-customization.md`](docs/guide/overlay-customization.md)，部署交接见 [`overlay-customization-handoff.md`](docs/guide/overlay-customization-handoff.md)。 |
-| [`sdk/`](sdk/) | 设备侧 SDK：`librecamera_ext.so.1` + Python 包 `recamera_ext`（ctypes 薄封装）+ C 头文件。 |
-| [`kit/`](kit/) | 可复用 Python 推理套件：L0 适配器、runtime 前后处理、logic 库、`app.py`。 |
-| [`apps/`](apps/) | 示例应用（yolo-detector / face-analysis / fall-detection / voice-transcribe 等）和 [Inference Workflows](apps/inference-rv1126b/README.md)。 |
-| [`examples/`](examples/) | SDK 最小用法示例（拿帧 / 注入结果 / 帧→推理→OSD / GPIO 触发 / C 帧 / 浏览器叠加自由绘制 `11-overlay-geometry`）。 |
-| [`release/`](release/) | 历史交付快照；当前 `release/pkg` **不可部署**，正式产物必须由已固定 commit 的源码构建重新生成。 |
+| [`docs/api/`](docs/api/) | Specifications and architecture: [`spec.md`](docs/api/spec.md) covers socket paths, protobuf schemas, and ABI versions; [`architecture.md`](docs/api/architecture.md) describes system layers and data flow. |
+| [`docs/guide/`](docs/guide/) | The [developer guide](docs/guide/README.md) and topic guides cover the control API, result publishing, GPIO, PCM audio, frontend extensions, FFmpeg / GStreamer integration, App Center publishing, deployment and operations, Kit design, adapter paths, and voice application design. See [`overlay-customization.md`](docs/guide/overlay-customization.md) for custom AI result overlays and [`overlay-customization-handoff.md`](docs/guide/overlay-customization-handoff.md) for deployment handoff. |
+| [`sdk/`](sdk/) | Device-side SDK: `librecamera_ext.so.1`, the `recamera_ext` Python package (a thin ctypes wrapper), and C headers. |
+| [`kit/`](kit/) | Reusable Python inference toolkit: L0 adapters, runtime preprocessing and postprocessing, logic libraries, and `app.py`. |
+| [`apps/`](apps/) | Sample applications such as yolo-detector, face-analysis, fall-detection, and voice-transcribe, plus [Inference Workflows](apps/inference-rv1126b/README.md). |
+| [`examples/`](examples/) | Minimal SDK examples: frame capture, result injection, frame → inference → OSD, GPIO triggers, frame access in C, and freeform browser overlays (`11-overlay-geometry`). |
+| [`release/`](release/) | Historical delivery snapshots. The current `release/pkg` **cannot be deployed**; official artifacts must be regenerated from source builds pinned to specific commits. |
 
-## 快速上手
+## Quick Start
 
-拿帧 + 推理 + 回注（Python，完整说明见 [docs/guide/README.md](docs/guide/README.md) §2）：
+Capture frames, run inference, and publish results back to the platform in Python.
+For full instructions, see [docs/guide/README.md](docs/guide/README.md), §2.
 
 ```python
 from recamera_ext import FrameSource, ResultSink
 
 with FrameSource() as src, ResultSink(source_id="my-app") as sink:
-    for frame in src:                          # frame.array: 零拷贝帧视图
-        boxes = my_model(frame.array)          # -> [(x1,y1,x2,y2,score,label), ...] 归一化 [0,1]
+    for frame in src:                          # frame.array: zero-copy frame view
+        boxes = my_model(frame.array)          # -> [(x1,y1,x2,y2,score,label), ...] normalized to [0,1]
         sink.send_detections(pts_us=frame.pts_us, boxes=boxes)
 ```
 
-坐标一律为归一化 `[0,1]`（相对画面宽高的比例）。更多示例见 [`examples/`](examples/)。
+All coordinates passed to `ResultSink` must be normalized to `[0,1]`, relative to
+the frame width and height. More examples are available in [`examples/`](examples/).
 
-## 安装 / 环境
+## Installation and Environment
 
-通过当前顶层源码构建生成的固件会把 native library 安装到 `/usr/lib`，把
-Python 包安装到 Python 3.11 的系统 site-packages，正常无需手工设置搜索路径。
-只有调试历史 `/userdata/sdk` 手工副本时才需要：
+Firmware produced by the current top-level source build installs the native
+library in `/usr/lib` and the Python packages in the system Python 3.11
+site-packages directory. Search paths normally require no manual configuration.
+The following settings are only needed when debugging legacy manual copies under
+`/userdata/sdk`:
 
 ```sh
 export PYTHONPATH=/userdata/sdk/python:$PYTHONPATH
 export LD_LIBRARY_PATH=/userdata/sdk/lib:$LD_LIBRARY_PATH
 ```
 
-固件集成应走本 SDK 的顶层 `project/app` 源码构建；当前仓内
-[`release/pkg`](release/pkg/) 是校验值互相矛盾、且不含新 NPU broker 的历史
-快照，`install.sh` 已 fail-closed，**不要 sideload**。前置条件（socket 权限、
-握手）见 [docs/guide/README.md](docs/guide/README.md)；发布边界见
-[docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)。
+Firmware integration should use the top-level `project/app` source build for this
+SDK. The repository's current [`release/pkg`](release/pkg/) is a historical snapshot
+with inconsistent checksums and no new NPU broker. Its `install.sh` is disabled to
+fail closed: **do not sideload it**. See
+[docs/guide/README.md](docs/guide/README.md) for prerequisites, including socket
+permissions and handshakes, and [docs/guide/deploy-ops.md](docs/guide/deploy-ops.md)
+for release requirements.
 
-## 发布物 / Release
+## Release Artifacts
 
-`release/` 下保留的包仅供历史追溯：
+Packages retained under `release/` are for historical reference only:
 
-| 包 | 用途 | 说明 |
+| Package | Purpose | Notes |
 |---|---|---|
-| `recamera-ext-api-v*.tar` / [`release/pkg`](release/pkg/) | **已禁用的历史 sideload** | 二进制、manifest 与安装脚本不一致，且缺 `inference-control@1`；不可安装。 |
-| `recamera-ext-kit-v*.tar.gz` | 历史 kit 分享包 | 不代表当前 Python 1.4 API/native/server 的一致发布集。 |
+| `recamera-ext-api-v*.tar` / [`release/pkg`](release/pkg/) | **Disabled legacy sideload packages** | Binaries, manifests, and installation scripts are inconsistent, and `inference-control@1` is missing. These packages cannot be installed. |
+| `recamera-ext-kit-v*.tar.gz` | Historical Kit distribution packages | These do not constitute a consistent release set for the Python 1.4 API, native client, and server. |
 
-新的 release 必须从 manifest 固定的 `recamera_ipc`、Vigil、本仓和 Web backend
-源码构建，生成统一 BOM/hash 后再启用安装。现有
-[`release/build-release.sh`](release/build-release.sh) 仍属于 legacy artifact
-assembler，不能作为“源码可复现”证明。
+New releases must be built from the source revisions of `recamera_ipc`, Vigil,
+this repository, and the Web backend pinned in a manifest. A unified bill of
+materials (BOM) and hashes must be generated before installation is enabled.
+The existing [`release/build-release.sh`](release/build-release.sh) is still a
+legacy artifact assembler and does not demonstrate a reproducible source build.
 
-## 版本
+## Versioning
 
-两条版本轴，勿混淆：
+Keep the following version tracks distinct:
 
-- **产品发布 train**：当前工作树尚未生成可部署的新 train；历史 v1.x 包已归档禁用。
-- **Python distribution**：`recamera-ext 1.5.0`，包含 broker-backed
-  `InferenceLease` 以及 appmgr 专用 `OsdSink` / `RecordSink`。
-- **native SDK / C ABI**：`sdk/VERSION` 为 **1.5.0**，soname 仍为
-  `librecamera_ext.so.1`；能力为 `frame@1 / result@1 / osd@1 /
-  record@1 / probe@1 / inference-control@1`。Python 包版本与
-  C ABI/SONAME 是不同版本轴。
+- **Product release train**: The current working tree has not yet produced a new
+  deployable release train. Historical v1.x packages are archived and disabled.
+- **Python distribution**: `recamera-ext 1.5.0`, including the broker-backed
+  `InferenceLease` and the appmgr-only `OsdSink` / `RecordSink`.
+- **Native SDK / C ABI**: `sdk/VERSION` is **1.5.0**, while the SONAME remains
+  `librecamera_ext.so.1`. Capabilities are `frame@1 / result@1 / osd@1 /
+  record@1 / probe@1 / inference-control@1`. The Python package version and the
+  C ABI/SONAME are versioned independently.
 
 ## License
 
-除 [`sdk/NOTICE`](sdk/NOTICE) 明确列出的 native client 文件外，本仓采用
-[Apache License 2.0](LICENSE)。native client 保留
-[BSD-3-Clause](sdk/LICENSE) 许可；混合许可总说明见 [`NOTICE`](NOTICE)。
+This repository is licensed under the [Apache License 2.0](LICENSE), except for
+the native client files explicitly listed in [`sdk/NOTICE`](sdk/NOTICE). Those
+files retain the [BSD-3-Clause](sdk/LICENSE) license. See [`NOTICE`](NOTICE) for
+the mixed-license overview.
