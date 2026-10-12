@@ -86,13 +86,19 @@ apps/<app_id>/
 1. **底层或文档提交**：修改了 `sdk/`、`kit/`、`docs/`、根目录配置等非 `apps/` 目录时，**CI 完全不触发，执行次数为 0**。
 2. **日常代码修改但未改版本号**：如果只修改了 `apps/<app_id>/app.py` 的代码逻辑，但**没有修改 `manifest.json` 里的 `version`**，CI 会自动对比线上已发布的版本，识别为“日常开发提交”，**直接跳过发版（Skip）**。
 
-### 3. 备用方式：打 Tag 精准发版
-如果你想显式、指定时间点发布某个应用，直接打 Tag 即可（CI 只会处理该 Tag 指定的应用）：
-```bash
-# 格式：release/<app_id>-v<version>
-git tag release/yolo-detector-v1.0.1
-git push origin release/yolo-detector-v1.0.1
-```
+### 3. 备用方式：手动精准发布（打 Tag 或网页点击）
+- **打 Tag 发布**：
+  ```bash
+  # 格式：release/<app_id>-v<version>
+  git tag release/yolo-detector-v1.0.1
+  git push origin release/yolo-detector-v1.0.1
+  ```
+- **网页一键发布**：
+  进入仓库 [Actions 页面](https://github.com/Seeed-Studio/recamera-pro-ext-api/actions/workflows/publish-app.yml)，选择 **Publish App to CDN Store** -> 点击 **Run workflow** -> 输入应用名即可运行。
+
+### 4. 发布结果验证
+- **查看日志**：进入 [GitHub Actions 列表](https://github.com/Seeed-Studio/recamera-pro-ext-api/actions) 查看实时流水线进度。
+- **设备生效**：流水线成功后（约 20 秒），设备端打开或刷新「应用中心」即可看到并安装最新版本。
 
 ---
 
