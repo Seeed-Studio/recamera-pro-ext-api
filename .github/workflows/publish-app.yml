@@ -36,9 +36,12 @@ jobs:
 
       - name: Install System Dependencies & ossutil
         run: |
-          sudo apt-get update && sudo apt-get install -y openssl wget
-          sudo wget -q http://gosspublic.alicdn.com/ossutil/1.7.19/ossutil64 -O /usr/local/bin/ossutil
+          sudo apt-get update && sudo apt-get install -y openssl unzip wget
+          wget -q https://gosspublic.alicdn.com/ossutil/1.7.19/ossutil-v1.7.19-linux-amd64.zip -O /tmp/ossutil.zip
+          unzip -q /tmp/ossutil.zip -d /tmp/ossutil_extracted
+          sudo mv /tmp/ossutil_extracted/*/ossutil64 /usr/local/bin/ossutil
           sudo chmod +x /usr/local/bin/ossutil
+          rm -rf /tmp/ossutil*
 
       - name: Configure Credentials
         env:
