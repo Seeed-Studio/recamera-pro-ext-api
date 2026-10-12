@@ -176,3 +176,36 @@ def test_health_rejects_incomplete_service_listeners(monkeypatch):
         httpd.shutdown()
         thread.join(2)
         httpd.server_close()
+
+
+def test_boot_restore_skip_is_audited(lifecycle_layout, monkeypatch):
+    # An unclean shutdown can leave observed_state="stopping"/teardown_pending
+    # behind; the skip branch must leave an audit trail, or the app looks
+    # "running" (desired) while no process exists and nothing retries.
+    audits = []
+    launched = []
+    Path(paths.app_dir("wedged")).mkdir(parents=True)
+    monkeypatch.setattr(server, "_audit",
+                        lambda action, **kv: audits.append((action, kv)))
+
+    def start(app_id, **kwargs):
+        launched.append(app_id)
+        return {"pid": 123, "observed_state": "running"}
+
+    monkeypatch.setattr(server, "_coordinator", lambda: SimpleNamespace(
+        reconcile_allocations=lambda: [], start=start))
+    monkeypatch.setattr(server.supervisor, "sweep_stale", lambda: [])
+    monkeypatch.setattr(server.supervisor, "is_running", lambda app_id: None)
+    monkeypatch.setattr(server, "_recover_incomplete_teardowns",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(server.state, "get_active", lambda: None)
+    monkeypatch.setattr(server.state, "desired_apps", lambda: ["wedged"])
+    monkeypatch.setattr(server.state, "get_app",
+                        lambda app_id: {"observed_state": "stopping",
+                                        "teardown_pending": True})
+    monkeypatch.setattr(server, "_read_manifest", lambda app_id: {"id": app_id})
+    server._boot_restore_locked()
+    assert launched == []
+    skips = [kv for action, kv in audits if action == "boot_restore_skipped"]
+    assert skips and skips[0]["id"] == "wedged"
+    assert skips[0]["reason"] == "teardown-incomplete"

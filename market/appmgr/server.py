@@ -4924,6 +4924,13 @@ def _boot_restore_locked(stop_event: Optional[threading.Event] = None) -> None:
                     or rec.get("teardown_pending")):
                 # A same-boot residual process group could not be contained.
                 # Keep its exact identity/leases and never mint over the fence.
+                # Never skip silently: an unclean shutdown can leave this state
+                # behind, and without an audit line the app looks "running"
+                # (desired) while no process exists and nothing retries.
+                _audit("boot_restore_skipped", id=app_id,
+                       observed_state=rec.get("observed_state"),
+                       teardown_pending=bool(rec.get("teardown_pending")),
+                       reason="teardown-incomplete")
                 continue
             if rec.get("launch_mode") == "legacy" and app_id == active:
                 # Keep desired=running when IPC is still coming up. The legacy
