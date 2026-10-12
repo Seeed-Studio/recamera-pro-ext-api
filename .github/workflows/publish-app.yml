@@ -10,17 +10,14 @@ on:
         default: ''
         type: string
 
-  # 2. main 分支提交：只有 apps/ 目录下的文件发生变化时才触发，底层提交完全不触发！
+  # 2. 推送触发：main 分支（限定 apps/** 变动）或 release/* Tag
   push:
     branches:
       - main
-    paths:
-      - 'apps/**'
-
-  # 3. Tag 触发：显式打 Tag 发布单个指定应用
-  push:
     tags:
       - 'release/**' # 例如 release/yolo-detector-v1.0.1
+    paths:
+      - 'apps/**'
 
 jobs:
   publish:
