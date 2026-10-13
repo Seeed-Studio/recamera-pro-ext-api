@@ -16,7 +16,12 @@ description: 把一个预构建好的 reCamera Pro App Center 包（manifest v2 
 
 这个 bucket 与 `solution-assets` skill 的 `upload` 是同一个；App Center 包走本 skill，不要用通用上传绕过 catalog 流程。
 
-工具：`market/packaging/publish_app.py`（本 skill 的执行入口），它调用 `sign.py`、`gen_catalog.build_catalog`、`appmgr/manifest.py` 校验器。
+**自动化发布流水线（推荐）**：
+除本地手动执行本 skill 外，现已支持通过 GitHub Actions `.github/workflows/publish-app.yml` 自动发布：
+- 仓内源码应用：在 `apps/<app_id>/manifest.json` 中递增 `version` 合入 `main` 即自动触发。
+- 外部预构建包：在 GitHub Actions 手动触发 `publish-app.yml`，在 `package_url` 中填入下载链接即可自动下载、校验、Vendor 签名并上架到 CDN 商店。
+
+本地执行工具：`market/packaging/publish_app.py`（本 skill 的执行入口），它调用 `sign.py`、`gen_catalog.build_catalog`、`appmgr/manifest.py` 校验器。
 
 ## 前置条件
 
@@ -53,10 +58,10 @@ tar xzOf <pkg>.tar.gz manifest.json | python3 -m json.tool | less
 
 ```bash
 scp <staging>/packages/<id>-<ver>-arm64.tar.gz{,.sig} <user>@<host>:/userdata/appstage/
-# 设备上以 root 执行（CLI 读取同名 .sig sidecar 验签）
-cd /userdata/local && python3 -m appmgr install /userdata/appstage/<id>-<ver>-arm64.tar.gz
-python3 -m appmgr start <id>
-python3 -m appmgr list                  # running / health
+# 设备上以 root 执行（CLI 读取同名 .sig sidecar 验签，需指定固件 PYTHONPATH）
+ssh root@<host> "PYTHONPATH=/usr/lib/recamera python3 -m appmgr install /userdata/appstage/<id>-<ver>-arm64.tar.gz"
+ssh root@<host> "PYTHONPATH=/usr/lib/recamera python3 -m appmgr start <id>"
+ssh root@<host> "PYTHONPATH=/usr/lib/recamera python3 -m appmgr list"                  # running / health
 free -m; top -b -n1 | head -20          # 内存
 tail -n 100 /var/log/appmgr.log
 ```

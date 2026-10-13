@@ -38,6 +38,8 @@
 - **限速 60 msg/s/连接**（burst 15）+ 全局 120（burst 30），单条 payload ≤ 64KB，并发注入连接 ≤ 4。超限丢弃+计数，别超过帧率发。
 - **时间单位**：Kit `emit(ts=frame.pts)` 使用秒；底层 **`pts_us`** 使用微秒：要与某帧对齐叠加时传该帧的 `frame.pts_us`（同 VI 帧 PTS 时钟）；`0` 表示不与具体帧关联。
 - **零拷贝视图跨帧要 `.copy()`**：`frame.array` / `ProbeSample.array` 下一次迭代即失效。
+- **视觉推理 vs 流式音频**：视觉推理必须走 model factory / 调度服务；流式音频负载（VAD/STT/TTS/唤醒词）在声明 `needs_frames=False`、`needs_model=False`、`npu.rknn: exclusive` 时，允许本地管理音频环形缓冲与 RKNNLite，但必须连接 `inference-control.sock` 通过 `ExternalNpuLease` / `RknnSession` 获得单租约并进入 READY 状态，退出时显式释放句柄。
+- **外部应用发布与 Owner Key 信任**：已编译前端或自建 wheelhouse 的第三方包支持通过 GitHub Actions `.github/workflows/publish-app.yml`（填入 `package_url`）执行校验、Vendor 重签与商店发布；本地旁加载调试在设备 `/userdata/local/appmgr/keys/owners/<developer>.pem` 登记公钥即可永久受信。
 
 ## 开发一个 app
 

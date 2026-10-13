@@ -3,16 +3,15 @@
 > 适用设备：reCamera Pro（RV1126B / recamera_v2）。
 > 读者：应用中心的维护者，以及需要给自己的 app 带**独有 Python 依赖**（PyAV、可用的
 > gstreamer-python、某个自训模型要的特定包…）的方案商。
-> 状态：**设计文档（DESIGN）**，尚未实现。文中所有 `file:line` 均指向需要改动或复用的
-> 现有代码位置；标注「未实现」的端点/字段是本设计新增项。拿不准的地方以
-> **OPEN QUESTION** 标出，落地前须核实。
+> 状态：**阶段 A（随包打包 bundled wheels）已在 Manifest v2 正式实现并投入生产**；安装时由 appmgr 自动构建 per-release venv 并执行离线安全安装。阶段 B（跨包 catalog 共享 wheel）为规划项。
+> 针对外部应用的完整离线 wheelhouse 解析与发布指南，详见：**[app-publishing-and-permissions-guide.md](./app-publishing-and-permissions-guide.md)**。
 >
 > 事实来源（现有代码）：
-> - appmgr 后端：`market/appmgr/{server.py,supervisor.py,installer.py,modelstore.py,paths.py}`
-> - 打包/目录：`market/packaging/build.py`、`market/catalog/{gen_catalog.py,models.json}`
+> - appmgr 后端：`market/appmgr/{server.py,supervisor.py,installer.py,manifest.py,paths.py}`
+> - 打包/目录：`market/packaging/{build.py,publish_app.py}`、`market/catalog/{gen_catalog.py,models.json}`
+> - CI 自动化发布：`.github/workflows/publish-app.yml`
 > - 基础环境 provision：`market/deploy/provision-runtime.sh`
-> - 前端安装环：现役为官方 web 原生 React `AppStore.js`(`cloudInstall`)；`market/spa/index.html` 是早期 vanilla SPA(已 LEGACY),下文行号仅作逻辑参考
-> - 上游总纲：`docs/guide/app-center-publishing.md`、`docs/guide/voice-app.md`
+> - 上游总纲：`docs/guide/app-publishing-and-permissions-guide.md`、`docs/guide/app-center-publishing.md`、`docs/guide/voice-app.md`
 
 ---
 
@@ -41,7 +40,7 @@
 | 约束 | 依据 | 后果 |
 |---|---|---|
 | **设备离线** | `gen_catalog.py:6-11`（usb0 默认路由指回自己，设备无公网） | 设备**不能 `pip install`**、不能连 PyPI。依赖字节只能由**浏览器代取**后推给设备，或**打进包**里。 |
-| **musl / RV1126B aarch64** | 见 `voice-app.md`；rknnenv 是 aarch64 venv | wheel 必须是 `linux_aarch64` 且 **musl 兼容**（不是 manylinux glibc）。纯 Python wheel 通用；带 `.so` 的必须为该平台预编译。 |
+| **glibc 2.36 / RV1126B aarch64** | 设备环境为 glibc（profile: `rv1126b-linux-gnu-cp311-rknn232-v1`） | 编译型 wheel 须匹配 aarch64 且为 glibc 2.36 兼容标签（如 `cp311-manylinux_2_36_aarch64`）；纯 Python (`none-any`) wheel 通用。 |
 | **app 以 root 运行** | `app-center-publishing.md` §1.1 | venv 创建、pip 解包都在 root 下，无权限门槛；反过来也意味着隔离要靠目录布局而非 uid。 |
 | **状态须存活 OTA** | `paths.py:4`（一切在 `/userdata` 下） | per-app venv 必须落在 `/userdata`，不能进 `/oem`、`/usr`（OTA 会覆盖）。 |
 | **包体 / 解包有上限** | `paths.py:57-59`（`MAX_PKG_BYTES=200MB`、`MAX_UNPACKED_BYTES=400MB`、`MAX_MEMBERS=4096`）；nginx `client_max_body_size 256m`（`ext_appmgr.conf:90`） | bundled wheel 直接吃这些配额；大依赖必须走阶段 B。 |

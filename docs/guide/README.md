@@ -57,6 +57,7 @@ reCamera Pro 的固件（rkipc 主程序 + 官方推理 + Web 后端）通过一
 | **RK 硬件编解码**（补 GStreamer 插件） | 出厂镜像无；自行补齐后**硬解**真机验证通过，**编码未测** | 交叉编译 `libgstrockchipmpp.so` + buildroot 现成的 `h265parse`，只写 `/userdata` | [hw-codec-gstreamer.md](./hw-codec-gstreamer.md) |
 | **rkipc RPC / 配置类** | 走 HTTP API | entry.cgi HTTP API（`/var/tmp/rkipc` 是内部接口，勿直连） | [rkipc-rpc-status.md](./rkipc-rpc-status.md) |
 | **观测面（M3）** | 已实现（真机验证）；SDK client `ProbeSource`（v1.2.0） | `probe.sock`：preproc/npu.raw/postproc/metrics 采样 | 见本文 §4.8 与规格 §4 |
+| **应用打包、上架与发布自动化**（Manifest v2 / CI 自动发版 / 外部预构建包 / 权限与信任） | 现成可用 | manifest v2 + CI `.github/workflows/publish-app.yml` + 本地 Owner Key 登记 | [app-publishing-and-permissions-guide.md](./app-publishing-and-permissions-guide.md) · [上架总揽](./app-center-publishing.md) |
 | 控制面（M4）/ 显示（M5）/ 生态（M6）/ 沙箱分发 | 规划中 | — | 见本文 §8 与规格 |
 
 > **当前发布边界**：本工作树现在可以从源码交叉构建

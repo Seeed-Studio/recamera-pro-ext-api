@@ -6,14 +6,15 @@
 > app 内部怎么拿帧、回注结果、驱动 GPIO —— 那是扩展 SDK 的能力，见
 > [README.md](./README.md)，本文不重复。
 >
-> 说明：本文描述的应用中心打包 / 签名 / 分发工具链位于 `market/`，属**发布方私有流程，不随公开仓发布**；下列路径用于说明打包链路各环节，公开仓中只保留 `apps/*/manifest.json` 这类应用侧产物。
-> `market/` 现已纳入 **git 版本追踪**（源码、`catalog/*.json`、发布公钥 `keys/release_pub.pem` 入库；构建产物 `packaging/dist/`、大模型 `packaging/models/`、私钥/`*.pem` 私钥、`__pycache__` 由 `.gitignore` 忽略）。
-> 打包链路各环节（发布方私有）：
+> 说明：本文描述应用中心基础机制与底层工具链（`market/` 现已纳入版本管理）。
+> **自动化发版与外部预构建包**：对于 GitHub Actions CI 自动发布流水线、外部独立构建包（如多 wheel 依赖、编译前端）、设备端 Owner Key 永久信任登记以及流式音频 NPU 准则，请参阅最新操作指南：**[app-publishing-and-permissions-guide.md](./app-publishing-and-permissions-guide.md)**。
+> 打包链路各环节：
 > - appmgr 后端：`market/appmgr/*.py`（含共享模型写盘原语 `market/appmgr/modelstore.py`）
 > - 打包/签名：`market/packaging/{build.py,sign.py,keygen.sh,SIGNING.md}`
+> - CI 发布流水线：`.github/workflows/publish-app.yml`（支持仓内源码及外部 `package_url`）
 > - CDN 发布：`market/packaging/publish_oss.sh`（ossutil → SenseCraft CDN）
 > - 目录/签名策略：`market/appmgr/paths.py`
-> - 目录格式：`market/catalog/{catalog.json,catalog.local.json,gen_catalog.py,models.json}`（`catalog.json`=CDN 版，`catalog.local.json`=设备本地版 base `/appcenter/apps/`）
+> - 目录格式：`market/catalog/{catalog.json,catalog.local.json,gen_catalog.py,models.json}`
 > - 真实 manifest：`apps/*/manifest.json`（公开仓内）
 > - 部署脚本：`market/deploy/{S94appmgr,ext_appmgr.conf}`
 
@@ -109,7 +110,7 @@ apps/<id>/
 | `description` / `description_zh` | | list/UI/catalog | 描述文案。`gen_catalog.py` 从包内 manifest 取 `description` 写进目录。 |
 | `author` | | list/UI | 作者，样本为 `"Seeed reCamera Pro"`。 |
 | `entry` | | supervisor | 入口文件（相对 app 目录），默认 `"app.py"`。禁止绝对路径或含 `..`。supervisor 把它拼成绝对路径交给 kit 入口：`<interp> -m kit.run <app_dir>/<entry>`（`supervisor._build_cmd`）。 |
-| `kit` | | 声明式 | 依赖的 kit 版本约束串，如 `">=0.1.0"`（当前仅声明，appmgr 未强校验）。 |
+| `kit` / `compatibility.kit_api` | | 声明式 | 依赖的 kit 版本约束串，在 Manifest v2 中推荐使用 `compatibility.kit_api`（如 `">=0.2,<1"`，兼容当前 Kit 0.4）。 |
 | `interpreter`（别名 `python`） | | supervisor | 可选：指定解释器绝对路径，如 voice-transcribe 的 `/userdata/rknnenv/bin/python`。缺省用 appmgr 自己的 `sys.executable`。必须是设备上存在的绝对路径，否则 switch 时硬报错（`supervisor.py:93-113`）。 |
 | `capabilities` | | 声明式 | 能力声明数组，如 `["audio"]`。 |
 | `needs_model` | | 声明式 | 是否需要模型，如 voice-transcribe 为 `false`。 |
@@ -386,11 +387,12 @@ manifest 和安装流程都不会自动导入或信任包中提供的密钥。
 ### 怎么签一个包
 
 ```sh
-cd market/packaging
-./keygen.sh                 # 一次性生成密钥对（私钥留本地，公钥落仓库；拒绝覆盖已有私钥）
-python3 build.py ../../apps/my-app
-python3 sign.py             # 给 dist/*.tar.gz 逐个签，写出 <pkg>.tar.gz.sig
-python3 sign.py --verify    # 可选：拿公钥回验
+# 1. 生成开发者独立密钥对
+openssl ecparam -name prime256v1 -genkey -noout -out owner_priv.pem
+openssl ec -in owner_priv.pem -pubout -out owner_pub.pem
+
+# 2. 为构建好的包生成分离签名（输出 <pkg>.tar.gz.sig）
+python3 market/packaging/sign.py --dist dist/ --pkg <app_id>-<version>-arm64.tar.gz --key owner_priv.pem
 ```
 
 ### 设备侧策略（`APPMGR_REQUIRE_SIGNATURE`，`market/appmgr/paths.py`）
@@ -419,26 +421,20 @@ python3 sign.py --verify    # 可选：拿公钥回验
 - 已安装的 app 不会被重新验签，翻这个开关不会弄死在跑的设备，只影响新安装。
 - 有签名但设备上没有公钥 → **fail closed**（拒装，`signing.py:128-131`）。
 
-### 信任链现状（诚实标注）
+### 信任链与发布路径
 
-**机制完整，生态不完整。** 逐条核实：
+开发者与方案商将应用分发至 reCamera Pro 设备，有两条明确的信任与发布路径：
 
-- 签名/验签的机制是**完整可用**的：`keygen.sh`/`sign.py`/`signing.py` 全链路能跑，
-  `market/appmgr/keys/release_pub.pem` 是一枚真实的 P-256 Vendor 公钥。
-- 构建生成的 `market/packaging/dist/` 被 Git 忽略，源码检出不会自带九个发布包；测试目录中的
-  包也可能由某个 Owner 测试密钥签名，不能假定出厂固件会信任。正式分发必须同时发布与包字节
-  匹配的 `.tar.gz.sig`，并由设备已信任的 Vendor 或 Owner 私钥签署。
-- 这不是 CA / 开发者证书体系：Seeed 发布包由 vendor 私钥签名；设备所有者可显式配置自己的
-  P-256 公钥，但仓库仍未定义面向第三方方案商的证书签发/吊销流程。
-- 因此，方案商要让包装进"出厂设备的应用中心"，当前有三条路：
-  1. **由 Seeed 侧签发**（把包交给持私钥方签名）—— 需 Seeed 配合，流程未在本仓库定义；
-  2. **自管设备群**：把自己的公钥安全放进持久化 owner trust store，用自己的私钥签；vendor
-     公钥保持不变且继续受信；
-  3. **设备本地开发/测试**：从已登录的同源 Web 应用中心上传，确认安装与应用权限；
-     包只会被安装为 stopped。不要为了这个流程关闭全局强制签名。
+1. **本地开发与测试（Owner Key 信任）**：
+   - 开发者本地生成独立的 ECDSA P-256 密钥对（`owner_priv.pem` / `owner_pub.pem`）；
+   - 在开发测试设备上一次性登记公钥至 `/userdata/local/appmgr/keys/owners/<developer_name>.pem`（或通过 API `POST /api/app-center/v1/trust/owners`）；
+   - 使用本地私钥签名的包（附带生成的 `.tar.gz.sig`）即可在测试设备上永久通过签名校验并正常安装调试；
+   - 详细命令参见 [app-publishing-and-permissions-guide.md](./app-publishing-and-permissions-guide.md) §一。
 
-> 结论：**签名基础设施已就绪，但"第三方开发者证书 / 上架签发"这一环是半成品，需 Seeed 侧配合才能形成
-> 面向生态的信任链。** 规格 §1（第 18-20 行）也把"打包分发/签名"列为 P1/P2、不在当前固件范围。
+2. **官方应用商店上架（CI 厂商重签）**：
+   - **源码应用**：改动 `apps/<app_id>` 并递增版本号，合入 `main` 后 GitHub Actions CI 自动打包、Vendor 签名并上架到 CDN；
+   - **外部独立构建应用**（如前端已编译、含多离线 wheel 依赖的复杂第三方应用）：在 GitHub Actions 手动触发 `publish-app.yml` 时填入 `package_url`（或向 Seeed 提交已打包的 release 链接）。CI 流水线下载包后执行 Manifest v2 与安全性预检，通过后使用厂商私钥签名并发布至 SenseCraft 官方应用商店；
+   - 详见 [app-publishing-and-permissions-guide.md](./app-publishing-and-permissions-guide.md) §三。
 
 ---
 
