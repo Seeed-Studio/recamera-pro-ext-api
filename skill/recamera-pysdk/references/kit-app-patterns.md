@@ -189,7 +189,14 @@ instead sends vendor outputs without that extra copy, collects pending cycles
 before the next inference, and coalesces idle/error/teardown cleanup after
 response and worker references are released. This does not remove socket copies
 or alter DMA ownership. ctypes-only workloads do not schedule this RKNNLite
-cleanup. Do not bypass the model factory with direct vendor RKNNLite imports.
+cleanup. For visual
+inference pipelines (`frames -> infer -> emit`), do not bypass the model
+factory with direct vendor RKNNLite imports. Streaming audio / self-paced
+non-visual workloads (such as VAD, KWS, streaming STT/TTS on audio ring
+buffers) that claim `npu.rknn: exclusive`, declare `needs_frames = False`, and
+declare `needs_model = False` may drive local RKNN runtimes directly to eliminate
+IPC overhead, provided they manage their own lifecycle and strictly release
+NPU handles (`rknn.release()`) on shutdown/error.
 
 For scheduled/brokered inference, backend selection occurs in the inference
 service process. Setting `ESK_RKNN_BACKEND` only in an App's environment does
@@ -297,11 +304,15 @@ in `run`. Let kit primitives do their intended jobs:
 
 - `self.frames()` obtains frames through the configured adapter.
 - `self.pre(frame)` prepares model input and geometry metadata.
-- `self.models.<id>.infer(...)` invokes a manifest-loaded model. This is the
-  only model invocation surface generated application code should use; current
-  Kit selects the scheduled service for AppMgr `npu.rknn: scheduled/brokered`.
-  The service owns model sessions and chooses its RKNN backend; that internal
-  ctypes/rknnlite choice does not authorize an app to open NPU runtimes itself.
+- `self.models.<id>.infer(...)` invokes a manifest-loaded model. For visual
+  pipelines (`frames -> infer -> emit`), this is the only model invocation
+  surface application code should use; current Kit selects the scheduled
+  service for AppMgr `npu.rknn: scheduled/brokered`. The service owns model
+  sessions and chooses its RKNN backend. Streaming audio / non-visual workloads
+  that operate without camera frames (`needs_frames = False`, `needs_model = False`)
+  and hold an exclusive lease (`npu.rknn: exclusive`) may drive local rknnlite
+  sessions directly for sub-100ms streaming audio buffers, but must never claim
+  unused camera resources and must explicitly release RKNN handles upon exit.
 - `self.emit(events, ts=frame.pts, results=results, geometry=geometry)` publishes application events
   and result data; `geometry` is optional and must follow the current geometry contract.
 - `self.request_recording(kind, ts=frame.pts)` submits an authorized recording

@@ -174,3 +174,6 @@ apps/<app_id>/
    固件已自带 `kit` 套件及 `rknnlite`/`numpy`/`cv2` 等基础库，**切勿将 `kit/` 源码打入应用包**。
 3. **图标文件要求**：
    图标必须为 PNG、WebP 或 JPEG 格式，文件大小 ≤ 1 MiB。扩展名与文件真实魔数必须一致，禁止 SVG。
+4. **NPU 推理调用边界（视觉 vs 流式音频）**：
+   - **视觉流水线（Frames -> Infer -> Emit）**：必须使用 Kit 的 Model Factory（`self.models.<id>.infer(...)`），由平台调度服务统一管理，严禁在应用进程内裸启 `rknnlite`，以防止与系统视频采集/VPSS 及 OSD 流水线争抢 NPU 驱动和内存。
+   - **流式音频与非视觉独立负载（如 VAD / 唤醒词 / ASR 流式识别）**：若应用自管环形缓冲、自驱动 80ms 节奏，且不需要相机帧（`needs_frames = False`, `needs_model = False`），允许在 `manifest.json` 中声明独占租约（`"resources.claims": [ {"name": "npu.rknn", "mode": "exclusive"} ]`）后直连本地 RKNN 运行时（或使用 `kit.runtime.rknnlite` 保护封装），且应用必须在退出或异常时显式调用 `release()` 释放驱动句柄。
