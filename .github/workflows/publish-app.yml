@@ -75,8 +75,9 @@ jobs:
 
       - name: Publish External Pre-built Package
         if: inputs.package_url != ''
+        env:
+          PKG_URL: ${{ inputs.package_url }}
         run: |
-          PKG_URL='${{ inputs.package_url }}'
           echo "Processing external pre-built package from: $PKG_URL"
           mkdir -p market/packaging/dist
           PKG_NAME=$(basename "$PKG_URL" | cut -d? -f1)

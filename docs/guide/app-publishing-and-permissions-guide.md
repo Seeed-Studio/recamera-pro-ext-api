@@ -99,7 +99,7 @@ apps/<app_id>/
    python3 market/packaging/build.py apps/<app_id> --out dist/
 
    # 2. 用本地 Owner 私钥签名
-   python3 market/packaging/sign.py dist/<app_id>-<version>-arm64.tar.gz --key owner_priv.pem
+   python3 market/packaging/sign.py --dist dist/ --pkg <app_id>-<version>-arm64.tar.gz --key owner_priv.pem
    ```
 4. **上传安装测试**：
    - 浏览器登录设备后台：`http://<设备IP>/`；
@@ -154,7 +154,7 @@ apps/<app_id>/
    > **推荐工具**：在外部构建目录组装完毕后，直接调用官方 `python3 market/packaging/build.py <assembled_dir> --out dist/`，该工具会自动校验规范并生成标准的 BOM 与 release lock。
 
 ### 2. 双层信任模型
-- **本地测试 / 个人旁加载**：使用前述 **Owner Key** 签名（`sign.py --key owner_priv.pem`），在登记过公钥的设备上直接分发运行。
+- **本地测试 / 个人旁加载**：使用前述 **Owner Key** 签名（`sign.py --dist dist/ --pkg <pkg> --key owner_priv.pem`），在登记过公钥的设备上直接分发运行。
 - **应用商店（App Center）发布**：官方应用商店作为公开信任锚点，统一由 Seeed 官方的 **Vendor Release Key（厂商密钥）** 重新签名，并在官方 CDN 的 `catalog.json` 目录中建立全局索引。外部开发者无需持有厂商私钥。
 
 ### 3. CI 预构建包发布途径
@@ -175,5 +175,8 @@ apps/<app_id>/
 3. **图标文件要求**：
    图标必须为 PNG、WebP 或 JPEG 格式，文件大小 ≤ 1 MiB。扩展名与文件真实魔数必须一致，禁止 SVG。
 4. **NPU 推理调用边界（视觉 vs 流式音频）**：
-   - **视觉流水线（Frames -> Infer -> Emit）**：必须使用 Kit 的 Model Factory（`self.models.<id>.infer(...)`），由平台调度服务统一管理，严禁在应用进程内裸启 `rknnlite`，以防止与系统视频采集/VPSS 及 OSD 流水线争抢 NPU 驱动和内存。
-   - **流式音频与非视觉独立负载（如 VAD / 唤醒词 / ASR 流式识别）**：若应用自管环形缓冲、自驱动 80ms 节奏，且不需要相机帧（`needs_frames = False`, `needs_model = False`），允许在 `manifest.json` 中声明独占租约（`"resources.claims": [ {"name": "npu.rknn", "mode": "exclusive"} ]`）后直连本地 RKNN 运行时（或使用 `kit.runtime.rknnlite` 保护封装），且应用必须在退出或异常时显式调用 `release()` 释放驱动句柄。
+   - **视觉流水线（Frames -> Infer -> Emit）**：必须使用 Kit 的 Model Factory（`self.models.<id>.infer(...)`），由平台调度服务（`inferenced`）统一管理，严禁在应用进程内裸启 `rknnlite`，以防止与系统视频采集/VPSS 及 OSD 流水线争抢 NPU 驱动和内存。
+   - **流式音频与非视觉独立负载（如 VAD / 唤醒词 / ASR 流式识别）**：若应用自管音频环形缓冲、自驱动毫秒级节奏且不使用相机帧（`needs_frames = False`, `needs_model = False`），如需直连本地 RKNN 运行时以规避 IPC 开销，必须满足以下完整契约：
+     1. 在 `manifest.json` 中声明独占模式：`"resources.claims": [ {"name": "npu.rknn", "mode": "exclusive"} ]`；
+     2. 运行时必须通过 `kit.resources.ExternalNpuLease`（或 `RknnSession`）向 `inference-control.sock` 取得 broker 独占租约并完成 READY 握手（确保固件内建推理已停妥并交接 NPU 所有权）；
+     3. 进程退出或异常时必须安全释放 lease 租约与 RKNN 句柄（推荐使用 `kit.runtime.rknnlite.RknnLiteRuntime` 保护层管理生命周期与输出内存回收）。

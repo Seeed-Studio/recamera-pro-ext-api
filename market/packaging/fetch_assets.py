@@ -110,12 +110,17 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
                 "kind": "wheel",
             })
 
-    # Deduplicate by relative path
+    # Deduplicate by relative path and merge metadata (e.g. hash from artifacts + model spec)
     unique = {}
     for item in declared:
         rp = item["rel_path"]
-        if rp not in unique or (item.get("x_url") and not unique[rp].get("x_url")):
-            unique[rp] = item
+        if rp not in unique:
+            unique[rp] = dict(item)
+        else:
+            if item.get("sha256") and not unique[rp].get("sha256"):
+                unique[rp]["sha256"] = item["sha256"]
+            if item.get("x_url") and not unique[rp].get("x_url"):
+                unique[rp]["x_url"] = item["x_url"]
 
     downloaded_files = []
     print(f"[{app_id}] Checking {len(unique)} declared bundled assets...")
