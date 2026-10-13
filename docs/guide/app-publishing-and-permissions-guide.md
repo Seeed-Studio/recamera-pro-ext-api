@@ -58,7 +58,26 @@ apps/<app_id>/
 }
 ```
 
-### 3. 本地打包与免密测试
+### 3. 模型与大资源文件（免上传 Git）
+- **模型文件不随 Git 仓库提交**（`.gitignore` 已自动排除 `*.rknn` / `*.onnx` / `*.whl` 等大文件）。
+- **云端模型池自动对齐**：CI 流水线打包时会自动从官方模型池拉取所需模型，开发者无需将模型提交到 Git。
+- **自定义模型链接（可选）**：如果应用使用了外部自训练模型，可在 `manifest.json` 中配置 `"x-url"`（公网可直接下载的直链，支持 HuggingFace、GitHub Releases、自建 OSS 等）：
+  ```json
+  "models": [
+    {
+      "id": "det",
+      "file": "models/my_model.rknn",
+      "task": "detect",
+      "x-url": "https://huggingface.co/my-org/my-model/resolve/main/my_model.rknn"
+    }
+  ]
+  ```
+- **本地快速同步**：若本地开发缺少模型，可一键同步：
+  ```bash
+  python3 market/packaging/fetch_assets.py apps/<app_id>
+  ```
+
+### 4. 本地打包与免密测试
 1. **本地打包**：
    ```bash
    python3 market/packaging/build.py apps/<app_id> --out dist/

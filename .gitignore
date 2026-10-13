@@ -10,8 +10,10 @@ __pycache__/
 *.caffemodel
 *.prototxt
 *.onnx
+*.whl
 models/
 apps/*/models/
+apps/*/wheels/
 # The compact learned fall gate is source-controlled so an app package can be
 # reproduced without running the training/export tool. Large RKNN files remain
 # ignored by the extensions above.

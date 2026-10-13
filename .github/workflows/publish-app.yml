@@ -175,6 +175,13 @@ jobs:
               print(f"   Building and Publishing: {app_id}")
               print(f"=======================================================")
               
+              # 0. 自动拉取缺失模型/资源文件 (若已存在或已缓存则秒级跳过)
+              fetch_cmd = ["python3", "market/packaging/fetch_assets.py", f"apps/{app_id}"]
+              res = subprocess.run(fetch_cmd)
+              if res.returncode != 0:
+                  print(f"::error::Failed to fetch assets for {app_id}")
+                  exit(1)
+
               # 1. 确定性打包
               build_cmd = ["python3", "market/packaging/build.py", f"apps/{app_id}", "--out", "market/packaging/dist/"]
               res = subprocess.run(build_cmd)
