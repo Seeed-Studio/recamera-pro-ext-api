@@ -9,6 +9,11 @@ on:
         required: false
         default: ''
         type: string
+      package_url:
+        description: '外部预构建包直链（例如 GitHub Releases 中的 <id>-<ver>-arm64.tar.gz，填入时跳过构建直接签名并发布）'
+        required: false
+        default: ''
+        type: string
 
   # 2. 推送触发：main 分支（限定 apps/** 变动）或 release/* Tag
   push:
@@ -68,7 +73,26 @@ jobs:
           EOF
           chmod 600 ~/.ossutilconfig
 
+      - name: Publish External Pre-built Package
+        if: inputs.package_url != ''
+        run: |
+          PKG_URL='${{ inputs.package_url }}'
+          echo "Processing external pre-built package from: $PKG_URL"
+          mkdir -p market/packaging/dist
+          PKG_NAME=$(basename "$PKG_URL" | cut -d? -f1)
+          if [[ "$PKG_NAME" != *-arm64.tar.gz ]]; then
+            echo "::error::Package filename must end with -arm64.tar.gz (got: $PKG_NAME)"
+            exit 1
+          fi
+          TARGET_FILE="market/packaging/dist/$PKG_NAME"
+          echo "Downloading package: $PKG_URL -> $TARGET_FILE"
+          curl -fSL "$PKG_URL" -o "$TARGET_FILE"
+          echo "Verifying, vendor-signing and publishing to CDN store..."
+          python3 market/packaging/publish_app.py "$TARGET_FILE" --sign --yes
+          echo "✓ Successfully verified, signed and published: $PKG_NAME"
+
       - name: Detect Apps to Publish
+        if: inputs.package_url == ''
         id: detector
         run: |
           python3 - << 'EOF'
@@ -160,7 +184,7 @@ jobs:
           EOF
 
       - name: Build and Publish Verified Apps
-        if: steps.detector.outputs.count > 0
+        if: inputs.package_url == '' && steps.detector.outputs.count > 0
         run: |
           APPS='${{ steps.detector.outputs.apps_json }}'
           echo "Processing publishing list: $APPS"
@@ -206,6 +230,6 @@ jobs:
           EOF
 
       - name: No-op Notice
-        if: steps.detector.outputs.count == 0
+        if: inputs.package_url == '' && steps.detector.outputs.count == 0
         run: |
           echo "No apps have bumped versions. Nothing to publish."

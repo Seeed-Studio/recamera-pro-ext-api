@@ -33,7 +33,7 @@ apps/<app_id>/
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64",
     "python": "==3.11.*",
-    "kit_api": ">=0.2,<0.3"
+    "kit_api": ">=0.2,<1"
   },
   "icon": { "path": "icon.png", "media_type": "image/png" },
   "models": [
@@ -77,20 +77,38 @@ apps/<app_id>/
   python3 market/packaging/fetch_assets.py apps/<app_id>
   ```
 
-### 4. 本地打包与免密测试
-1. **本地打包**：
+### 4. 本地打包与设备端测试（Owner Key 信任机制）
+设备端 AppMgr 默认采用签名验证机制。为了实现本地开发与旁加载（Sideloading），推荐使用 **Owner Key（开发者所有者密钥）** 进行本地签名与安装：
+
+1. **生成本地开发私钥与公钥（仅需一次）**：
    ```bash
-   python3 market/packaging/build.py apps/<app_id> --out dist/
+   openssl ecparam -genkey -name prime256v1 -noout -out owner_priv.pem
+   openssl ec -in owner_priv.pem -pubout -out owner_pub.pem
    ```
-   将在 `dist/` 下生成 `<app_id>-<version>-arm64.tar.gz`。
-2. **免密安装测试**：
-   - 浏览器打开设备后台：`http://<设备IP>/` 登录；
-   - 进入「应用中心」-> 点击「上传安装」，上传刚才打好的 `.tar.gz` 包；
-   - 安装完成后点击启动，验证推理、OSD 显示及配置项是否正常。
+2. **在测试设备上登记 Owner 公钥（每台设备仅需一次）**：
+   ```bash
+   ssh root@<设备IP> "mkdir -p /userdata/local/appmgr/keys/owners && chmod 755 /userdata/local/appmgr/keys/owners"
+   scp owner_pub.pem root@<设备IP>:/userdata/local/appmgr/keys/owners/<developer_name>.pem
+   ssh root@<设备IP> "chmod 644 /userdata/local/appmgr/keys/owners/<developer_name>.pem"
+   ```
+   > 登记完成后，设备将永久信任由该私钥签署的所有应用包。
+
+3. **本地打包与签名**：
+   ```bash
+   # 1. 确定性打包
+   python3 market/packaging/build.py apps/<app_id> --out dist/
+
+   # 2. 用本地 Owner 私钥签名
+   python3 market/packaging/sign.py dist/<app_id>-<version>-arm64.tar.gz --key owner_priv.pem
+   ```
+4. **上传安装测试**：
+   - 浏览器登录设备后台：`http://<设备IP>/`；
+   - 进入「应用中心」-> 点击「上传安装」，选择刚才签名后的 `.tar.gz` 包；
+   - 安装完成后启动应用，验证功能、推理及配置项。
 
 ---
 
-## 二、应用上架发布机制（CI 自动识别）
+## 二、源码应用上架发布机制（CI 自动识别）
 
 本地测试完成后，提交代码并合入 `main` 分支。**CI 会自动判断是否需要发版，以及发哪个应用**。
 
@@ -99,11 +117,11 @@ apps/<app_id>/
 1. **改动了 `apps/<app_id>/` 目录**；
 2. **且在 `apps/<app_id>/manifest.json` 中递增了 `version` 版本号**（例如从 `1.0.0` 递增到 `1.0.1`）。
 
-> **多应用同时发布支持**：如果一次提交同时修改了 3 个应用，并且这 3 个应用都在 `manifest.json` 里递增了版本号，CI 会自动识别并**逐个打包、逐个增量发布到云端商店**。
+> **多应用同时发布支持**：如果一次提交同时修改了多个应用且均递增了版本号，CI 会自动识别并**逐个打包、逐个增量发布到云端商店**。
 
 ### 2. 什么时候绝对不会触发发版？
 1. **底层或文档提交**：修改了 `sdk/`、`kit/`、`docs/`、根目录配置等非 `apps/` 目录时，**CI 完全不触发，执行次数为 0**。
-2. **日常代码修改但未改版本号**：如果只修改了 `apps/<app_id>/app.py` 的代码逻辑，但**没有修改 `manifest.json` 里的 `version`**，CI 会自动对比线上已发布的版本，识别为“日常开发提交”，**直接跳过发版（Skip）**。
+2. **日常代码修改但未改版本号**：如果只修改了代码逻辑但未修改 `version`，CI 会自动对比线上已发布版本并**直接跳过发版（Skip）**。
 
 ### 3. 备用方式：手动精准发布（打 Tag 或网页点击）
 - **打 Tag 发布**：
@@ -121,7 +139,34 @@ apps/<app_id>/
 
 ---
 
-## 三、开发避坑要点
+## 三、外部构建应用（External Build）的打包与上架
+
+适用于具有复杂外部构建流程的应用（例如前端经 `bun/vite` 编译、自带大量 PyPI aarch64 预编译轮子、依赖 Git Submodules 等独立组件的复杂 AI Agent 应用，如 `nanobot` 等）。
+
+### 1. 外部打包与 Manifest 规范
+外部流水线完成前端构建与轮子解析后，产物需满足标准 Manifest v2 安装包规范：
+1. **包命名规范**：最终打包为 `<app_id>-<version>-arm64.tar.gz`。
+2. **Manifest 依赖声明**：
+   - `python.wheels[]`：若携带额外 Python 依赖，需在 `manifest.json` 中声明每个 wheel 文件名、sha256 与 size（轮子需放于 `wheels/` 目录，适配 `cp311-manylinux_2_36_aarch64` 等目标架构）；
+   - `artifacts[]`：若携带模型或只读数据，在 manifest 中声明；
+   - `icon.png`：应用卡片图标（≤1MB，PNG/WebP/JPG）；
+   - `release.lock.json` 与 `files.sha256` (BOM)：包内完整性凭据。
+   > **推荐工具**：在外部构建目录组装完毕后，直接调用官方 `python3 market/packaging/build.py <assembled_dir> --out dist/`，该工具会自动校验规范并生成标准的 BOM 与 release lock。
+
+### 2. 双层信任模型
+- **本地测试 / 个人旁加载**：使用前述 **Owner Key** 签名（`sign.py --key owner_priv.pem`），在登记过公钥的设备上直接分发运行。
+- **应用商店（App Center）发布**：官方应用商店作为公开信任锚点，统一由 Seeed 官方的 **Vendor Release Key（厂商密钥）** 重新签名，并在官方 CDN 的 `catalog.json` 目录中建立全局索引。外部开发者无需持有厂商私钥。
+
+### 3. CI 预构建包发布途径
+在官方 CI 中已开通外部预构建包的直推通道：
+1. 外部开发者完成打包并发布至 GitHub Releases、S3 等公网可下载地址；
+2. 进入仓库 [Publish App to CDN Store 流水线](https://github.com/Seeed-Studio/recamera-pro-ext-api/actions/workflows/publish-app.yml)，点击 **Run workflow**；
+3. 在 **`package_url`** 输入框中填入预构建包直链（例如 `https://github.com/<owner>/<repo>/releases/download/vX.Y.Z/<app_id>-<version>-arm64.tar.gz`）；
+4. 流水线将自动拉取外部安装包，执行 Manifest 完整性与图标规范校验，由 Seeed 厂商密钥重新签名，并自动更新发布到官方应用商店 CDN。
+
+---
+
+## 四、开发避坑要点
 
 1. **坐标必须归一化**：
    所有检测框、ROI 坐标必须传 `[0.0, 1.0]` 比例。如果传像素绝对值，会被系统截断为 1px 的隐形框。
