@@ -102,8 +102,15 @@ apps/<app_id>/
    python3 market/packaging/sign.py --dist dist/ --pkg <app_id>-<version>-arm64.tar.gz --key owner_priv.pem
    ```
 4. **上传安装测试**：
-   - 浏览器登录设备后台：`http://<设备IP>/`；
-   - 进入「应用中心」-> 点击「上传安装」，选择刚才签名后的 `.tar.gz` 包；
+   - **方式一：通过 API / curl 直接上传（推荐）**
+     `sign.py` 会在 `dist/` 下生成同名的 `.tar.gz.sig` 分离签名文件。通过设备 API 直接上传：
+     ```bash
+     curl -X POST http://<设备IP>/api/appMgr/upload \
+       -F "package=@dist/<app_id>-<version>-arm64.tar.gz" \
+       -F "signature=@dist/<app_id>-<version>-arm64.tar.gz.sig"
+     ```
+   - **方式二：通过 Web 后台上传**
+     浏览器登录设备后台 `http://<设备IP>/`，进入「应用中心」-> 点击「上传安装」，选择刚才的安装包与配套签名。
    - 安装完成后启动应用，验证功能、推理及配置项。
 
 ---

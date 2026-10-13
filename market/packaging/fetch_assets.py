@@ -33,6 +33,12 @@ import subprocess
 import sys
 import urllib.request
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_MARKET = os.path.dirname(_HERE)
+if _MARKET not in sys.path:
+    sys.path.insert(0, _MARKET)
+from appmgr import manifest as manifest_contract
+
 OSS_DEFAULT_BASE = "oss://sensecraft-statics/solution-app/recamera_pro/models"
 CDN_DEFAULT_BASE = "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models"
 
@@ -43,6 +49,24 @@ def compute_sha256(path: str) -> str:
         while chunk := f.read(1024 * 1024):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _safe_dest_path(app_dir: str, rel_path: str) -> str:
+    """Validate relative path does not escape the application directory."""
+    if os.path.isabs(rel_path) or ".." in rel_path.split("/"):
+        raise ValueError(f"Path traversal detected in path {rel_path!r}")
+    dest = os.path.abspath(os.path.join(app_dir, rel_path))
+    app_dir_abs = os.path.abspath(app_dir)
+    if not (dest == app_dir_abs or dest.startswith(app_dir_abs + os.sep)):
+        raise ValueError(f"Destination {dest} escapes application directory {app_dir_abs}")
+    current = app_dir_abs
+    for component in rel_path.split("/"):
+        current = os.path.join(current, component)
+        if os.path.islink(current):
+            resolved = os.path.realpath(current)
+            if not resolved.startswith(app_dir_abs + os.sep):
+                raise ValueError(f"Symlink {current} -> {resolved} escapes application directory")
+    return dest
 
 
 def _has_ossutil() -> bool:
@@ -78,31 +102,38 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
     if not os.path.isfile(manifest_path):
         raise FileNotFoundError(f"No manifest.json in {app_dir}")
 
-    with open(manifest_path) as f:
+    with open(manifest_path, "r", encoding="utf-8") as f:
         mf = json.load(f)
+
+    manifest_contract.validate_manifest(mf)
 
     app_id = mf.get("id", os.path.basename(app_dir))
 
+    # Resolve artifact mounts so models backed by artifacts don't create duplicate mount downloads
+    artifact_mounts = {a["mount"] for a in mf.get("artifacts", []) if isinstance(a, dict) and a.get("mount")}
+
     # Collect all declared bundled files
     declared = []
-    for m in mf.get("models", []):
-        if m.get("file"):
-            declared.append({
-                "rel_path": m["file"],
-                "sha256": m.get("sha256"),
-                "x_url": m.get("x-url"),
-                "kind": "model",
-            })
     for a in mf.get("artifacts", []):
-        if a.get("source") == "bundled" and a.get("file"):
+        if isinstance(a, dict) and a.get("source") == "bundled" and a.get("file"):
             declared.append({
                 "rel_path": a["file"],
                 "sha256": a.get("sha256"),
                 "x_url": a.get("x-url"),
                 "kind": "artifact",
             })
+    for m in mf.get("models", []):
+        if isinstance(m, dict) and m.get("file"):
+            model_file = m["file"]
+            if model_file not in artifact_mounts:
+                declared.append({
+                    "rel_path": model_file,
+                    "sha256": m.get("sha256"),
+                    "x_url": m.get("x-url"),
+                    "kind": "model",
+                })
     for w in (mf.get("python") or {}).get("wheels", []):
-        if w.get("source") == "bundled" and w.get("file"):
+        if isinstance(w, dict) and w.get("source") == "bundled" and w.get("file"):
             declared.append({
                 "rel_path": w["file"],
                 "sha256": w.get("sha256"),
@@ -126,7 +157,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
     print(f"[{app_id}] Checking {len(unique)} declared bundled assets...")
 
     for rel_path, item in sorted(unique.items()):
-        dest = os.path.join(app_dir, rel_path)
+        dest = _safe_dest_path(app_dir, rel_path)
         expected_sha = item.get("sha256")
         x_url = item.get("x_url")
         basename = os.path.basename(rel_path)
