@@ -109,8 +109,11 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
 
     app_id = mf.get("id", os.path.basename(app_dir))
 
-    # Resolve artifact mounts so models backed by artifacts don't create duplicate mount downloads
-    artifact_mounts = {a["mount"] for a in mf.get("artifacts", []) if isinstance(a, dict) and a.get("mount")}
+    # Identify non-bundled (e.g. catalog) artifact mounts to avoid downloading them as bundled assets
+    catalog_mounts = {
+        a["mount"] for a in mf.get("artifacts", [])
+        if isinstance(a, dict) and a.get("source") != "bundled" and a.get("mount")
+    }
 
     # Collect all declared bundled files
     declared = []
@@ -125,7 +128,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
     for m in mf.get("models", []):
         if isinstance(m, dict) and m.get("file"):
             model_file = m["file"]
-            if model_file not in artifact_mounts:
+            if model_file not in catalog_mounts:
                 declared.append({
                     "rel_path": model_file,
                     "sha256": m.get("sha256"),

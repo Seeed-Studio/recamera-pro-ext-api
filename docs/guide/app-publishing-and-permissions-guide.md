@@ -102,15 +102,30 @@ apps/<app_id>/
    python3 market/packaging/sign.py --dist dist/ --pkg <app_id>-<version>-arm64.tar.gz --key owner_priv.pem
    ```
 4. **上传安装测试**：
-   - **方式一：通过 API / curl 直接上传（推荐）**
-     `sign.py` 会在 `dist/` 下生成同名的 `.tar.gz.sig` 分离签名文件。通过设备 API 直接上传：
+   - **方式一：通过 Web 后台上传（推荐）**
+     浏览器登录设备后台 `http://<设备IP>/`，进入「应用中心」-> 点击「上传安装」，选择刚才生成的 `.tar.gz` 安装包及配套的 `.tar.gz.sig` 签名文件。Web 界面会自动完成上传预检（Preflight）并引导安装。
+   - **方式二：通过 REST API 自动化上传并安装**
+     API 采用安全的流式上传与二次确认机制：
      ```bash
-     curl -X POST http://<设备IP>/api/appMgr/upload \
+     # 1. 上传包与分离签名，获取 upload_id
+     UPLOAD_RESP=$(curl -s -X POST http://<设备IP>/api/app-center/v1/uploads \
+       -H "Authorization: Bearer <TOKEN>" \
        -F "package=@dist/<app_id>-<version>-arm64.tar.gz" \
-       -F "signature=@dist/<app_id>-<version>-arm64.tar.gz.sig"
+       -F "signature=@dist/<app_id>-<version>-arm64.tar.gz.sig")
+     UPLOAD_ID=$(echo "$UPLOAD_RESP" | jq -r .upload_id)
+
+     # 2. 提交安装确认
+     curl -s -X POST http://<设备IP>/api/app-center/v1/apps \
+       -H "Authorization: Bearer <TOKEN>" \
+       -H "Content-Type: application/json" \
+       -d "{\"upload_id\": \"$UPLOAD_ID\"}"
      ```
-   - **方式二：通过 Web 后台上传**
-     浏览器登录设备后台 `http://<设备IP>/`，进入「应用中心」-> 点击「上传安装」，选择刚才的安装包与配套签名。
+   - **方式三：通过 SSH 本地 CLI 直接安装（开发调试推荐）**
+     将包及签名传输至设备，直接通过 appmgr 命令安装：
+     ```bash
+     scp dist/<app_id>-<version>-arm64.tar.gz* root@<设备IP>:/tmp/
+     ssh root@<设备IP> "python3 -m market.appmgr install /tmp/<app_id>-<version>-arm64.tar.gz"
+     ```
    - 安装完成后启动应用，验证功能、推理及配置项。
 
 ---
