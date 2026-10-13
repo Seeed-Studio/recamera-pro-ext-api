@@ -105,26 +105,31 @@ apps/<app_id>/
    - **方式一：通过 Web 后台上传（推荐）**
      浏览器登录设备后台 `http://<设备IP>/`，进入「应用中心」-> 点击「上传安装」，选择刚才生成的 `.tar.gz` 安装包及配套的 `.tar.gz.sig` 签名文件。Web 界面会自动完成上传预检（Preflight）并引导安装。
    - **方式二：通过 REST API 自动化上传并安装**
-     API 采用安全的流式上传与二次确认机制：
+     API 采用安全的流式上传预检与显式权限确认机制：
      ```bash
-     # 1. 上传包与分离签名，获取 upload_id
+     # 1. 上传包与分离签名，获取 upload_id 及预检权限声明
      UPLOAD_RESP=$(curl -s -X POST http://<设备IP>/api/app-center/v1/uploads \
        -H "Authorization: Bearer <TOKEN>" \
        -F "package=@dist/<app_id>-<version>-arm64.tar.gz" \
        -F "signature=@dist/<app_id>-<version>-arm64.tar.gz.sig")
-     UPLOAD_ID=$(echo "$UPLOAD_RESP" | jq -r .upload_id)
 
-     # 2. 提交安装确认
+     UPLOAD_ID=$(echo "$UPLOAD_RESP" | jq -r .upload_id)
+     PERMS=$(echo "$UPLOAD_RESP" | jq .preflight.manifest.permissions)
+
+     # 2. 显式确认权限并提交安装（如需升级/重装，可按需添加 "running_upgrade_confirmed": true 等）
      curl -s -X POST http://<设备IP>/api/app-center/v1/apps \
        -H "Authorization: Bearer <TOKEN>" \
        -H "Content-Type: application/json" \
-       -d "{\"upload_id\": \"$UPLOAD_ID\"}"
+       -d "$(jq -n \
+         --arg uid "$UPLOAD_ID" \
+         --argjson perms "$PERMS" \
+         '{upload_id: $uid, permissions_confirmed: true, permissions: $perms}')"
      ```
    - **方式三：通过 SSH 本地 CLI 直接安装（开发调试推荐）**
-     将包及签名传输至设备，直接通过 appmgr 命令安装：
+     将包及签名传输至设备，直接调用设备上安装的 `appmgr` 模块：
      ```bash
      scp dist/<app_id>-<version>-arm64.tar.gz* root@<设备IP>:/tmp/
-     ssh root@<设备IP> "python3 -m market.appmgr install /tmp/<app_id>-<version>-arm64.tar.gz"
+     ssh root@<设备IP> "PYTHONPATH=/usr/lib/recamera python3 -m appmgr install /tmp/<app_id>-<version>-arm64.tar.gz"
      ```
    - 安装完成后启动应用，验证功能、推理及配置项。
 
