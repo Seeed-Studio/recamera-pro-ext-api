@@ -1,0 +1,550 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seeed.studio/schemas/edge-inspection-assembly/config-v2.json",
+  "title": "edge-inspection-assembly runtime configuration v2",
+  "type": "object",
+  "required": [
+    "sources",
+    "model",
+    "classes",
+    "rules"
+  ],
+  "properties": {
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "stream_id",
+          "uri"
+        ],
+        "properties": {
+          "stream_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uri": {
+            "type": "string",
+            "minLength": 1,
+            "description": "rtsp://..., /dev/videoN, or a file path"
+          },
+          "kind": {
+            "enum": [
+              "rtsp",
+              "usb",
+              "file"
+            ]
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fps": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "loop": {
+            "type": "boolean",
+            "default": false,
+            "description": "file sources only: reopen at EOF instead of finishing"
+          },
+          "assembly": {
+            "$ref": "#/$defs/assembly",
+            "description": "Per-source override of the top-level assembly section"
+          },
+          "dimension": {
+            "$ref": "#/$defs/dimension",
+            "description": "Per-source override of the top-level dimension section"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "path",
+        "accelerator",
+        "input_size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accelerator": {
+          "enum": [
+            "cpu",
+            "tensorrt",
+            "hailo",
+            "rknn"
+          ]
+        },
+        "input_size": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "score_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.25
+        },
+        "nms_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.45
+        },
+        "onnx_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "classes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "rules": {
+      "type": "object",
+      "required": [
+        "ng_classes"
+      ],
+      "properties": {
+        "ng_classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Empty means any detection is NG"
+        },
+        "min_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.35
+        },
+        "min_defects": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "min_area": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.0,
+          "description": "Normalized bbox area floor"
+        },
+        "consecutive_frames": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "ng_on_defect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Raise NG on detected defects"
+        },
+        "ng_on_missing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Raise NG on missing expected items"
+        },
+        "ng_on_extra": {
+          "type": "boolean",
+          "default": true,
+          "description": "Raise NG on unexpected extra items"
+        },
+        "ng_on_dimension": {
+          "type": "boolean",
+          "default": true,
+          "description": "Raise NG on measurements out of tolerance"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mqtt": {
+      "type": "object",
+      "required": [
+        "host",
+        "topic"
+      ],
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "default": 1883
+        },
+        "topic": {
+          "type": "string",
+          "description": "Template, e.g. inspection/{stream_id}/results"
+        },
+        "qos": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0
+        },
+        "retain": {
+          "type": "boolean",
+          "default": false
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "tls": {
+          "type": "boolean",
+          "default": false
+        },
+        "explanation_topic": {
+          "type": "string",
+          "description": "Template for the assembly_explanation side channel, e.g. inspection/{stream_id}/explanations. Defaults to the results topic with /results replaced."
+        }
+      },
+      "additionalProperties": false
+    },
+    "modbus": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "bind": {
+          "type": "string",
+          "default": "0.0.0.0"
+        },
+        "port": {
+          "type": "integer",
+          "default": 502
+        },
+        "unit_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 247,
+          "default": 1
+        },
+        "heartbeat_interval_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "web": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "bind": {
+          "type": "string",
+          "default": "0.0.0.0"
+        },
+        "port": {
+          "type": "integer",
+          "default": 8080
+        },
+        "preview_fps": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 5
+        }
+      },
+      "additionalProperties": false
+    },
+    "assembly": {
+      "$ref": "#/$defs/assembly",
+      "description": "Default expected-item list for every source"
+    },
+    "dimension": {
+      "$ref": "#/$defs/dimension",
+      "description": "Default dimension check for every source"
+    },
+    "vlm": {
+      "type": "object",
+      "description": "Optional shared VLM service (edge-vision-vlm). Explanation only: it never enters the frame loop and never changes a verdict.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "base_url": {
+          "type": "string",
+          "default": "http://127.0.0.1:8100"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "default": 4000,
+          "description": "Hard client timeout. On expiry the call is abandoned and no explanation event is published."
+        },
+        "language": {
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "default": "zh"
+        },
+        "max_sentences": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 4
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 4096,
+          "default": 320
+        },
+        "queue_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 2,
+          "description": "Bounded worker queue, drop-oldest. A full queue drops the request; it never blocks the frame loop."
+        },
+        "breaker_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 5,
+          "description": "Consecutive failures before the circuit breaker opens."
+        },
+        "breaker_cooloff_s": {
+          "type": "number",
+          "minimum": 0,
+          "default": 30.0
+        },
+        "jpeg_quality": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 75
+        },
+        "topic": {
+          "type": "string",
+          "default": "inspection/{stream_id}/explanations"
+        },
+        "trigger": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.5,
+              "description": "Call /v1/explain when the primary defect's score is below this."
+            },
+            "on_missing_parts": {
+              "type": "boolean",
+              "default": true,
+              "description": "Call /v1/explain when assembly.missing_count > 0."
+            },
+            "min_interval_s": {
+              "type": "number",
+              "minimum": 0,
+              "default": 5.0,
+              "description": "Minimum gap between two calls for one stream. /v1/explain is never per frame."
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "assembly": {
+      "type": "object",
+      "description": "Template expected-item list. Empty expected[] disables the check.",
+      "required": [
+        "expected"
+      ],
+      "properties": {
+        "expected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "class",
+              "roi"
+            ],
+            "properties": {
+              "class": {
+                "type": "string",
+                "minLength": 1
+              },
+              "roi": {
+                "type": "array",
+                "description": "Normalized [x1, y1, x2, y2]",
+                "items": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "min_count": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "label": {
+                "type": "string"
+              },
+              "match_distance": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1.5,
+                "description": "Overrides assembly.match_distance for this item"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "match_distance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1.5,
+          "default": 0.15,
+          "description": "Max normalized centre distance from ROI centre"
+        },
+        "min_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.25
+        },
+        "report_extra": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "dimension": {
+      "type": "object",
+      "description": "OpenCV dimension check. Empty measurements[] disables it.",
+      "required": [
+        "calibration",
+        "measurements"
+      ],
+      "properties": {
+        "calibration": {
+          "type": "object",
+          "required": [
+            "ref_object_width_mm"
+          ],
+          "properties": {
+            "ref_object_width_mm": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "detect": {
+              "enum": [
+                "aruco",
+                "contour"
+              ],
+              "default": "contour"
+            },
+            "roi": {
+              "type": "array",
+              "description": "Normalized [x1, y1, x2, y2]",
+              "items": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "aruco_dict": {
+              "type": "string",
+              "default": "DICT_4X4_50"
+            },
+            "aruco_id": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "measurements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "roi",
+              "nominal_width_mm",
+              "nominal_height_mm",
+              "tolerance_mm"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "roi": {
+                "type": "array",
+                "description": "Normalized [x1, y1, x2, y2]",
+                "items": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "nominal_width_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "nominal_height_mm": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "tolerance_mm": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

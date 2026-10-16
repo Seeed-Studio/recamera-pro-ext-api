@@ -1,0 +1,489 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seeed.studio/schemas/edge-inspection-assembly/mqtt-event-v2.json",
+  "title": "Cross-platform assembly-inspection MQTT event v2",
+  "description": "One message per processed frame. Detections are batched inside the frame message; never publish one message per detection. v2 adds the assembly (missing/extra) and dimension (measurement) sections and widens verdict semantics: NG can be raised by any of defect / missing / extra / dimension_out_of_tolerance.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "frame_id",
+    "stream_id",
+    "inference_time_ms",
+    "verdict",
+    "defect_count",
+    "detections",
+    "coordinate_space",
+    "model",
+    "version",
+    "assembly",
+    "dimension"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch milliseconds"
+    },
+    "frame_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stream_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inference_time_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "pipeline_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "verdict": {
+      "enum": [
+        "OK",
+        "NG"
+      ]
+    },
+    "verdict_reason": {
+      "type": "string"
+    },
+    "defect_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "primary_class_id": {
+      "type": "integer",
+      "minimum": -1,
+      "description": "Class id of the highest-scoring detection, -1 when none"
+    },
+    "detections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/detection"
+      }
+    },
+    "coordinate_space": {
+      "const": "normalized_center_wh"
+    },
+    "model": {
+      "$ref": "#/$defs/model"
+    },
+    "device": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "verdict_reasons": {
+      "type": "array",
+      "description": "Reason codes that triggered NG; empty when OK",
+      "items": {
+        "enum": [
+          "defect",
+          "missing",
+          "extra",
+          "dimension_out_of_tolerance"
+        ]
+      }
+    },
+    "assembly": {
+      "$ref": "#/$defs/assembly"
+    },
+    "dimension": {
+      "$ref": "#/$defs/dimension"
+    },
+    "explanation": {
+      "type": "string",
+      "description": "Human-readable text from the shared VLM service (POST /v1/explain). Never parsed, never used in a verdict. Normally delivered on the explanations topic instead; see explanation-event.schema.json."
+    },
+    "vlm_model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Model identity the VLM service answered with, e.g. Qwen3-VL-2B-Instruct@cuda."
+    },
+    "vlm_latency_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "The VLM service's own generation time, excluding HTTP overhead and model load."
+    },
+    "vlm_fallback_used": {
+      "type": "boolean",
+      "description": "True only when the published verdict came from POST /v1/fallback. This demo never calls it, so the field stays false."
+    },
+    "candidates": {
+      "type": "array",
+      "description": "Advisory [{label, confidence, rationale}] from POST /v1/label, descending confidence. Does not change verdict or detections.",
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "confidence"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "rationale": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "prompt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the prompt template file that produced the text."
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "detection": {
+      "type": "object",
+      "required": [
+        "slot",
+        "class_id",
+        "class_name",
+        "score",
+        "bbox"
+      ],
+      "properties": {
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bounded per-frame index, not a tracker id"
+        },
+        "class_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "class_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "bbox": {
+          "type": "array",
+          "description": "Normalized [center_x, center_y, width, height], each in [0,1]",
+          "prefixItems": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ],
+          "minItems": 4,
+          "maxItems": 4
+        }
+      },
+      "additionalProperties": true
+    },
+    "model": {
+      "type": "object",
+      "required": [
+        "name",
+        "input",
+        "onnx_sha256",
+        "accelerator"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string",
+          "description": "e.g. images:1x3x640x640"
+        },
+        "onnx_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "accelerator": {
+          "enum": [
+            "cpu",
+            "tensorrt",
+            "hailo",
+            "rknn"
+          ]
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "engine/HEF/rknn hash when applicable"
+        }
+      },
+      "additionalProperties": true
+    },
+    "assembly": {
+      "type": "object",
+      "description": "Template expected-item list vs detections",
+      "required": [
+        "enabled",
+        "expected_count",
+        "matched_count",
+        "missing_count",
+        "extra_count",
+        "missing",
+        "extra"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "expected_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "matched_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "extra_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/missing_item"
+          }
+        },
+        "extra": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/extra_item"
+          }
+        },
+        "roi_profile_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 of the assembly ROI profile that produced expected[]; null when ROIs were hand-written. Generated by tools/annotation/roi_profile.py."
+        }
+      },
+      "additionalProperties": true
+    },
+    "missing_item": {
+      "type": "object",
+      "required": [
+        "label",
+        "class_name",
+        "roi",
+        "expected",
+        "found"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "class_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roi": {
+          "type": "array",
+          "description": "Normalized [x1,y1,x2,y2]",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "min_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expected": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "found": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "extra_item": {
+      "type": "object",
+      "required": [
+        "class_id",
+        "class_name",
+        "score",
+        "bbox"
+      ],
+      "properties": {
+        "class_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "class_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "bbox": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      },
+      "additionalProperties": true
+    },
+    "dimension": {
+      "type": "object",
+      "description": "OpenCV reference-object calibration and measurements",
+      "required": [
+        "enabled",
+        "calibrated",
+        "mm_per_pixel",
+        "out_of_tolerance_count",
+        "measurements"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "calibrated": {
+          "type": "boolean"
+        },
+        "mm_per_pixel": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "calibration_error": {
+          "type": "string"
+        },
+        "out_of_tolerance_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "measurements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/measurement"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "measurement": {
+      "type": "object",
+      "required": [
+        "name",
+        "status",
+        "status_code",
+        "in_tolerance",
+        "measured_long_mm",
+        "measured_short_mm"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "undersize",
+            "oversize",
+            "not_found",
+            "uncalibrated"
+          ]
+        },
+        "status_code": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "description": "Modbus HR 11 code"
+        },
+        "in_tolerance": {
+          "type": "boolean"
+        },
+        "measured_long_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "measured_short_mm": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "nominal_long_mm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "nominal_short_mm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tolerance_mm": {
+          "type": "number",
+          "minimum": 0
+        },
+        "deviation_mm": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
