@@ -1,0 +1,22 @@
+{
+  "id": "nanobot",
+  "name": "Nanobot",
+  "name_zh": "Nanobot 智能体",
+  "version": "1.0.0",
+  "description": "An open-source AI assistant for the reCamera Pro. It provides a browser-based chat console and a hands-free voice channel with wake-word activation, running either fully on-device (local wake-word detection, speech recognition and speech synthesis) or through cloud realtime services (OpenAI, Gemini, Qwen). With the bundled recamera-local skill, the assistant operates the camera itself: capturing snapshots, configuring AI detection, recording video clips and managing storage. Model providers, the voice pipeline and skill extensions are all configured from the built-in web interface.",
+  "description_zh": "面向 reCamera Pro 的开源 AI 助手。提供浏览器聊天控制台与免提语音通道：语音链路支持唤醒词激活，可完全在端侧运行（本地唤醒词检测、语音识别与语音合成），也可接入云端 realtime 服务（OpenAI、Gemini、Qwen）。通过内置的 recamera-local 技能，助手可直接操作摄像头：拍摄快照、配置 AI 检测、录制视频片段、管理存储空间。模型供应商、语音管线与技能扩展均在内置网页界面中完成配置。",
+  "scene": "AI Assistant",
+  "scene_zh": "智能助理",
+  "author": "iChizer0 (third-party, open source)",
+  "arch": "arm64",
+  "image": "/appcenter/apps/nanobot.png",
+  "icon_url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/icons/nanobot.png",
+  "package": {
+    "url": "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/packages/nanobot-1.0.0-arm64.tar.gz",
+    "filename": "nanobot-1.0.0-arm64.tar.gz",
+    "sha256": "ac98b497e24c9a52c3a827c8848b4b296a1e8c98c03416b9fdd551fdb0104586",
+    "size": 94842241,
+    "signature": "",
+    "signature_alg": "ecdsa-sha256"
+  }
+}
