@@ -847,11 +847,36 @@ def _validate_detection_render_contract(
         ))
 
 
-def _validate_python(app_dir: Path, model_ids: set[str], model_tasks: dict[str, list[str]], issues: list[dict[str, str]]) -> list[tuple[str, ast.AST]]:
+def _package_exclude_globs(manifest: dict[str, Any]) -> tuple[str, ...]:
+    """manifest.package.exclude, as the builders read it (pruned dir/file globs)."""
+    package = manifest.get("package") if isinstance(manifest, dict) else None
+    excludes = package.get("exclude") if isinstance(package, dict) else None
+    if not isinstance(excludes, (list, tuple)):
+        return ()
+    return tuple(str(e) for e in excludes if isinstance(e, str))
+
+
+def _is_package_excluded(relative: str, patterns: tuple[str, ...]) -> bool:
+    """True when the path itself or any ancestor dir matches a package.exclude
+    glob, mirroring how the builders prune (matched on the dir/file name or the
+    full app-relative path)."""
+    parts = Path(relative).parts
+    for i, part in enumerate(parts):
+        prefix = "/".join(parts[: i + 1])
+        if any(fnmatch.fnmatch(part, p) or fnmatch.fnmatch(prefix, p) for p in patterns):
+            return True
+    return False
+
+
+def _validate_python(app_dir: Path, model_ids: set[str], model_tasks: dict[str, list[str]], issues: list[dict[str, str]], excludes: tuple[str, ...] = ()) -> list[tuple[str, ast.AST]]:
     parsed_trees: list[tuple[str, ast.AST]] = []
     for path in sorted(app_dir.rglob("*.py")):
         relative = path.relative_to(app_dir).as_posix()
         if any(part in {".venv", "venv", "build", "dist", "__pycache__", "node_modules", "kit"} or part.startswith(".") for part in Path(relative).parts):
+            continue
+        if _is_package_excluded(relative, excludes):
+            # Out of the payload by the manifest's own declaration (vendored
+            # trees); scanning them would police code that never ships.
             continue
         try:
             source = path.read_text(encoding="utf-8")
@@ -962,6 +987,11 @@ def _validate_publish_hygiene(
         relative = path.relative_to(app_dir).as_posix()
         if any(part.startswith(".") for part in relative.split("/")):
             continue
+        if any(part in {"build", "dist", "node_modules", "__pycache__", "kit"} for part in relative.split("/")):
+            # The builders prune these wholesale; they never reach the payload.
+            continue
+        if _is_package_excluded(relative, _package_exclude_globs(manifest)):
+            continue
         name = path.name
         if any(fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(relative, pattern)
                for pattern in PUBLISH_JUNK_PATTERNS):
@@ -1041,7 +1071,8 @@ def validate_app(
         if mode in {"package", "publish"}:
             _validate_platform_contract(manifest, issues)
         _validate_stream_osd(manifest, issues)
-        trees = _validate_python(app_dir, model_ids, model_tasks, issues)
+        trees = _validate_python(app_dir, model_ids, model_tasks, issues,
+                                 excludes=_package_exclude_globs(manifest))
         source = inspect_sources(trees, str(entry or "app.py"), selected_api_signatures(sdk_root),
                                  require_entry=mode in {"package", "publish"})
         issues.extend(source["issues"])
