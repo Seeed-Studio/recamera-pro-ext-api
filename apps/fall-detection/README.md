@@ -21,7 +21,8 @@ The production default is strict confirmation:
   as the motion evidence feature, so `min_suspected_features=3` still confirms
   a victim lying still;
 - a candidate still lying at `suspected_timeout_sec` stays `suspected` for up to
-  3.2 s more (the 48-frame temporal window at 15 fps) so a late temporal
+  `late_confirmation_sec` more (default 3.2 s, the 48-frame temporal window at
+  15 fps; range 0-10 s, `0` disables the late latch) so a late temporal
   positive can confirm it; standing up or leaving the lying pose ends it;
 - a first-frame lying pose, missing pose, or invalid pose cannot create an event;
 - set `temporal_confirmation_required=false` only for explicit legacy

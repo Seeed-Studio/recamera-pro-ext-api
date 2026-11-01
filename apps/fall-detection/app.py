@@ -404,6 +404,7 @@ class FallDetectionApp(App):
     min_suspected_features = 2
     confirmation_sec = 0.80
     suspected_timeout_sec = 1.50
+    late_confirmation_sec = 3.20
     occlusion_grace_sec = 0.75
     recovery_torso_angle_deg = 35.0
     recovery_aspect_ratio = 1.10
@@ -414,7 +415,7 @@ class FallDetectionApp(App):
     def _build_fall_config(self):
         """One FallConfig from the already-bound `self.<knob>` attributes.
 
-        The single place the 14 thresholds are assembled -- setup() uses it to
+        The single place the 15 thresholds are assembled -- setup() uses it to
         create the template new tracks inherit, and `on_params_changed()` uses it
         to rebuild that template after a SIGHUP.
         """
@@ -428,6 +429,7 @@ class FallDetectionApp(App):
             min_suspected_features=self.min_suspected_features,
             confirmation_sec=float(self.confirmation_sec),
             suspected_timeout_sec=float(self.suspected_timeout_sec),
+            late_confirmation_sec=float(self.late_confirmation_sec),
             occlusion_grace_sec=float(self.occlusion_grace_sec),
             recovery_torso_angle_deg=float(self.recovery_torso_angle_deg),
             recovery_aspect_ratio=float(self.recovery_aspect_ratio),
@@ -479,7 +481,7 @@ class FallDetectionApp(App):
     def on_params_changed(self, changed):
         """★S1 live hot-reload★ -- only what the auto-bind cannot do by itself.
 
-        The 16 scalars are already re-bound onto `self`; what is left is the
+        The 17 scalars are already re-bound onto `self`; what is left is the
         derived state, and the rule is the one the pre-migration
         `on_config_reload` implemented:
 

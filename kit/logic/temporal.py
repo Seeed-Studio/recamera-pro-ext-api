@@ -78,7 +78,7 @@ class FallConfig:
         self.recovery_aspect_ratio = max(1.0, self.recovery_aspect_ratio)
         self.recovery_window_sec = max(0.0, self.recovery_window_sec)
         self.cooldown_sec = max(0.0, self.cooldown_sec)
-        self.late_confirmation_sec = max(0.0, self.late_confirmation_sec)
+        self.late_confirmation_sec = min(30.0, max(0.0, self.late_confirmation_sec))
         return self
 
 

@@ -611,3 +611,14 @@ def test_location_cooldown_window_is_not_extended_by_suppressed_edges():
     # ...but the window runs from the emitted event only (0.0 + 10.0).
     step(10.2, [])
     assert len(step(10.5, [here])) == 1
+
+
+def test_late_confirmation_sec_is_a_bound_and_clamped_knob():
+    from kit.logic.temporal import FallConfig
+
+    mod = _load_app_module()
+    app = _make_app(mod, {"late_confirmation_sec": 1.5})
+    assert app._fall_config.late_confirmation_sec == 1.5
+    assert _make_app(mod, {})._fall_config.late_confirmation_sec == 3.2
+    assert FallConfig(late_confirmation_sec=-1.0).clamp().late_confirmation_sec == 0.0
+    assert FallConfig(late_confirmation_sec=99.0).clamp().late_confirmation_sec == 30.0
