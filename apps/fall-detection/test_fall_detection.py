@@ -190,6 +190,26 @@ def test_temporal_profile_and_strict_confirmation_policy():
     assert legacy_out.state == "fallen" and legacy_out.fall_event
 
 
+def test_invalid_frames_never_confirm_in_geometry_only_mode():
+    """A missing/invalid pose cannot create an event, even geometry-only."""
+    from kit.logic.temporal import FallConfig, FallDetector
+
+    detector = FallDetector(FallConfig(
+        confirmation_sec=0.2, suspected_timeout_sec=2.0,
+        temporal_confirmation_required=False))
+    detector.update(_obs(0.0, 0.4, 10.0, 0.7))
+    armed = detector.update(_obs(0.2, 0.65, 70.0, 1.5))   # real drop, lying
+    assert armed.state == "suspected"
+    for i in range(1, 8):                                # 0.3 .. 0.9 s
+        out = detector.update(_obs(0.2 + 0.1 * i, 0.0, 0.0, 0.0, False))
+        assert out.state == "suspected" and not out.fall_event
+        assert not out.fall_detected
+    # The candidate survived the gap; a later valid lying frame confirms it.
+    confirmed = detector.update(_obs(1.0, 0.68, 75.0, 1.6))
+    assert confirmed.state == "fallen" and confirmed.fall_event
+    assert confirmed.event_id == 1
+
+
 def _obs(ts, hip, torso, aspect, valid=True):
     from kit.logic.geometry import Observation
 

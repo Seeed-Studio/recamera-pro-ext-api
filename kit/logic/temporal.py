@@ -172,9 +172,10 @@ class FallDetector:
                 hip_speed = (o.hip_y - self._prev_hip_y) / dt
 
         if not o.valid:
-            # No usable pose (occlusion right after impact is common). Only a
-            # motion-triggered candidate with a recent strong lying pose may
-            # confirm through the gap; a generic disappearance never alarms.
+            # No usable pose (occlusion right after impact is common).  An
+            # invalid frame never confirms, in either mode: it can only keep
+            # a recently-lying candidate alive through a short gap so that a
+            # later valid lying frame may confirm it.
             self._diag = {
                 "hip_drop_speed": 0.0,
                 "hip_drop_distance": self._max_drop,
@@ -194,12 +195,7 @@ class FallDetector:
                 recent_strong = (self._last_strong_evidence >= 0.0 and
                                  o.timestamp_sec - self._last_strong_evidence
                                  <= c.occlusion_grace_sec)
-                if (not c.temporal_confirmation_required and
-                        self._motion_triggered and recent_strong and
-                        self._max_drop >= c.hip_drop_distance_threshold and
-                        suspected_for >= c.confirmation_sec):
-                    self._to_fallen(o)
-                elif (suspected_for > c.suspected_timeout_sec and
+                if (suspected_for > c.suspected_timeout_sec and
                         not (recent_strong and self._in_late_latch(o))):
                     # A late-confirmation candidate survives only a short
                     # occlusion right after a lying frame.
