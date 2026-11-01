@@ -28,6 +28,16 @@ The production default is strict confirmation:
 - set `temporal_confirmation_required=false` only for explicit legacy
   geometry-only bring-up.
 
+Two knobs have a narrower effect than their names suggest:
+
+- `min_suspected_features` has no effect once a candidate is `suspected` in
+  strict mode (or in geometry-only mode): confirmation needs a lying pose,
+  which supplies both posture features, and the arming drop latches the motion
+  feature, so the count is always 3;
+- `confirmation_sec` applies only to geometry-only mode, where it is the
+  minimum suspected time before confirmation. In strict mode it only sets the
+  lower bound for `suspected_timeout_sec`.
+
 `location_cooldown_sec` suppresses a fall edge at the location of an event
 emitted within that window whose track is no longer visible (the same person
 re-detected under a new track id). A suppressed edge emits no `fall` event.

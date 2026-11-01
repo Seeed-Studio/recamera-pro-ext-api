@@ -27,7 +27,8 @@ geometry-only bring-up.
 
 State: Normal -> Suspected -> Fallen -> Recovering -> Normal.
 No fall is declared from a single feature or a single frame: evidence is scored
-(hip speed, torso angle, box aspect) and must persist for `confirmation_sec`.
+(hip speed, torso angle, box aspect).  In geometry-only mode it must persist for
+`confirmation_sec` after arming; strict mode waits for the learned gate instead.
 """
 from __future__ import annotations
 
@@ -44,6 +45,19 @@ RECOVERING = "recovering"
 
 @dataclass
 class FallConfig:
+    """Thresholds for :class:`FallDetector`.
+
+    ``min_suspected_features`` has no effect once ``suspected`` (in strict
+    mode, and equally in geometry-only mode): confirmation requires a lying
+    pose, which already supplies both posture features, and the motion feature
+    is latched for every armed candidate, so the count is always 3.
+
+    ``confirmation_sec`` is the minimum suspected time before a
+    geometry-only (``temporal_confirmation_required=False``) confirmation.
+    Strict mode does not use it for confirmation; it only acts there as the
+    lower bound that :meth:`clamp` applies to ``suspected_timeout_sec``.
+    """
+
     temporal_confirmation_required: bool = True
     hip_drop_speed_threshold: float = 0.25      # normalised y units / second
     hip_drop_distance_threshold: float = 0.02   # from last non-horizontal pose
