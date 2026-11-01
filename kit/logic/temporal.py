@@ -27,7 +27,8 @@ geometry-only bring-up.
 
 State: Normal -> Suspected -> Fallen -> Recovering -> Normal.
 No fall is declared from a single feature or a single frame: evidence is scored
-(hip speed, torso angle, box aspect) and must persist for `confirmation_sec`.
+(hip speed, torso angle, box aspect).  In geometry-only mode it must persist for
+`confirmation_sec` after arming; strict mode waits for the learned gate instead.
 """
 from __future__ import annotations
 
@@ -44,6 +45,19 @@ RECOVERING = "recovering"
 
 @dataclass
 class FallConfig:
+    """Thresholds for :class:`FallDetector`.
+
+    ``min_suspected_features`` has no effect once ``suspected`` (in strict
+    mode, and equally in geometry-only mode): confirmation requires a lying
+    pose, which already supplies both posture features, and the motion feature
+    is latched for every armed candidate, so the count is always 3.
+
+    ``confirmation_sec`` is the minimum suspected time before a
+    geometry-only (``temporal_confirmation_required=False``) confirmation.
+    Strict mode does not use it for confirmation; it only acts there as the
+    lower bound that :meth:`clamp` applies to ``suspected_timeout_sec``.
+    """
+
     temporal_confirmation_required: bool = True
     hip_drop_speed_threshold: float = 0.25      # normalised y units / second
     hip_drop_distance_threshold: float = 0.02   # from last non-horizontal pose
@@ -78,7 +92,7 @@ class FallConfig:
         self.recovery_aspect_ratio = max(1.0, self.recovery_aspect_ratio)
         self.recovery_window_sec = max(0.0, self.recovery_window_sec)
         self.cooldown_sec = max(0.0, self.cooldown_sec)
-        self.late_confirmation_sec = max(0.0, self.late_confirmation_sec)
+        self.late_confirmation_sec = min(30.0, max(0.0, self.late_confirmation_sec))
         return self
 
 
@@ -172,9 +186,10 @@ class FallDetector:
                 hip_speed = (o.hip_y - self._prev_hip_y) / dt
 
         if not o.valid:
-            # No usable pose (occlusion right after impact is common). Only a
-            # motion-triggered candidate with a recent strong lying pose may
-            # confirm through the gap; a generic disappearance never alarms.
+            # No usable pose (occlusion right after impact is common).  An
+            # invalid frame never confirms, in either mode: it can only keep
+            # a recently-lying candidate alive through a short gap so that a
+            # later valid lying frame may confirm it.
             self._diag = {
                 "hip_drop_speed": 0.0,
                 "hip_drop_distance": self._max_drop,
@@ -194,12 +209,7 @@ class FallDetector:
                 recent_strong = (self._last_strong_evidence >= 0.0 and
                                  o.timestamp_sec - self._last_strong_evidence
                                  <= c.occlusion_grace_sec)
-                if (not c.temporal_confirmation_required and
-                        self._motion_triggered and recent_strong and
-                        self._max_drop >= c.hip_drop_distance_threshold and
-                        suspected_for >= c.confirmation_sec):
-                    self._to_fallen(o)
-                elif (suspected_for > c.suspected_timeout_sec and
+                if (suspected_for > c.suspected_timeout_sec and
                         not (recent_strong and self._in_late_latch(o))):
                     # A late-confirmation candidate survives only a short
                     # occlusion right after a lying frame.

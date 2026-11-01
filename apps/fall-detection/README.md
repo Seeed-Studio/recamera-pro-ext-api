@@ -21,11 +21,30 @@ The production default is strict confirmation:
   as the motion evidence feature, so `min_suspected_features=3` still confirms
   a victim lying still;
 - a candidate still lying at `suspected_timeout_sec` stays `suspected` for up to
-  3.2 s more (the 48-frame temporal window at 15 fps) so a late temporal
+  `late_confirmation_sec` more (default 3.2 s, the 48-frame temporal window at
+  15 fps; range 0-10 s, `0` disables the late latch) so a late temporal
   positive can confirm it; standing up or leaving the lying pose ends it;
 - a first-frame lying pose, missing pose, or invalid pose cannot create an event;
 - set `temporal_confirmation_required=false` only for explicit legacy
   geometry-only bring-up.
+
+Two knobs have a narrower effect than their names suggest:
+
+- `min_suspected_features` has no effect once a candidate is `suspected` in
+  strict mode (or in geometry-only mode): confirmation needs a lying pose,
+  which supplies both posture features, and the arming drop latches the motion
+  feature, so the count is always 3;
+- `confirmation_sec` applies only to geometry-only mode, where it is the
+  minimum suspected time before confirmation. In strict mode it only sets the
+  lower bound for `suspected_timeout_sec`.
+
+`location_cooldown_sec` suppresses a fall edge at the location of an event
+emitted within that window whose track is no longer visible (the same person
+re-detected under a new track id). A suppressed edge emits no `fall` event.
+While that track stays in the suppressed episode, its `pose_state` and person
+result keep the detector `state` but report `fall_detected=false`, carry
+`fall_suppressed=true`, and report the track's last emitted `event_id` (`0` if
+none).
 
 The packaged `jetson-yolo11s-pose-optimized-v1` profile began as a transfer
 fallback. A strict Pro-native experiment is now complete, but the transfer

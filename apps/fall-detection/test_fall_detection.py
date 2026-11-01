@@ -190,6 +190,26 @@ def test_temporal_profile_and_strict_confirmation_policy():
     assert legacy_out.state == "fallen" and legacy_out.fall_event
 
 
+def test_invalid_frames_never_confirm_in_geometry_only_mode():
+    """A missing/invalid pose cannot create an event, even geometry-only."""
+    from kit.logic.temporal import FallConfig, FallDetector
+
+    detector = FallDetector(FallConfig(
+        confirmation_sec=0.2, suspected_timeout_sec=2.0,
+        temporal_confirmation_required=False))
+    detector.update(_obs(0.0, 0.4, 10.0, 0.7))
+    armed = detector.update(_obs(0.2, 0.65, 70.0, 1.5))   # real drop, lying
+    assert armed.state == "suspected"
+    for i in range(1, 8):                                # 0.3 .. 0.9 s
+        out = detector.update(_obs(0.2 + 0.1 * i, 0.0, 0.0, 0.0, False))
+        assert out.state == "suspected" and not out.fall_event
+        assert not out.fall_detected
+    # The candidate survived the gap; a later valid lying frame confirms it.
+    confirmed = detector.update(_obs(1.0, 0.68, 75.0, 1.6))
+    assert confirmed.state == "fallen" and confirmed.fall_event
+    assert confirmed.event_id == 1
+
+
 def _obs(ts, hip, torso, aspect, valid=True):
     from kit.logic.geometry import Observation
 
@@ -591,3 +611,51 @@ def test_location_cooldown_window_is_not_extended_by_suppressed_edges():
     # ...but the window runs from the emitted event only (0.0 + 10.0).
     step(10.2, [])
     assert len(step(10.5, [here])) == 1
+
+
+def test_late_confirmation_sec_is_a_bound_and_clamped_knob():
+    from kit.logic.temporal import FallConfig
+
+    mod = _load_app_module()
+    app = _make_app(mod, {"late_confirmation_sec": 1.5})
+    assert app._fall_config.late_confirmation_sec == 1.5
+    assert _make_app(mod, {})._fall_config.late_confirmation_sec == 3.2
+    assert FallConfig(late_confirmation_sec=-1.0).clamp().late_confirmation_sec == 0.0
+    assert FallConfig(late_confirmation_sec=99.0).clamp().late_confirmation_sec == 30.0
+
+
+def test_location_cooldown_suppressed_track_reports_no_unemitted_event():
+    mod = _load_app_module()
+    app = _make_app(mod, {"occlusion_grace_sec": 0.2,
+                          "location_cooldown_sec": 10.0})
+    app._detector_for = lambda tid, d={}: d.setdefault(tid, _EdgeOnFirstUpdate())
+    frame = SimpleNamespace(w=640, h=480, pts=0.0)
+    here = (100, 300, 300, 380)
+
+    def step(pts, boxes):
+        frame.pts = pts
+        people = [_pose(b) for b in boxes]
+        return people, app._advance_tracks(people, frame)
+
+    people, events = step(0.0, [here])
+    first = [e for e in events if e["kind"] == "pose_state"][0]
+    assert first["fall_detected"] is True and first["event_id"] == 1
+    assert "fall_suppressed" not in first
+    assert people[0]["fall_detected"] is True and people[0]["event_id"] == 1
+
+    step(1.0, [])                                   # first track expires
+    # Same person under a fresh track id: the edge is suppressed, so neither
+    # the pose_state nor the person reports a fall or the unemitted event id,
+    # on the edge frame or on the following FALLEN frames.
+    for pts in (1.5, 1.6, 1.7):
+        people, events = step(pts, [here])
+        assert [e for e in events if e["kind"] == "fall"] == []
+        state = [e for e in events if e["kind"] == "pose_state"][0]
+        assert state["track_id"] != first["track_id"]
+        assert state["state"] == "fallen"            # detector state kept
+        assert state["fall_detected"] is False
+        assert state["event_id"] == 0
+        assert state["fall_suppressed"] is True
+        person = people[0]
+        assert person["fall_detected"] is False and person["event_id"] == 0
+        assert person["fall_suppressed"] is True
