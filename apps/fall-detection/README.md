@@ -28,6 +28,14 @@ The production default is strict confirmation:
 - set `temporal_confirmation_required=false` only for explicit legacy
   geometry-only bring-up.
 
+`location_cooldown_sec` suppresses a fall edge at the location of an event
+emitted within that window whose track is no longer visible (the same person
+re-detected under a new track id). A suppressed edge emits no `fall` event.
+While that track stays in the suppressed episode, its `pose_state` and person
+result keep the detector `state` but report `fall_detected=false`, carry
+`fall_suppressed=true`, and report the track's last emitted `event_id` (`0` if
+none).
+
 The packaged `jetson-yolo11s-pose-optimized-v1` profile began as a transfer
 fallback. A strict Pro-native experiment is now complete, but the transfer
 profile remains the production default because it performed better on the same
