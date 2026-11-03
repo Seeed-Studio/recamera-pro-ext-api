@@ -144,7 +144,7 @@
   },
   "id": "crayfish-fight",
   "name": "Crayfish Fight Monitor",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "image": "/appcenter/apps/crayfish-fight.png",
   "type": "self-hosted",
   "description": "Crayfish aggression monitoring for aquaculture tanks. Detects individuals, identifies sex, and classifies fight or harass behaviour on the interaction ROI of adjacent pairs via per-frame screening and an 8-frame temporal confirmation classifier. Emits structured events with quota-limited diagnostic frames for retraining, without transmitting raw video.",

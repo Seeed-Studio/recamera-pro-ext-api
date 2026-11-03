@@ -121,15 +121,16 @@ jobs:
                   print(f"::error::App apps/{app_id} does not exist!")
                   sys.exit(1)
 
-          # 场景 B：手动 workflow_dispatch 且指定了 app
+          # 场景 B：手动 workflow_dispatch 且指定了 app（支持逗号分隔多个，如: yolo-detector, qrcode-reader）
           elif manual_app:
-              if os.path.isdir(f"apps/{manual_app}"):
-                  to_publish = [manual_app]
-              else:
-                  print(f"::error::App apps/{manual_app} does not exist!")
-                  sys.exit(1)
+              for app in [a.strip() for a in manual_app.split(",") if a.strip()]:
+                  if os.path.isdir(f"apps/{app}"):
+                      to_publish.append(app)
+                  else:
+                      print(f"::error::App apps/{app} does not exist!")
+                      sys.exit(1)
 
-          # 场景 C：main 分支 push 自动检测（必须显式 bump 了版本号才发版）
+          # 场景 C：留空时按提交 diff 自动比对版本号递增的应用
           else:
               try:
                   diff_out = subprocess.check_output(
@@ -158,10 +159,15 @@ jobs:
                       continue
 
                   live_v = live_apps.get(app_id)
-                  # 仅当版本号严格大于线上版本，或线上尚无该应用时，才触发发版！
+                  # 仅当版本号严格大于线上版本，或线上尚无该应用且资产齐全时，才触发发版！
                   if live_v is None:
-                      print(f"✓ {app_id}: new application (v{local_v}) -> to publish")
-                      to_publish.append(app_id)
+                      # 预检模型资产是否齐全，避免半成品上架
+                      chk = subprocess.run(["python3", "market/packaging/fetch_assets.py", f"apps/{app_id}"], capture_output=True)
+                      if chk.returncode == 0:
+                          print(f"✓ {app_id}: new application (v{local_v}) -> to publish")
+                          to_publish.append(app_id)
+                      else:
+                          print(f"- {app_id}: new application but missing remote assets -> skipped")
                   elif semver(local_v) > semver(live_v):
                       print(f"✓ {app_id}: version bumped {live_v} -> {local_v} -> to publish")
                       to_publish.append(app_id)
