@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 5,
+    "sequence": 6,
     "channel": "stable"
   },
   "compatibility": {
@@ -94,6 +94,17 @@
       "size": 4691086,
       "mount": "models/yolo11n_pose_rawhead_int8.rknn",
       "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "temporal-classifier",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/temporal_yolo11s_pose_v1.json.gz",
+      "sha256": "36545c5b5de501a07d3d46e626c8827d6f23e155c2420d5e4206bac7e555d74d",
+      "size": 95570,
+      "mount": "models/temporal_yolo11s_pose_v1.json.gz",
+      "required": false,
       "share_scope": "content"
     },
     {
@@ -259,8 +270,8 @@
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",
-  "description": "One process, two data streams: multi-person pose (YOLO11n-Pose on the NPU) for fall detection, and continuous offline voice transcription (silero VAD + SenseVoice) on a daemon thread, published as one application. Requires roughly the CPU, memory and microphone budget of fall-detection plus voice-transcribe together, so it claims an exclusive microphone lease against the standalone voice-transcribe app: only one of the two can run at a time.",
-  "description_zh": "单进程两路数据：多人体姿态（YOLO11n-Pose，跑在 NPU 上）做跌倒检测，同时一个守护线程持续做离线语音转写（silero VAD + SenseVoice），作为一个应用统一发布。它的 CPU、内存与麦克风开销约等于 fall-detection 与 voice-transcribe 之和，因此对独立运行的 voice-transcribe 申请独占麦克风租约：两者同一时间只能运行一个。",
+  "description": "Dual-pipeline elder care monitoring application combining vision and audio processing in a single process. Runs multi-person pose estimation (YOLO11n-Pose on the RV1126B NPU) for fall detection and background offline voice transcription (Silero VAD with SenseVoice) with exclusive microphone arbitration.",
+  "description_zh": "集成视觉与音频双流水线的居家养老看护应用。在单进程中结合运行于 RV1126B NPU 的多人体姿态估计（YOLO11n-Pose）实现跌倒检测，并通过守护线程执行离线语音转写（Silero VAD 与 SenseVoice），支持麦克风独占租约仲裁。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -295,7 +306,7 @@
   "ui": {
     "overlay": {
       "entry": "web/overlay.html",
-      "sha256": "123981122333d577b11c9e990984be8f563edeccd11dd06b3bef988a89f6d845"
+      "sha256": "cea642f39092b63ac9831a4ffe4282629cbf827cac4cacbfd257d63881f0b62f"
     }
   },
   "render": {
@@ -625,7 +636,11 @@
             ],
             "default": "rk",
             "help": "rk = NPU w4a16 SenseVoice via the platform inference service (the bundled authenticated model; the model runs in that service, this app holds the session). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
-            "help_zh": "rk = 通过平台推理服务在 NPU 上跑 w4a16 SenseVoice（随包认证模型；模型运行在该服务中，本应用只持有会话）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
+            "help_zh": "rk = 通过平台推理服务在 NPU 上跑 w4a16 SenseVoice（随包认证模型；模型运行在该服务中，本应用只持有会话）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。",
+            "option_labels_zh": [
+              "NPU w4a16 (rk)",
+              "CPU sherpa"
+            ]
           },
           {
             "key": "language",
@@ -649,7 +664,15 @@
               "Korean",
               "Cantonese"
             ],
-            "default": "auto"
+            "default": "auto",
+            "option_labels_zh": [
+              "自动",
+              "中文",
+              "英语",
+              "日语",
+              "韩语",
+              "粤语"
+            ]
           },
           {
             "key": "model_dir",
@@ -706,7 +729,11 @@
               "ALSA ai_asr (shared capture)",
               "RTSP audio track"
             ],
-            "default": "ai_asr"
+            "default": "ai_asr",
+            "option_labels_zh": [
+              "ALSA ai_asr（共享采集）",
+              "RTSP 音频轨"
+            ]
           },
           {
             "key": "audio_filter",

@@ -120,8 +120,8 @@
   "type": "self-hosted",
   "scene": "Retail",
   "scene_zh": "零售",
-  "description": "On-device retail people-flow analytics. Runs YOLOv8n (person class only) on the RV1126B NPU, tracks each shopper across frames (IoU association + velocity prediction + track id), and turns tracks into the three numbers a store manager asks for: how many came in/out, how many are in the store right now, and who is browsing / engaged / needs assistance. Optional counting zone and directional entry/exit line. Streams tracks + counting events for the /appcenter overlay.",
-  "description_zh": "本地零售人流分析。在 RV1126B NPU 上运行 YOLOv8n（只取 person 类），跨帧跟踪每位顾客（IoU 关联 + 速度预测 + track id），把轨迹转化为门店最关心的三个数字：进/出多少人、当前在店多少人、谁在浏览/驻足/需要帮助。可选统计区域与有向进出计数线。向 /appcenter 叠加层输出轨迹与计数事件。",
+  "description": "On-device retail passenger flow and customer behaviour analytics. Executes YOLOv8n on the RV1126B NPU for person detection, tracks trajectories across frames using spatial IoU association and velocity estimation, and aggregates key operational metrics including cumulative entry/exit counts, real-time store occupancy, and dwell duration indicators. Supports configurable directional tripwires and spatial counting zones, publishing tracking events to the OSD overlay.",
+  "description_zh": "基于设备端运行的零售客流与顾客行为分析应用。在 RV1126B NPU 上运行 YOLOv8n 目标检测模型，通过跨帧空间 IoU 关联与速度预测持续跟踪顾客轨迹，统计双向进出人次、店内实时在店人数与顾客驻足停留时长等指标。支持配置有向绊线与多边形统计区域，向 OSD 叠加层实时输出目标轨迹与客流事件。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [

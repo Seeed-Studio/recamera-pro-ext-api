@@ -147,8 +147,8 @@
   "version": "0.1.5",
   "image": "/appcenter/apps/crayfish-fight.png",
   "type": "self-hosted",
-  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects every animal, votes its sex, and classifies fight / harass behaviour on the interaction ROI of any pair that stays close -- screened per frame, then confirmed by an 8-frame temporal classifier that sees the motion. Reports events (never video) plus a quota-limited image dump for retraining.",
-  "description_zh": "水槽螯虾行为监测：逐帧检测每只虾并投票判定性别，对持续靠近的虾对在交互 ROI 上分类 fight / harass 行为——单帧粗筛，再由 8 帧时序分类器看运动做确认；只上报事件（视频不出场），并按配额落盘图片用于再训练。",
+  "description": "Crayfish aggression monitoring for aquaculture tanks. Detects individuals, identifies sex, and classifies fight or harass behaviour on the interaction ROI of adjacent pairs via per-frame screening and an 8-frame temporal confirmation classifier. Emits structured events with quota-limited diagnostic frames for retraining, without transmitting raw video.",
+  "description_zh": "水产养殖水槽螯虾攻击行为监测应用。逐帧检测个体并识别性别，对临近螯虾对的交互区域（ROI）结合单帧初筛与 8 帧时序分类器判定争斗（fight）与骚扰（harass）行为。仅上报结构化事件与配额限制的再训练样本图像，不向外传输实时视频流。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -769,5 +769,8 @@
       "value_template": "{{ 'ON' if value_json.behavior is defined and value_json.behavior | selectattr('label','equalto','fight') | list | length > 0 else 'OFF' }}",
       "device_class": "problem"
     }
-  ]
+  ],
+  "name_zh": "螯虾争斗监测",
+  "scene": "Agriculture & Farming",
+  "scene_zh": "农业养殖"
 }

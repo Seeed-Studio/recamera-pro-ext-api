@@ -304,8 +304,8 @@
   "type": "self-hosted",
   "scene": "Voice & Audio",
   "scene_zh": "语音音频",
-  "description": "On-device offline voice transcription: VAD endpointing -> SenseVoice ASR, transcribing every utterance continuously by default; an optional wake word (off by default, switchable live) gates transcription behind a wake phrase. Captures the mic via the official ALSA `ai_asr` shared-capture PCM (dsnoop -- shares the mic with rkipc, no takeover, video untouched; RTSP audio-track demux is a fallback). Streaming sherpa-onnx KWS (when the wake word is enabled) and silero VAD run on the ARM cores; the default `rk` ASR backend runs SenseVoice w4a16 on the RV1126B NPU under the shared rkipc broker lease. The optional `sherpa` ASR backend is CPU-only and requires an extra ONNX model. Streams state and transcript text to the /appcenter panel.",
-  "description_zh": "设备端离线语音转录：VAD 断句 -> SenseVoice 识别，默认持续转写每一句话；可选唤醒词（默认关闭，可在线切换），开启后说出唤醒词才转写。默认通过官方 ALSA `ai_asr` 共享采集 PCM（dsnoop，与 rkipc 共用麦克风、不接管设备、不影响视频；也可回退到 RTSP 音频轨）。流式 sherpa-onnx KWS（启用唤醒词时）与 silero VAD 运行在 ARM 核心；默认 `rk` 识别后端通过共享的 rkipc broker 租约，在 RV1126B NPU 上运行 SenseVoice w4a16。可选 `sherpa` 识别后端仅使用 CPU，且需额外提供 ONNX 模型。向 /appcenter 面板输出状态与转录文本。",
+  "description": "On-device offline voice transcription application with continuous utterance transcription and optional keyword spotting. Acquires audio through the ALSA ai_asr shared capture interface (dsnoop) or RTSP audio streams. Executes streaming sherpa-onnx KWS and Silero VAD on CPU cores, with SenseVoice w4a16 speech recognition running on the RV1126B NPU under broker arbitration. Outputs transcription state and recognized text to application interfaces.",
+  "description_zh": "基于设备端的离线语音识别与转录应用。支持连续语音断句转写及可选关键词唤醒机制。通过 ALSA ai_asr 共享采集接口或 RTSP 音频流获取音频，在 CPU 运行流式 sherpa-onnx KWS 与 Silero VAD，并在 RV1126B NPU 上通过仲裁调度运行 SenseVoice w4a16 语音识别模型，向系统界面输出运行状态与转录文本。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -507,7 +507,11 @@
               "Streaming KWS (fast)",
               "ASR keyword match"
             ],
-            "default": "kws"
+            "default": "kws",
+            "option_labels_zh": [
+              "流式 KWS（低延迟）",
+              "ASR 关键词匹配"
+            ]
           },
           {
             "key": "wakeword",
@@ -562,7 +566,11 @@
             ],
             "default": "rk",
             "help": "rk = NPU w4a16 SenseVoice (uses the authenticated model bundled with this app release). sherpa = CPU SenseVoice (needs model.int8.onnx, not shipped).",
-            "help_zh": "rk = NPU w4a16 SenseVoice（使用本应用版本随包认证的模型）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。"
+            "help_zh": "rk = NPU w4a16 SenseVoice（使用本应用版本随包认证的模型）。sherpa = CPU SenseVoice（需 model.int8.onnx，未随包提供）。",
+            "option_labels_zh": [
+              "NPU w4a16 (rk)",
+              "CPU sherpa"
+            ]
           },
           {
             "key": "language",
@@ -586,7 +594,15 @@
               "Korean",
               "Cantonese"
             ],
-            "default": "auto"
+            "default": "auto",
+            "option_labels_zh": [
+              "自动",
+              "中文",
+              "英语",
+              "日语",
+              "韩语",
+              "粤语"
+            ]
           },
           {
             "key": "min_silence_sec",

@@ -137,7 +137,7 @@
     "media_type": "image/png"
   },
   "type": "self-hosted",
-  "description": "Reads QR codes from the live camera on the ARM cores -- no AI model, pure OpenCV decode. Detects multiple codes per frame and streams their text + corner points for the /appcenter overlay.",
+  "description": "Real-time QR code detection and decoding application running on the host CPU. Utilizes optimized OpenCV computer vision routines without neural network inference to detect multiple QR codes per frame, streaming decoded payloads and corner polygon coordinates to the OSD overlay and client interfaces.",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -293,5 +293,9 @@
       "value_template": "{{ value_json.summary.text | default('') }}",
       "icon": "mdi:qrcode"
     }
-  ]
+  ],
+  "name_zh": "二维码识别",
+  "scene": "Interaction & Control",
+  "scene_zh": "交互控制",
+  "description_zh": "基于 CPU 核心的实时二维码识别应用。采用轻量高效的 OpenCV 图像处理与解码算法，无需神经网络模型即可实现单帧多二维码的高效检测与解码，向 OSD 叠加层实时输出解码文本与角点定位。"
 }

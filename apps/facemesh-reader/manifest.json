@@ -131,8 +131,8 @@
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",
-  "description": "On-device drowsiness / fatigue detection with a two-stage face cascade: a YOLOv8n-face detector finds the face, a 468-point MediaPipe FaceMesh landmark model runs on the cropped face ROI, then explainable CPU-only temporal logic derives EAR (eye aspect ratio), MAR (mouth aspect ratio), blinks, yawns and a composite drowsiness state. First reference for the reCamera Pro cascade-pipeline pattern reused by face-analysis.",
-  "description_zh": "设备端困倦/疲劳检测，采用两级人脸级联：YOLOv8n-face 检测人脸，468 点 MediaPipe FaceMesh 关键点模型在裁剪的人脸 ROI 上运行，再由可解释的纯 CPU 时序逻辑计算 EAR（眼纵横比）、MAR（嘴纵横比）、眨眼、打哈欠与综合困倦状态。是 reCamera Pro 级联流水线范式的首个参考，供 face-analysis 复用。",
+  "description": "On-device drowsiness and fatigue detection using a two-stage facial analysis pipeline. Locates faces via YOLOv8n-face and extracts 468 facial landmarks using MediaPipe FaceMesh on the cropped ROI. Computes eye aspect ratio (EAR), mouth aspect ratio (MAR), blink frequency, yawn events, and composite fatigue indicators through deterministic temporal analysis.",
+  "description_zh": "基于设备端两级视觉级联的面部疲劳与困倦检测应用。采用 YOLOv8n-face 定位人脸，并在裁剪区域运行 468 点 MediaPipe FaceMesh 关键点模型，结合时序分析计算眼睛纵横比（EAR）、嘴部纵横比（MAR）、眨眼频率、打哈欠频次及综合疲劳状态指标。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
