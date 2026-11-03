@@ -142,8 +142,8 @@
   "type": "self-hosted",
   "scene": "Safety & Care",
   "scene_zh": "安全看护",
-  "description": "On-device multi-person fall detection using YOLO11n-Pose, geometric candidate arming, and a frozen 48-frame learned temporal confirmation gate. Each person receives a stable track_id, independent history, and independent fall state.",
-  "description_zh": "使用 YOLO11n-Pose、几何候选触发与冻结的 48 帧学习型时序确认门在设备本地检测多人跌倒。每个人都有稳定的 track_id、独立历史和独立跌倒状态。",
+  "description": "On-device multi-person fall detection using YOLO11n-Pose estimation, geometric candidate triggering, and a 48-frame learned temporal confirmation classifier. Tracks multiple individuals with independent trajectories, motion histories, and state transition logic.",
+  "description_zh": "基于设备端运行的多人跌倒检测应用。采用 YOLO11n-Pose 人体姿态估计模型提取骨骼关键点，结合几何运动学初筛与 48 帧时序分类器进行二次确认。为画面中每个目标维护独立跟踪轨迹、动作历史与状态机。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "package": {

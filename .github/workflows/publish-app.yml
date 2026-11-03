@@ -1,7 +1,7 @@
 name: Publish App to CDN Store
 
 on:
-  # 1. 手动触发（可选指定单个 app，不填则自动扫描所有有版本更新的应用）
+  # 手动触发（可选指定单个 app，不填则自动扫描所有有版本更新的应用）
   workflow_dispatch:
     inputs:
       app_id:
@@ -14,15 +14,6 @@ on:
         required: false
         default: ''
         type: string
-
-  # 2. 推送触发：main 分支（限定 apps/** 变动）或 release/* Tag
-  push:
-    branches:
-      - main
-    tags:
-      - 'release/**' # 例如 release/yolo-detector-v1.0.1
-    paths:
-      - 'apps/**'
 
 jobs:
   publish:
@@ -205,6 +196,14 @@ jobs:
               res = subprocess.run(fetch_cmd)
               if res.returncode != 0:
                   print(f"::error::Failed to fetch assets for {app_id}")
+                  exit(1)
+
+              # 0.5 验证 Manifest 格式、中英双语国际化与发布质量
+              print(f"Validating manifest schema and localization for {app_id}...")
+              test_cmd = ["python3", "-m", "pytest", "apps/test_manifest_schema.py", "-k", app_id]
+              res = subprocess.run(test_cmd)
+              if res.returncode != 0:
+                  print(f"::error::Manifest validation test failed for {app_id}")
                   exit(1)
 
               # 1. 确定性打包

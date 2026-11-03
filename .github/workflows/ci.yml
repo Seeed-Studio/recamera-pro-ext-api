@@ -1,0 +1,33 @@
+name: CI & App Manifest Validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-apps:
+    name: Apps and Manifest Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install Dependencies
+        run: uv sync
+
+      - name: Run Apps and Manifest Tests
+        run: uv run pytest apps/

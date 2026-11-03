@@ -135,8 +135,8 @@
   "type": "self-hosted",
   "scene": "Interaction & Control",
   "scene_zh": "交互控制",
-  "description": "On-device MediaPipe gesture recognition on reCamera Pro: an SSD palm detector (192) finds hands, a rotated-ROI landmark model (224) fits 21 keypoints per hand, and the official gesture embedder + canned classifier heads (numpy-replicated weights) label 8 gestures (None / Closed_Fist / Open_Palm / Pointing_Up / Thumb_Down / Thumb_Up / Victory / ILoveYou) with handedness. End-to-end verified against the official MediaPipe Python task on the official test images.",
-  "description_zh": "reCamera Pro 设备端 MediaPipe 手势识别：SSD 手掌检测（192）找手，旋转 ROI 关键点模型（224）回归 21 个手部关键点，官方手势 embedder + 分类头（numpy 精确复刻权重）输出 8 类手势（None/Closed_Fist/Open_Palm/Pointing_Up/Thumb_Down/Thumb_Up/Victory/ILoveYou）与左右手。已在官方测试图上与官方 mediapipe 包端到端对齐验证。",
+  "description": "On-device MediaPipe hand gesture recognition pipeline. Uses an SSD palm detector (192x192) for hand localization, a rotated-ROI landmark regression model (224x224) for 21 3D hand keypoints, and a gesture embedding classifier to recognize 8 canonical gesture classes (None, Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou) with handedness classification.",
+  "description_zh": "基于设备端的 MediaPipe 手势识别应用。采用 SSD 手掌检测模型（192×192）定位手部区域，通过旋转 ROI 关键点模型（224×224）回归 21 个手部骨骼关键点，结合手势嵌入特征与分类器识别 8 种标准手势（握拳、掌心向前、单指向上、拇指向下、拇指向上、胜利 V 字、我爱你手势等）及左右手判定。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [

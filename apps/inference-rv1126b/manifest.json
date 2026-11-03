@@ -2,10 +2,10 @@
   "manifest_version": 2,
   "id": "inference-rv1126b",
   "name": "Inference RV1126B",
-  "name_zh": "Inference Workflows",
+  "name_zh": "工作流推理引擎",
   "version": "0.3.9",
   "type": "self-hosted",
-  "description": "Roboflow Workflows with native Builder, RKNN inference and RV1126B camera sources.",
+  "description": "Low-code visual inference workflow application based on Roboflow Workflows. Integrates a visual workflow builder, hardware-accelerated RKNN neural network execution, and live video stream ingestion from the RV1126B camera.",
   "icon": {
     "path": "icon.jpg",
     "media_type": "image/jpeg"
@@ -325,5 +325,9 @@
   "capabilities": [],
   "x-workflow-ui": {
     "version": 1
-  }
+  },
+  "scene": "Automation",
+  "scene_zh": "自动化",
+  "description_zh": "基于 Roboflow Workflows 的低代码视觉推理工作流应用。支持可视化流程编排器（Builder）、硬件加速的 RKNN 神经网络推理及 RV1126B 实时摄像机视频流输入。",
+  "image": "/appcenter/apps/inference-rv1126b.png"
 }

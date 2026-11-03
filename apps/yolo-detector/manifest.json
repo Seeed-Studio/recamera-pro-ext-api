@@ -117,7 +117,7 @@
     "media_type": "image/png"
   },
   "type": "self-hosted",
-  "description": "General-purpose object detection over the live camera. Runs YOLOv8n (COCO-80) on the RV1126B NPU and streams structured detections for the /appcenter overlay.",
+  "description": "Real-time general-purpose object detection application from live camera video. Runs YOLOv8n (supporting 80 COCO object classes) on the RV1126B NPU, streaming structured bounding boxes, class labels, and confidence scores to the OSD overlay and downstream systems.",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
@@ -386,5 +386,9 @@
       "value_template": "{{ 'ON' if value_json.class_counts.person is defined and value_json.class_counts.person > 0 else 'OFF' }}",
       "device_class": "occupancy"
     }
-  ]
+  ],
+  "name_zh": "通用目标检测",
+  "scene": "Automation",
+  "scene_zh": "自动化",
+  "description_zh": "基于实时摄像机视频流的通用目标检测应用。在 RV1126B NPU 上运行 YOLOv8n 模型（支持 COCO 80 类常见目标），向 OSD 叠加层与下层系统实时输出结构化目标边界框、类别标签及置信度得分。"
 }

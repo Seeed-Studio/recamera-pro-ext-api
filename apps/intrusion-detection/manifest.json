@@ -124,8 +124,8 @@
   "type": "self-hosted",
   "scene": "Security",
   "scene_zh": "安防",
-  "description": "Hub-mode person detector for edge-security-kit. Runs YOLOv8n int8 on the RV1126B NPU, tracks every person with a stable track_id, and publishes sensecraft.detection/1 to MQTT. Zone, loitering and line-cross rules are judged off-device by the hub; this app judges nothing locally.",
-  "description_zh": "edge-security-kit 的 hub 模式人体探测器。在 RV1126B NPU 上运行 YOLOv8n int8，为每个人维持稳定 track_id，按 sensecraft.detection/1 契约发布到 MQTT。区域、徘徊、越线规则由 hub 在设备外判定，本应用不在本地判规则。",
+  "description": "Edge security perimeter person detection and tracking application. Runs YOLOv8n INT8 on the RV1126B NPU to detect persons, assigns persistent track identifiers across frames, and publishes detection telemetry over MQTT according to the sensecraft.detection/1 schema for centralized edge hub rule evaluation.",
+  "description_zh": "边缘安防周边人体检测与跟踪应用。在 RV1126B NPU 上运行 YOLOv8n INT8 模型实现人体检测并维护跨帧跟踪标识，按照 sensecraft.detection/1 规范向 MQTT 主题发布检测元数据，供边缘控制中心执行区域入侵、徘徊及越线等业务规则判定。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "package": {

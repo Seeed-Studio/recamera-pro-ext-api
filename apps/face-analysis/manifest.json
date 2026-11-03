@@ -142,8 +142,8 @@
   "type": "self-hosted",
   "scene": "Retail & Audience",
   "scene_zh": "零售客群",
-  "description": "On-device audience analytics with a three-stage face cascade: a YOLOv8n-face detector finds every face, then per face a FairFace classifier (age band / gender / race) and an 8-class emotion model run on the cropped 224x224 ROI. Emits per-face attribute events plus a simple time-windowed demographic aggregation (gender / age / race / emotion histograms). Privacy-first: faces can be flagged for blurring and no image leaves the device. Reuses the reCamera Pro cascade-pipeline pattern first shipped by facemesh-reader.",
-  "description_zh": "设备端客群分析，采用三级人脸级联：YOLOv8n-face 检测每一张脸，随后对每张脸在裁剪的 224x224 ROI 上运行 FairFace 分类器（年龄段/性别/种族）与 8 类情绪模型。输出每张脸的属性事件，以及简单的分时段客群聚合（性别/年龄/种族/情绪直方图）。隐私优先：可标记人脸进行模糊，且图像不出设备。复用 facemesh-reader 首发的 reCamera Pro 级联流水线范式。",
+  "description": "On-device audience demographics and emotion analysis using a three-stage neural cascade. Detects faces with YOLOv8n-face, then executes a FairFace classifier (age bracket, gender, race) and an 8-class emotion model on cropped 224x224 regions of interest. Emits per-face attribute events and time-windowed demographic aggregations (gender, age, race, and emotion histograms) with support for on-device face blurring and strictly local data processing.",
+  "description_zh": "基于设备端三级神经网络级联的客群分析应用。采用 YOLOv8n-face 检测人脸，并在裁剪的 224×224 区域分别运行 FairFace 属性分类器（年龄段、性别、种族）与 8 类情绪识别模型。输出单人脸结构化属性事件与分时段统计直方图，支持端侧人脸模糊处理且原始图像不出设备。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [

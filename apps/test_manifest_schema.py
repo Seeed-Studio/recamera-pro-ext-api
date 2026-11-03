@@ -54,10 +54,16 @@ class ManifestSchemaShapeTests(unittest.TestCase):
             app_id = os.path.basename(app_dir)
             manifest = _load(path)
             with self.subTest(app=app_id):
-                self.assertEqual(manifest.get("icon"), {
-                    "path": "icon.png",
-                    "media_type": "image/png",
-                })
+                if app_id == "inference-rv1126b":
+                    self.assertEqual(manifest.get("icon"), {
+                        "path": "icon.jpg",
+                        "media_type": "image/jpeg",
+                    })
+                else:
+                    self.assertEqual(manifest.get("icon"), {
+                        "path": "icon.png",
+                        "media_type": "image/png",
+                    })
                 # Keep the catalog thumbnail for old catalog clients while the
                 # declared package asset is authoritative after installation.
                 self.assertEqual(
@@ -69,8 +75,14 @@ class ManifestSchemaShapeTests(unittest.TestCase):
                 self.assertGreater(size, len(_PNG_SIGNATURE))
                 self.assertLessEqual(size, _MAX_ICON_BYTES)
                 with open(icon_path, "rb") as icon_file:
-                    self.assertEqual(icon_file.read(len(_PNG_SIGNATURE)),
-                                     _PNG_SIGNATURE)
+                    header = icon_file.read(len(_PNG_SIGNATURE))
+                    if app_id == "inference-rv1126b":
+                        self.assertTrue(
+                            manifest_contract.icon_bytes_match_media_type(
+                                header, "image/jpeg"),
+                            "JPEG signature mismatch")
+                    else:
+                        self.assertEqual(header, _PNG_SIGNATURE)
 
     def test_config_schema_is_grouped(self):
         for path in _MANIFESTS:
@@ -130,6 +142,9 @@ _DELIBERATE_NUMBER_KEYS = {
     "qrcode-reader": {"recording_cooldown_sec"},
     "retail-vision": {"dwell_assist", "dwell_speed", "window_duration",
                       "recording_cooldown_sec"},
+    "inference-rv1126b": {"workflow_fps", "max_fps"},
+    "inspection-assembly": {"max_fps"},
+    "waste-sorting": {"max_fps"},
 }
 
 
@@ -281,6 +296,78 @@ class FlatCompatBranchTests(unittest.TestCase):
                "config_schema": {"conf": {"type": "number", "default": 0.3}}}
         self.assertEqual(kitconfig.schema_items(man)["conf"]["default"], 0.3)
         self.assertEqual(kitconfig.flatten_schema(man), {"conf": 0.3})
+
+
+class ManifestLocalizationAndMetadataTests(unittest.TestCase):
+    """Guarantees every in-repo official app has complete metadata and localization."""
+
+    _REQUIRED_TEXT_FIELDS = (
+        "name", "name_zh", "description", "description_zh", "scene", "scene_zh"
+    )
+
+    def test_in_repo_apps_have_complete_name_description_and_scene(self):
+        self.assertGreaterEqual(len(_MANIFESTS), 18, "Expected at least 18 official manifests")
+        for path in _MANIFESTS:
+            app_id = os.path.basename(os.path.dirname(path))
+            manifest = _load(path)
+            for field in self._REQUIRED_TEXT_FIELDS:
+                with self.subTest(app=app_id, field=field):
+                    value = manifest.get(field)
+                    self.assertIsInstance(
+                        value, str,
+                        f"{app_id} missing or non-string {field!r} (got {value!r})"
+                    )
+                    self.assertTrue(
+                        bool(value.strip()),
+                        f"{app_id} has empty or whitespace-only {field!r}"
+                    )
+
+    def test_config_schema_option_labels_have_matching_option_labels_zh(self):
+        for path in _MANIFESTS:
+            app_id = os.path.basename(os.path.dirname(path))
+            manifest = _load(path)
+            cs = manifest.get("config_schema") or {}
+            for g in cs.get("groups", []):
+                for item in g.get("items", []):
+                    key = item.get("key")
+                    if "option_labels" in item:
+                        with self.subTest(app=app_id, key=key):
+                            ol = item["option_labels"]
+                            self.assertIsInstance(
+                                ol, list,
+                                f"{app_id}.{key} option_labels must be a list"
+                            )
+                            self.assertIn(
+                                "option_labels_zh", item,
+                                f"{app_id}.{key} declares option_labels but missing option_labels_zh"
+                            )
+                            ol_zh = item["option_labels_zh"]
+                            self.assertIsInstance(
+                                ol_zh, list,
+                                f"{app_id}.{key} option_labels_zh must be a list"
+                            )
+                            self.assertEqual(
+                                len(ol), len(ol_zh),
+                                f"{app_id}.{key} option_labels ({len(ol)}) and "
+                                f"option_labels_zh ({len(ol_zh)}) must have matching length"
+                            )
+                            for idx, (label, label_zh) in enumerate(zip(ol, ol_zh)):
+                                self.assertIsInstance(
+                                    label, str,
+                                    f"{app_id}.{key}.option_labels[{idx}] must be str"
+                                )
+                                self.assertIsInstance(
+                                    label_zh, str,
+                                    f"{app_id}.{key}.option_labels_zh[{idx}] must be str"
+                                )
+                                self.assertTrue(
+                                    bool(label.strip()),
+                                    f"{app_id}.{key}.option_labels[{idx}] cannot be empty"
+                                )
+                                self.assertTrue(
+                                    bool(label_zh.strip()),
+                                    f"{app_id}.{key}.option_labels_zh[{idx}] cannot be empty"
+                                )
 
 
 if __name__ == "__main__":

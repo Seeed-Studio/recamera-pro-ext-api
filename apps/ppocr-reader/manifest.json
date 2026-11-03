@@ -142,8 +142,8 @@
   "type": "self-hosted",
   "scene": "OCR & Text",
   "scene_zh": "文字识别",
-  "description": "On-device OCR text reader: a DBNet detector (PP-OCRv3, 480x480) finds every text region, each region is perspective-cropped to an upright 48x320 strip, then a CTC recognizer (SVTR-LCNet, 6625-class Chinese+English dictionary) reads the characters. Emits one event per text box with the recognized string, its quad and confidence. Everything runs on-device; no image or text leaves the camera. Port of the first-gen SSCMA ppocr-reader C++ solution to the reCamera Pro Python kit.",
-  "description_zh": "设备端 OCR 文字识别：DBNet 检测器（PP-OCRv3，480x480）找出每个文本区域，逐区域透视裁剪为竖直的 48x320 文本条，再由 CTC 识别器（SVTR-LCNet，6625 类中英文字典）解码字符。每个文本框输出一条事件，包含识别文本、四点框与置信度。全流程设备端运行，图像与文本均不出设备。一代 SSCMA ppocr-reader C++ 方案到 reCamera Pro Python kit 的移植。",
+  "description": "On-device optical character recognition pipeline based on PP-OCRv3. Detects text bounding boxes using a DBNet model (480x480), aligns each cropped region through perspective transformation to a normalized strip, and decodes characters using an SVTR-LCNet recognizer with a 6625-character Chinese and English dictionary. Emits structured quadrilateral bounding boxes, recognized text strings, and confidence scores locally.",
+  "description_zh": "基于 PP-OCRv3 模型的设备端文字检测与识别应用。采用 DBNet 检测器（480×480）定位文本行区域，经透视变换校正后通过 SVTR-LCNet 识别器（支持 6625 类中英文字符集）完成字符序列解码。输出包含文本四边形顶点坐标、识别结果及置信度的结构化事件，所有数据均在端侧本地处理。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [

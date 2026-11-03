@@ -120,8 +120,8 @@
   "type": "self-hosted",
   "scene": "Health & Wellness",
   "scene_zh": "健康健身",
-  "description": "Counts your reps and calls out sloppy form, on-device, using YOLO11n-Pose and joint-angle hysteresis state machines. Pick squats, push-ups or hammer curls, set your reps and sets, and the camera does the rest -- no phone, no wearable, no video leaving the device. Streams keypoints and live rep counts for the /appcenter overlay.",
-  "description_zh": "使用 YOLO11n-Pose 与关节角迟滞状态机在设备本地数你的组数并提示动作不到位。选择深蹲、俯卧撑或哑铃弯举，设定次数与组数，剩下的交给摄像头——不用手机、不戴手环，画面也不出设备。向 /appcenter 叠加层输出关键点与实时计数。",
+  "description": "On-device fitness exercise monitoring and repetition counting using YOLO11n-Pose skeletal estimation and joint-angle hysteresis state machines. Analyzes movement phases and posture angles for squats, push-ups, and hammer curls, providing real-time repetition counts, set tracking, and range-of-motion feedback on the video overlay without transmitting video externally.",
+  "description_zh": "基于设备端人体姿态估计的健身动作分析与计数应用。采用 YOLO11n-Pose 提取骨骼关键点，结合关节角度迟滞状态机实现深蹲、俯卧撑及哑铃弯举的动作阶段识别、动作完成度评估与实时计数，将骨骼关键点及训练指标输出至 OSD 叠加层，数据均在本地处理。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [

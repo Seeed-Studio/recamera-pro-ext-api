@@ -117,8 +117,8 @@
   "type": "self-hosted",
   "scene": "Automation",
   "scene_zh": "自动化",
-  "description": "Monocular relative depth over the live camera. Runs MiDaS v2.1 small (256x256, FP16) on the RV1126B NPU and publishes frame depth statistics, a near/mid/far zone grid and the nearest zone in frame. Depth is relative and unitless -- nothing here is a distance in metres.",
-  "description_zh": "实时单目相对深度。在 RV1126B NPU 上运行 MiDaS v2.1 small（256×256 FP16），输出整帧深度统计、近/中/远网格分区与画面中最近的分区。深度为相对值、无单位，不代表实际距离。",
+  "description": "Monocular relative depth estimation from real-time camera video. Executes MiDaS v2.1 small (256x256, FP16) on the RV1126B NPU to compute frame depth statistics, a near/mid/far spatial zone grid, and the nearest zone identifier. Output values represent dimensionless relative depth rather than physical metric distances.",
+  "description_zh": "基于实时摄像机视频流的单目相对深度估计应用。在 RV1126B NPU 上运行 MiDaS v2.1 small 模型（256×256，FP16），输出全图深度统计、近/中/远空间网格分区以及最近分区标识。输出数据为无量纲相对深度值，不代表物理度量距离。",
   "author": "Seeed reCamera Pro",
   "entry": "app.py",
   "capabilities": [
