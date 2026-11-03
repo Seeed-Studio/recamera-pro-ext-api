@@ -3,7 +3,7 @@
   "id": "inference-rv1126b",
   "name": "Inference RV1126B",
   "name_zh": "工作流推理引擎",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "type": "self-hosted",
   "description": "Low-code visual inference workflow application based on Roboflow Workflows. Integrates a visual workflow builder, hardware-accelerated RKNN neural network execution, and live video stream ingestion from the RV1126B camera.",
   "icon": {

@@ -110,7 +110,7 @@
   },
   "id": "yolo-detector",
   "name": "YOLO Detector",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "image": "/appcenter/apps/yolo-detector.png",
   "icon": {
     "path": "icon.png",
