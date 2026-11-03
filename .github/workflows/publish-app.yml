@@ -63,6 +63,12 @@ jobs:
           chmod 600 ~/.recamera_release_key/release_priv.pem
 
           cat <<EOF > ~/.ossutilconfig
+          [Credentials]
+          language = EN
+          endpoint = oss-us-east-1.aliyuncs.com
+          accessKeyID = $OSS_AK
+          accessKeySecret = $OSS_SK
+
           [default]
           accessKeyId = $OSS_AK
           accessKeySecret = $OSS_SK
