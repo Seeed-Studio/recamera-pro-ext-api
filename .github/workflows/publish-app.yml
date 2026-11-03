@@ -25,10 +25,17 @@ jobs:
         with:
           fetch-depth: 2 # 保留上一次 commit 以便比较 git diff
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.11'
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install Python Dependencies
+        run: uv sync
 
       - name: Install System Dependencies & ossutil
         run: |
@@ -80,7 +87,7 @@ jobs:
           echo "Downloading package: $PKG_URL -> $TARGET_FILE"
           curl -fSL "$PKG_URL" -o "$TARGET_FILE"
           echo "Verifying, vendor-signing and publishing to CDN store..."
-          python3 market/packaging/publish_app.py "$TARGET_FILE" --sign --yes
+          uv run python3 market/packaging/publish_app.py "$TARGET_FILE" --sign --yes
           echo "✓ Successfully verified, signed and published: $PKG_NAME"
 
       - name: Detect Apps to Publish
@@ -198,7 +205,7 @@ jobs:
               print(f"=======================================================")
               
               # 0. 自动拉取缺失模型/资源文件 (若已存在或已缓存则秒级跳过)
-              fetch_cmd = ["python3", "market/packaging/fetch_assets.py", f"apps/{app_id}"]
+              fetch_cmd = ["uv", "run", "python3", "market/packaging/fetch_assets.py", f"apps/{app_id}"]
               res = subprocess.run(fetch_cmd)
               if res.returncode != 0:
                   print(f"::error::Failed to fetch assets for {app_id}")
@@ -206,14 +213,14 @@ jobs:
 
               # 0.5 验证 Manifest 格式、中英双语国际化与发布质量
               print(f"Validating manifest schema and localization for {app_id}...")
-              test_cmd = ["python3", "-m", "pytest", "apps/test_manifest_schema.py", "-k", app_id]
+              test_cmd = ["uv", "run", "pytest", "apps/test_manifest_schema.py", "-k", app_id]
               res = subprocess.run(test_cmd)
               if res.returncode != 0:
                   print(f"::error::Manifest validation test failed for {app_id}")
                   exit(1)
 
               # 1. 确定性打包
-              build_cmd = ["python3", "market/packaging/build.py", f"apps/{app_id}", "--out", "market/packaging/dist/"]
+              build_cmd = ["uv", "run", "python3", "market/packaging/build.py", f"apps/{app_id}", "--out", "market/packaging/dist/"]
               res = subprocess.run(build_cmd)
               if res.returncode != 0:
                   print(f"::error::Build failed for {app_id}")
@@ -227,7 +234,7 @@ jobs:
               pkg_file = pkgs[0]
 
               # 3. 签名并推送到应用商店
-              pub_cmd = ["python3", "market/packaging/publish_app.py", pkg_file, "--sign", "--yes"]
+              pub_cmd = ["uv", "run", "python3", "market/packaging/publish_app.py", pkg_file, "--sign", "--yes"]
               res = subprocess.run(pub_cmd)
               if res.returncode != 0:
                   print(f"::error::Publish failed for {app_id}")
