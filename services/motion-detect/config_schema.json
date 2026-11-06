@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "comment": "motion-detect 参数定义的唯一事实来源。daemon（motion_daemon.py 的 CONFIG_SPEC/DEFAULTS/RESTART_KEYS）与 appmgr（motiondetect.py 的 CONFIG_SCHEMA，驱动 App Center 配置页）都从本文件派生/加载。改参数只改这里。groups 出现在 App Center 配置页；internal 仅 daemon 使用，不进 UI。",
+  "groups": [
+    {"key": "detection", "title": "Detection", "title_zh": "检测判定",
+     "items": [
+         {"key": "sq_diff_threshold", "type": "number", "apply": "live",
+          "title": "Squared-difference threshold",
+          "title_zh": "平方差阈值（≈灰度差 20 的平方）",
+          "min": 1, "max": 65025, "step": 50, "default": 400},
+         {"key": "min_changed_ratio", "type": "number", "apply": "live",
+          "title": "Minimum changed-pixel ratio",
+          "title_zh": "运动判定最小变化像素占比",
+          "min": 0, "max": 0.5, "step": 0.001, "default": 0.005},
+         {"key": "motion_hold_ms", "type": "integer", "apply": "live",
+          "title": "Motion hold time (ms)",
+          "title_zh": "运动保持时间（毫秒，防抖）",
+          "min": 0, "max": 600000, "step": 100, "default": 3000}
+     ]},
+    {"key": "baseline", "title": "Baseline comparison",
+     "title_zh": "基准对比",
+     "items": [
+         {"key": "baseline_frames", "type": "integer", "apply": "live",
+          "title": "Baseline window length (frames)",
+          "title_zh": "基准画面长度（帧）",
+          "min": 1, "max": 240, "step": 1, "default": 5},
+         {"key": "current_frames", "type": "integer", "apply": "live",
+          "title": "Current window length (frames)",
+          "title_zh": "当前画面长度（帧）",
+          "min": 1, "max": 120, "step": 1, "default": 2},
+         {"key": "baseline_gap_ms", "type": "integer", "apply": "live",
+          "title": "Baseline-to-current gap (ms)",
+          "title_zh": "基准与当前画面的时间间隔（毫秒）",
+          "min": 0, "max": 600000, "step": 100, "default": 1000}
+     ]},
+    {"key": "sampling", "title": "Sampling and reporting",
+     "title_zh": "采样与上报",
+     "items": [
+         {"key": "sample_fps", "type": "number", "apply": "restart",
+          "title": "Sampling rate (fps)",
+          "title_zh": "分析采样率（帧/秒，改后自动重启服务）",
+          "min": 0.2, "max": 30, "step": 0.2, "default": 5},
+         {"key": "analysis_width", "type": "integer", "apply": "live",
+          "title": "Analysis width (px)",
+          "title_zh": "分析分辨率宽度（像素）",
+          "min": 32, "max": 640, "step": 16, "default": 160},
+         {"key": "heartbeat_sec", "type": "integer", "apply": "live",
+          "title": "Heartbeat interval (s)",
+          "title_zh": "心跳间隔（秒）",
+          "min": 5, "max": 3600, "step": 5, "default": 30}
+     ]},
+    {"key": "uplink", "title": "Uplink", "title_zh": "上报通道",
+     "items": [
+         {"key": "mqtt_host", "type": "string", "apply": "live",
+          "title": "MQTT broker host (HA)",
+          "title_zh": "MQTT broker 地址（接 HA，空=关闭）",
+          "default": ""},
+         {"key": "mqtt_port", "type": "integer", "apply": "live",
+          "title": "MQTT broker port", "title_zh": "MQTT 端口",
+          "min": 1, "max": 65535, "step": 1, "default": 1883},
+         {"key": "mqtt_user", "type": "string", "apply": "live",
+          "title": "MQTT username", "title_zh": "MQTT 用户名（可空）",
+          "default": ""},
+         {"key": "mqtt_pass", "type": "password", "apply": "live",
+          "title": "MQTT password", "title_zh": "MQTT 密码（可空）",
+          "default": ""}
+     ]}
+  ],
+  "internal": [
+    {"key": "http_host", "type": "string", "default": "0.0.0.0",
+     "note": "参数接口监听地址"},
+    {"key": "http_port", "type": "integer", "min": 0, "max": 65535,
+     "default": 8099, "note": "0 = 关闭参数接口"},
+    {"key": "http_token", "type": "password", "default": "",
+     "note": "参数接口 Bearer 令牌，建议生产环境设置"}
+  ]
+}

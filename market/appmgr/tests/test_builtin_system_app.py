@@ -107,7 +107,7 @@ def test_offline_builtin_does_not_hide_installed_apps_or_take_lifecycle_lock(mon
     monkeypatch.setattr(server, "busy_gate", lambda **kw: pytest.fail("list acquired mutation gate"))
     for _ in range(2):
         listing = server.do_v1_apps()
-        assert [item["id"] for item in listing["apps"]] == ["builtin", "acousticslab", "cpu-app"]
+        assert [item["id"] for item in listing["apps"]] == ["builtin", "acousticslab", "motion-detect", "cpu-app"]
         assert listing["running_apps"] == ["cpu-app"]
         assert listing["apps"][0]["status"] == "unknown"
         assert listing["apps"][0]["builtin_inference"]["available"] is False

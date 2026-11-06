@@ -101,7 +101,7 @@ appmgr 内置 forwarder 把本服务状态桥接进 Result Hub（`trust: in-proc
 | 键 | 类型 | 范围 | 默认 | 生效 | 含义 |
 |---|---|---|---|---|---|
 | `sq_diff_threshold` | float | 1~65025 | 400 | 热 | 平方差阈值（≈灰度差 20 的平方） |
-| `min_changed_ratio` | float | 0~1 | 0.005 | 热 | 运动判定最小变化像素占比 |
+| `min_changed_ratio` | float | 0~0.5 | 0.005 | 热 | 运动判定最小变化像素占比 |
 | `motion_hold_ms` | int | 0~600000 | 3000 | 热 | 运动消失后的保持时间（防抖） |
 | `baseline_frames` | int | 1~240 | 5 | 热 | 基准画面长度（帧） |
 | `current_frames` | int | 1~120 | 2 | 热 | 当前画面长度（帧） |
@@ -110,6 +110,9 @@ appmgr 内置 forwarder 把本服务状态桥接进 Result Hub（`trust: in-proc
 | `analysis_width` | int | 32~640 | 160 | 热* | 分析分辨率宽度（*重建检测缓冲） |
 | `heartbeat_sec` | int | 5~3600 | 30 | 热 | 心跳间隔（秒） |
 | `http_host` / `http_port` / `http_token` | str / int / str | 0~65535 | 0.0.0.0 / 8099 / 空 | **重启** | 本接口自身；`http_port=0` 关闭接口 |
+
+> 参数定义的唯一事实来源是 `config_schema.json`（本接口与 App Center 配置页
+> 共用同一份）；本表只是便于阅读的摘要，如有出入以 schema 为准。
 
 ### 1.6 错误码
 

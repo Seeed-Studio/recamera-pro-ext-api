@@ -1055,6 +1055,8 @@ def _icon_info_cached(app_id: str, manifest: dict = None):
     with a symlink/special file can never reuse an earlier cache entry.  Full
     hashing is skipped only for a settled, identical inode/mtime/size tuple.
     """
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.icon_info()       # 系统应用：固件内置固定路径
     if not paths.valid_app_id(app_id):
         return None
     manifest = manifest if isinstance(manifest, dict) else _read_manifest(app_id)
@@ -1137,6 +1139,8 @@ def do_icon(app_id: str):
     """
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.icon_bytes()      # 系统应用：固件内置图标
     manifest = _read_manifest(app_id)
     info = _icon_info_cached(app_id, manifest)
     if info is None:
@@ -3177,6 +3181,7 @@ def _motiondetect_app_view(operations) -> dict:
         "name_zh": descriptor["name_zh"], "version": descriptor["version"],
         "manifest": descriptor, "description": descriptor["description"],
         "description_zh": descriptor["description_zh"],
+        "icon_url": _icon_url(motiondetect.MD_ID, descriptor),
         "source": {"kind": "system", "id": motiondetect.MD_ID},
         "status": status, "running": running, "pid": detail.get("pid"),
         "instance": None,

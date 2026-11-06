@@ -37,54 +37,15 @@ from recamera_ext import FrameConfig, FrameSource
 from motion_core import MotionCore, retention_seconds
 from http_control import ControlServer
 from ha_mqtt import HaMqttBridge
+from config_schema import coerce_value, derive_tables, load_schema
 
-# config.json / HTTP POST 中允许出现的键（类型/范围校验，非法值拒绝并返回）
-CONFIG_SPEC = {
-    # 判定
-    "sq_diff_threshold":  ("float", 1.0, 65025.0),
-    "min_changed_ratio":  ("float", 0.0, 1.0),
-    "motion_hold_ms":     ("int",   0,   600000),
-    # 基准/当前窗口
-    "baseline_frames":    ("int",   1,   240),
-    "current_frames":     ("int",   1,   120),
-    "baseline_gap_ms":    ("int",   0,   600000),
-    # 采样
-    "sample_fps":         ("float", 0.2, 30.0),
-    "analysis_width":     ("int",   32,  640),
-    # 上报
-    "heartbeat_sec":      ("int",   5,   3600),
-    # 参数接口
-    "http_host":          ("str",   None, None),
-    "http_port":          ("int",   0,   65535),   # 0 = 关闭参数接口
-    "http_token":         ("str",   None, None),
-    # HA / MQTT 上报（kit MqttSink，空 host = 关闭）
-    "mqtt_host":          ("str",   None, None),
-    "mqtt_port":          ("int",   1,   65535),
-    "mqtt_user":          ("str",   None, None),
-    "mqtt_pass":          ("str",   None, None),
-}
-
-# 改了之后需要重启进程才真正生效的参数（HTTP 返回里会标注 restart_required）
-RESTART_KEYS = {"sample_fps"}        # fps_divisor 只能在打开帧源时设置
-
-DEFAULTS = {
-    "sq_diff_threshold": 400.0,     # 平方差阈值（≈灰度差 20 的平方）
-    "min_changed_ratio": 0.005,     # 运动判定最小变化像素占比
-    "motion_hold_ms": 3000,         # 运动消失后的保持时间（防抖）
-    "baseline_frames": 5,           # 基准画面长度（帧）
-    "current_frames": 2,            # 当前画面长度（帧）
-    "baseline_gap_ms": 1000,        # 基准与当前画面的时间间隔
-    "sample_fps": 5.0,              # 分析采样率
-    "analysis_width": 160,          # 分析分辨率宽度
-    "heartbeat_sec": 30,            # 心跳间隔（秒）
-    "http_host": "0.0.0.0",
-    "http_port": 8099,
-    "http_token": "",               # 建议生产环境设置
-    "mqtt_host": "",                # 例：192.168.1.10（HA 的 MQTT broker）
-    "mqtt_port": 1883,
-    "mqtt_user": "",
-    "mqtt_pass": "",
-}
+# 参数定义的唯一事实来源是同目录 config_schema.json（App Center 配置页与其
+# 共用同一份文件，改参数只改它）。这里派生 daemon 运行时校验表：
+#   CONFIG_SPEC   key -> (kind, lo, hi)：config.json / HTTP POST 逐值校验
+#   DEFAULTS      key -> 默认值（schema default 经同一规则转换）
+#   RESTART_KEYS  改后需重启进程才真正生效的键（apply=restart，如 sample_fps：
+#                 fps_divisor 只能在打开帧源时设置）
+CONFIG_SPEC, DEFAULTS, RESTART_KEYS = derive_tables(load_schema())
 
 # 设备主码流帧率（只用于把 sample_fps 换算成 fps_divisor；--camera-fps 可覆盖）
 CAMERA_FPS = 30.0
@@ -96,15 +57,7 @@ def log(msg):
 
 def _coerce(spec, key, val):
     """按 CONFIG_SPEC 校验并转换单个值；非法返回 None。"""
-    kind, lo, hi = spec
-    try:
-        val = int(val) if kind == "int" else \
-              float(val) if kind == "float" else str(val)
-    except (TypeError, ValueError):
-        return None
-    if kind in ("int", "float") and not (lo <= val <= hi):
-        return None
-    return val
+    return coerce_value(spec, val)
 
 
 def load_config(path):
