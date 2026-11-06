@@ -706,9 +706,11 @@ def _system_results(payload: dict, coordinate_space: str) -> Tuple[List[dict], s
 # Firmware-owned system sources authorized on the strict system ingress (and
 # on the in-process submit_system path).  ``builtin`` is the rkipc inference
 # pipeline published by recamera_notify; ``acousticslab`` is the acousticslabd
-# adapter, which runs inside appmgr itself.  Both are framework-trusted; an
-# identity resolver must never derive them from an untrusted peer claim.
-SYSTEM_SOURCE_IDS = frozenset(("builtin", "acousticslab"))
+# adapter, which runs inside appmgr itself; ``motion-detect`` is the
+# motion-detectd CPU motion-detection service, also adapted inside appmgr.
+# All are framework-trusted; an identity resolver must never derive them from
+# an untrusted peer claim.
+SYSTEM_SOURCE_IDS = frozenset(("builtin", "acousticslab", "motion-detect"))
 
 
 def normalize_system_payload(payload: dict, identity: dict,
@@ -771,6 +773,7 @@ class ResultViewFormatter:
         "segmentation": ("sSegmentation", "segmentation"),
         "tracking": ("sTracking", "tracking"),
         "keypoints": ("sKeypoints", "sKeypoint", "keypoints"),
+        "motion": ("sMotion", "motion"),
         "default": ("sDefault", "default", "template"),
     }
 

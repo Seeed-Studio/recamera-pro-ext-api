@@ -79,7 +79,7 @@ from . import workflow_models
 from . import (acousticslab, assets, builtin, config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
-               memory_guard, memory_control,
+               memory_guard, memory_control, motiondetect,
                mqtt as mqttcfg, operations as appoperations, paths,
                recording as apprecording, recording_migration,
                result_hub as canonical_results,
@@ -98,6 +98,7 @@ _result_hub_instance = None
 _visualization_bridge_instance = None
 _recording_bridge_instance = None
 _acousticslab_forwarder = None
+_motiondetect_forwarder = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _operation_manager_lock = threading.Lock()
@@ -1276,10 +1277,11 @@ def do_list() -> dict:
             # extraction) contain a dot -> never a valid app id -> not listed.
             if not os.path.isdir(d) or not paths.valid_app_id(name):
                 continue
-            if name in ("kit", builtin.BUILTIN_ID, acousticslab.AL_ID):
-                # ``kit`` is the shared runtime; ``builtin``/``acousticslab``
-                # are reserved firmware system identities. Neither is an
-                # installed app card.
+            if name in ("kit", builtin.BUILTIN_ID, acousticslab.AL_ID,
+                        motiondetect.MD_ID):
+                # ``kit`` is the shared runtime; ``builtin``/``acousticslab``/
+                # ``motion-detect`` are reserved firmware system identities.
+                # None is an installed app card.
                 continue
             man = _read_manifest(name)
             if man is None:
@@ -2027,7 +2029,8 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     Uninstalling an unknown app is a hard ValueError (not a crash); the running /
     active handling is idempotent so double-uninstall is safe.
     """
-    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
+                  motiondetect.MD_ID):
         raise ValueError("a firmware system application cannot be uninstalled")
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
@@ -2234,6 +2237,12 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 _acousticslab_invalidate()
             _audit("start", id=acousticslab.AL_ID, result=result)
             return {"id": acousticslab.AL_ID, "started": True, "detail": result}
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            result = motiondetect.start()
+            _audit("start", id=motiondetect.MD_ID, result=result)
+            return {"id": motiondetect.MD_ID, "started": True,
+                    "detail": result}
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2271,6 +2280,12 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 _acousticslab_invalidate()
             _audit("restart", id=acousticslab.AL_ID, restarted=result.get("restarted"))
             return {"id": acousticslab.AL_ID, **result}
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            result = motiondetect.restart()
+            _audit("restart", id=motiondetect.MD_ID,
+                   restarted=result.get("restarted"))
+            return {"id": motiondetect.MD_ID, **result}
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2434,6 +2449,13 @@ def do_activate(app_id: str) -> dict:
 def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
     with busy_gate(wait_timeout=_busy_timeout):
         target = app_id or state.get_active()
+        if target == motiondetect.MD_ID:
+            try:
+                res = motiondetect.stop()
+            finally:
+                pass
+            _audit("stop", id=motiondetect.MD_ID, result=res)
+            return {"stopped": motiondetect.MD_ID, "detail": res}
         if target == acousticslab.AL_ID:
             try:
                 res = acousticslab.stop()
@@ -2481,6 +2503,8 @@ def do_get_config(app_id: str) -> dict:
         return builtin.get_config()          # driver-backed, app-isomorphic shape
     if app_id == acousticslab.AL_ID:
         raise ValueError("acousticslab is configured from its own console")
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.get_config()     # system service, app-isomorphic shape
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2590,6 +2614,12 @@ def do_set_config(app_id: str, incoming: dict, *,
                   _busy_timeout: float = 0.0) -> dict:
     if app_id == acousticslab.AL_ID:
         raise ValueError("acousticslab is configured from its own console")
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            res = motiondetect.set_config(incoming)
+        _audit("config", id=motiondetect.MD_ID, keys=sorted(incoming.keys()),
+               applied=res.get("applied"), restarted=res.get("restarted"))
+        return res
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -3123,11 +3153,59 @@ def _acousticslab_app_view(operations) -> dict:
     }
 
 
+def _motiondetect_app_view(operations) -> dict:
+    """Third system-owned v1 app: the motion-detectd firmware service.
+
+    Like acousticslab it is NOT part of the single-active/NPU world: the
+    CPU-only detection service runs orthogonally to vision apps and the
+    built-in AI.  Unlike acousticslab it IS configured through the platform
+    config API (schema in motiondetect.CONFIG_SCHEMA).
+    """
+    detail = motiondetect.snapshot()
+    observed = detail["state"]
+    status = "failed" if observed == "unknown" else observed
+    operation = operations.active_for(motiondetect.MD_ID)
+    if operation:
+        status = "stopping" if operation["type"] == "stop" else "starting"
+    enabled = detail["enabled"]
+    running = observed == "running"
+    mutable = not operation and observed in ("running", "stopped")
+    descriptor = motiondetect.manifest()
+    return {
+        "id": motiondetect.MD_ID, "type": "system", "system": True,
+        "installed": True, "name": descriptor["name"],
+        "name_zh": descriptor["name_zh"], "version": descriptor["version"],
+        "manifest": descriptor, "description": descriptor["description"],
+        "description_zh": descriptor["description_zh"],
+        "source": {"kind": "system", "id": motiondetect.MD_ID},
+        "status": status, "running": running, "pid": detail.get("pid"),
+        "instance": None,
+        "actions": {
+            "start": bool(mutable and not running),
+            "stop": bool(mutable and (running or enabled)),
+            "restart": bool(mutable and running),
+            "configure": True, "uninstall": False,
+        },
+        "capabilities": ["system-results"],
+        "runtime": {
+            "status": status,
+            "desired_state": "running" if enabled else "stopped",
+            "observed_state": observed, "pid": detail.get("pid"),
+            "reason": None,
+        },
+        "reason": None,
+        "error": None if running else (None if observed == "stopped"
+                                       else "service unavailable"),
+        "resource_conflicts": [],
+    }
+
+
 def do_v1_apps() -> dict:
     """Stable list envelope consumed by the Web App Center."""
     listing = do_list()
     operations = _operation_manager()
-    items = [_builtin_app_view(operations), _acousticslab_app_view(operations)]
+    items = [_builtin_app_view(operations), _acousticslab_app_view(operations),
+             _motiondetect_app_view(operations)]
     for raw in listing.get("apps") or []:
         app_id = raw.get("id")
         item = dict(raw)
@@ -3764,7 +3842,8 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
 
 def do_v1_delete(app_id: str) -> dict:
-    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
+                  motiondetect.MD_ID):
         raise ValueError("a firmware system application cannot be uninstalled")
     _require_installed(app_id)
 
@@ -3779,6 +3858,14 @@ def do_v1_delete(app_id: str) -> dict:
 
 
 def do_v1_logs(app_id: str, tail: int = 200) -> dict:
+    if app_id == motiondetect.MD_ID:
+        try:
+            tail = int(tail)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tail must be an integer") from exc
+        tail = min(2000, max(1, tail))
+        lines = motiondetect.read_log_tail(tail=tail)
+        return {"id": app_id, "lines": lines, "text": "\n".join(lines)}
     if app_id == acousticslab.AL_ID:
         # The daemon keeps its own daily logs under its workspace; there is no
         # supervisor-managed app log to read.
@@ -5167,6 +5254,19 @@ def _stop_acousticslab_forwarder() -> None:
                   file=sys.stderr)
 
 
+def _stop_motiondetect_forwarder() -> None:
+    """Stop the motion-detect state forwarder alongside the other bridges."""
+    global _motiondetect_forwarder
+    forwarder = _motiondetect_forwarder
+    _motiondetect_forwarder = None
+    if forwarder is not None:
+        try:
+            forwarder.stop()
+        except Exception:
+            print("[appmgr] motion-detect forwarder did not stop cleanly",
+                  file=sys.stderr)
+
+
 def _stop_recording_bridge() -> bool:
     """Detach and close the recording observer without hiding a stuck worker."""
     global _recording_bridge_instance
@@ -5269,7 +5369,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     global _memory_controller
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
-    global _acousticslab_forwarder
+    global _acousticslab_forwarder, _motiondetect_forwarder
     global _operation_manager_instance
     global _store_manager_instance
     global _service_stopping
@@ -5285,6 +5385,8 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     # Enforce the AcousticsLab system app's persisted desired state (the OEM
     # init script always starts the daemon first). Never blocks service startup.
     acousticslab.reconcile()
+    # Same persisted-intent restore for the motion-detect system service.
+    motiondetect.reconcile()
     try:
         recovered_uploads = appuploads.recover_startup()
         if (recovered_uploads.get("removed")
@@ -5370,6 +5472,12 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                     _recording_bridge_instance.register_system_source(
                         acousticslab.AL_ID, declaration)),
             ).start()
+        # motion-detect system service: daemon HTTP state -> Hub system
+        # envelopes (source "motion-detect").  Same in-process trust seam;
+        # no recording-bridge capability (motion state is not a vigil rule).
+        if callable(_al_publish):
+            _motiondetect_forwarder = motiondetect.ResultForwarder(
+                publish=_al_publish).start()
         _result_gateway_instance = resultgateway.ResultGateway(
             uds_path=paths.RESULT_GATEWAY_SOCK,
             ws_host=paths.RESULT_GATEWAY_HOST,
@@ -5404,6 +5512,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
         _stop_acousticslab_forwarder()
+        _stop_motiondetect_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
@@ -5461,6 +5570,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
         _stop_acousticslab_forwarder()
+        _stop_motiondetect_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
