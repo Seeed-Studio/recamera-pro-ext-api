@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">CVSprout Link</title>
+  <desc id="desc">A camera lens surrounded by green and blue return arrows for image capture and model deployment.</desc>
+  <rect width="512" height="512" fill="#FFFFFF"/>
+  <g transform="translate(-32 -32) scale(1.125)">
+  <!-- Broad arrow shapes remain distinct at application-list sizes. -->
+  <path fill="#168B67" d="M84.64 225.79 A174 174 0 0 1 406.69 169 L423.14 159.5 L420.77 239.39 L350.39 201.5 L366.85 192 A128 128 0 0 0 129.95 233.77 Z"/>
+  <path fill="#3C66E4" transform="rotate(180 256 256)" d="M84.64 225.79 A174 174 0 0 1 406.69 169 L423.14 159.5 L420.77 239.39 L350.39 201.5 L366.85 192 A128 128 0 0 0 129.95 233.77 Z"/>
+  <!-- A simple ring and pupil replace the concept's fine shutter blades. -->
+  <circle cx="256" cy="256" r="78" fill="#168B67"/>
+  <circle cx="256" cy="256" r="50" fill="#FFFFFF"/>
+  <circle cx="256" cy="256" r="24" fill="#3C66E4"/>
+  </g>
+</svg>
