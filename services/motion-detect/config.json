@@ -1,0 +1,18 @@
+{
+  "sq_diff_threshold": 400.0,
+  "min_changed_ratio": 0.005,
+  "motion_hold_ms": 3000,
+  "baseline_frames": 5,
+  "current_frames": 2,
+  "baseline_gap_ms": 1000,
+  "sample_fps": 5.0,
+  "analysis_width": 160,
+  "heartbeat_sec": 30,
+  "http_host": "0.0.0.0",
+  "http_port": 8099,
+  "http_token": "",
+  "mqtt_host": "",
+  "mqtt_port": 1883,
+  "mqtt_user": "",
+  "mqtt_pass": ""
+}
