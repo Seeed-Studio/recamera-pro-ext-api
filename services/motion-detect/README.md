@@ -24,8 +24,9 @@ FrameSource(fps_divisor=N)      源级降帧（默认 30fps→5fps）
 | `ws_notify.py` | 最小 WS 客户端（RFC6455，纯标准库） |
 | `http_control.py` | 参数 HTTP 接口（stdlib http.server） |
 | `ws_sink.py` | **服务器端参考实现**（收推送并打印） |
-| `config.json` | 启动参数（也可用 HTTP 接口在线改） |
-| `test_motion_core.py` / `test_net.py` | 离线测试（开发机 `pytest`） |
+| `config_schema.json` / `config_schema.py` | 参数定义唯一来源 + 加载派生（daemon 校验与 App Center 配置页共用，改参数只改这个 JSON） |
+| `config.json` | 出厂默认配置模板（默认值由 schema 派生，一致性由 `test_config_schema.py` 强制） |
+| `test_motion_core.py` / `test_net.py` / `test_config_schema.py` | 离线测试（开发机 `pytest`） |
 
 ## 部署
 

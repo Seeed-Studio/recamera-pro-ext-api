@@ -342,7 +342,7 @@ class ApplicationListScopeTests(_Pinned):
         probe.assert_called_once_with()
         self.assertEqual([item["id"] for item in legacy["apps"]], [APP])
         self.assertEqual([item["id"] for item in web["apps"]],
-                         ["builtin", "acousticslab", APP])
+                         ["builtin", "acousticslab", "motion-detect", APP])
         self.assertNotIn("builtin", {item["id"] for item in legacy["apps"]})
         self.assertNotIn("acousticslab", {item["id"] for item in legacy["apps"]})
         self.assertTrue(web["apps"][0]["system"])

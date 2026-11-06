@@ -17,6 +17,8 @@ App Center：
 import json
 import os
 import signal
+import hashlib
+import stat
 import subprocess
 import tempfile
 import threading
@@ -44,76 +46,32 @@ class MotionDetectError(Exception):
 
 
 # --------------------------------------------------------------------------- #
-# 配置 schema（UI 渲染 + 服务端校验的唯一来源；与 motion_daemon.py 的
-# CONFIG_SPEC 保持一致——改参数时两侧同步）
+# 配置 schema（UI 渲染 + 服务端校验）：唯一事实来源是 daemon 侧文件
+# services/motion-detect/config_schema.json，随固件装进
+# /usr/share/motion-detect/。daemon 的 CONFIG_SPEC/DEFAULTS/RESTART_KEYS
+# 也从同一份 JSON 派生——改参数只改那个文件。
 # --------------------------------------------------------------------------- #
-CONFIG_SCHEMA = {
-    "groups": [
-        {"key": "detection", "title": "Detection", "title_zh": "检测判定",
-         "items": [
-             {"key": "sq_diff_threshold", "type": "number", "apply": "live",
-              "title": "Squared-difference threshold",
-              "title_zh": "平方差阈值（≈灰度差 20 的平方）",
-              "min": 1, "max": 65025, "step": 50, "default": 400},
-             {"key": "min_changed_ratio", "type": "number", "apply": "live",
-              "title": "Minimum changed-pixel ratio",
-              "title_zh": "运动判定最小变化像素占比",
-              "min": 0, "max": 0.5, "step": 0.001, "default": 0.005},
-             {"key": "motion_hold_ms", "type": "integer", "apply": "live",
-              "title": "Motion hold time (ms)",
-              "title_zh": "运动保持时间（毫秒，防抖）",
-              "min": 0, "max": 600000, "step": 100, "default": 3000},
-         ]},
-        {"key": "baseline", "title": "Baseline comparison",
-         "title_zh": "基准对比",
-         "items": [
-             {"key": "baseline_frames", "type": "integer", "apply": "live",
-              "title": "Baseline window length (frames)",
-              "title_zh": "基准画面长度（帧）",
-              "min": 1, "max": 240, "step": 1, "default": 5},
-             {"key": "current_frames", "type": "integer", "apply": "live",
-              "title": "Current window length (frames)",
-              "title_zh": "当前画面长度（帧）",
-              "min": 1, "max": 120, "step": 1, "default": 2},
-             {"key": "baseline_gap_ms", "type": "integer", "apply": "live",
-              "title": "Baseline-to-current gap (ms)",
-              "title_zh": "基准与当前画面的时间间隔（毫秒）",
-              "min": 0, "max": 600000, "step": 100, "default": 1000},
-         ]},
-        {"key": "sampling", "title": "Sampling and reporting",
-         "title_zh": "采样与上报",
-         "items": [
-             {"key": "sample_fps", "type": "number", "apply": "restart",
-              "title": "Sampling rate (fps)",
-              "title_zh": "分析采样率（帧/秒，改后自动重启服务）",
-              "min": 0.2, "max": 30, "step": 0.2, "default": 5},
-             {"key": "analysis_width", "type": "integer", "apply": "live",
-              "title": "Analysis width (px)",
-              "title_zh": "分析分辨率宽度（像素）",
-              "min": 32, "max": 640, "step": 16, "default": 160},
-             {"key": "heartbeat_sec", "type": "integer", "apply": "live",
-              "title": "Heartbeat interval (s)",
-              "title_zh": "心跳间隔（秒）",
-              "min": 5, "max": 3600, "step": 5, "default": 30},
-         ]},
-        {"key": "uplink", "title": "Uplink", "title_zh": "上报通道",
-         "items": [
-             {"key": "mqtt_host", "type": "string", "apply": "live",
-              "title": "MQTT broker host (HA)",
-              "title_zh": "MQTT broker 地址（接 HA，空=关闭）",
-              "default": ""},
-             {"key": "mqtt_port", "type": "integer", "apply": "live",
-              "title": "MQTT broker port", "title_zh": "MQTT 端口",
-              "min": 1, "max": 65535, "step": 1, "default": 1883},
-             {"key": "mqtt_user", "type": "string", "apply": "live",
-              "title": "MQTT username", "title_zh": "MQTT 用户名（可空）",
-              "default": ""},
-             {"key": "mqtt_pass", "type": "password", "apply": "live",
-              "title": "MQTT password", "title_zh": "MQTT 密码（可空）",
-              "default": ""},
-         ]},
-    ]
-}
+def _load_config_schema() -> dict:
+    repo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             os.pardir, os.pardir,
+                             "services", "motion-detect", "config_schema.json")
+    candidates = (os.environ.get("RECAMERA_MOTION_DETECT_SCHEMA"),
+                  "/usr/share/motion-detect/config_schema.json", repo_file)
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as stream:
+                return json.load(stream)
+        except (OSError, ValueError) as exc:
+            print(f"[appmgr] motion-detect schema {path} unreadable: {exc}",
+                  flush=True)
+    print("[appmgr] motion-detect config_schema.json not found; "
+          "config UI will be empty", flush=True)
+    return {"groups": []}
+
+
+CONFIG_SCHEMA = _load_config_schema()
 
 
 def _schema_items():
@@ -240,10 +198,10 @@ def desired_state() -> str:
             with open(_DESIRED_PATH, "rb") as stream:
                 data = json.loads(stream.read(64 * 1024).decode("utf-8"))
         except (OSError, ValueError):
-            return "running"          # 默认出厂即运行
+            return "stopped"          # 出厂默认关闭；用户在 App Center 启动后记住
     if isinstance(data, dict) and data.get("desired") in ("running", "stopped"):
         return data["desired"]
-    return "running"
+    return "stopped"
 
 
 def _write_desired(desired: str) -> None:
@@ -512,6 +470,37 @@ class ResultForwarder:
 # --------------------------------------------------------------------------- #
 # App Center 呈现
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 图标（固件内置，经 /api/appMgr/icon 供前端应用卡使用）
+# --------------------------------------------------------------------------- #
+ICON_PATH = "/usr/share/motion-detect/icon.png"
+ICON_MEDIA_TYPE = "image/png"
+
+
+def icon_info():
+    """do_icon/_icon_info_cached 的系统应用分支：固定 rootfs 路径，同样受
+    尺寸上限约束；返回与包图标一致的元数据结构。"""
+    try:
+        st = os.stat(ICON_PATH)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > paths.MAX_ICON_BYTES:
+            return None
+        with open(ICON_PATH, "rb") as stream:
+            data = stream.read()
+    except OSError:
+        return None
+    return {"path": ICON_PATH, "relative_path": "icon.png",
+            "media_type": ICON_MEDIA_TYPE, "strict_media": True,
+            "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def icon_bytes():
+    info = icon_info()
+    if info is None:
+        raise FileNotFoundError("motion-detect has no bundled icon")
+    with open(info["path"], "rb") as stream:
+        return stream.read(), info["media_type"]
+
+
 def manifest() -> dict:
     """系统应用描述。永不进入包/签名管线。"""
     return {

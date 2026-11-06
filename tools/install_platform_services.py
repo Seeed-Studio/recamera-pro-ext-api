@@ -156,6 +156,8 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         oem / "etc/nginx/ext_appmgr.conf",
         rootfs / "usr/share/motion-detect/motion_daemon.py",
         rootfs / "usr/share/motion-detect/motion_core.py",
+        rootfs / "usr/share/motion-detect/config_schema.py",
+        rootfs / "usr/share/motion-detect/config_schema.json",
         rootfs / "etc/init.d/S95motion-detectd",
     )
     missing = [str(path) for path in required if not path.is_file()]
