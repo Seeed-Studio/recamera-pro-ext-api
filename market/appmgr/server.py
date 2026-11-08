@@ -76,7 +76,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from . import workflow_models
 
-from . import (acousticslab, assets, builtin, config as appconfig,
+from . import (acousticslab, assets, builtin, browser_overlay as appbrowseroverlay,
+               config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
                memory_guard, memory_control,
@@ -441,6 +442,66 @@ def do_set_app_visualization(app_id: str, incoming: dict, *,
             stream_burn_in={"enabled": requested})
         return _app_visualization_view(
             app_id, manifest=manifest, config=saved)
+
+
+def do_get_browser_overlays() -> dict:
+    return appbrowseroverlay.load()
+
+
+def _publish_browser_overlay(app_id: str, document: dict, *, action: str) -> None:
+    """Notify only after persistence; notification failures cannot undo a save."""
+    try:
+        _operation_manager().events.publish(
+            "browser_overlay", action=action, app_id=app_id,
+            revision=document["revision"])
+    except Exception as exc:
+        print("[appmgr] browser overlay notification failed for %s: %r" %
+              (app_id, exc), flush=True)
+
+
+def do_set_browser_overlay(app_id: str, incoming: dict, *,
+                           _busy_timeout: float = 0.0) -> dict:
+    enabled, revision = appbrowseroverlay.validate_request(incoming)
+    with busy_gate(wait_timeout=_busy_timeout):
+        # Firmware system cards have no installed app directory. Legacy and
+        # workflow apps use the same stable installed ID as manifest-v2 apps.
+        if app_id not in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+            _require_installed(app_id)
+        document = appbrowseroverlay.replace(app_id, enabled, revision)
+        _audit("v1_browser_overlay", id=app_id, op="replace",
+               revision=document["revision"], enabled=enabled)
+        _publish_browser_overlay(app_id, document, action="updated")
+        return document
+
+
+def _reset_browser_overlay(app_id: str, *, reason: str) -> None:
+    # Lifecycle callers already hold busy_gate. Fresh installs MUST persist
+    # before publishing a new package; completed uninstalls use best effort.
+    document = appbrowseroverlay.reset_for_lifecycle(app_id)
+    _audit("v1_browser_overlay", id=app_id, op="reset", reason=reason,
+           revision=document["revision"], enabled=False)
+    _publish_browser_overlay(app_id, document, action=reason)
+
+
+def _restore_browser_overlay_after_failed_install(app_id: str, enabled: bool) -> None:
+    """Restore prior intent only when no failed new package remains installed."""
+    if os.path.isdir(paths.app_dir(app_id)):
+        return
+    try:
+        current = appbrowseroverlay.load()["preferences"].get(app_id, {})
+        if current.get("enabled", False) == enabled:
+            return
+        document = appbrowseroverlay.replace(
+            app_id, enabled, current.get("revision", 0))
+        _audit("v1_browser_overlay", id=app_id, op="restore",
+               reason="fresh_install_failed", revision=document["revision"],
+               enabled=enabled)
+        _publish_browser_overlay(app_id, document, action="fresh_install_rollback")
+    except Exception as exc:
+        _audit("v1_browser_overlay_cleanup_failed", id=app_id,
+               reason="fresh_install_rollback", error=str(exc))
+        print("[appmgr] browser overlay rollback failed for %s: %r" %
+              (app_id, exc), flush=True)
 
 
 def _render_override_manifest(app_id: str) -> dict:
@@ -1681,6 +1742,7 @@ def do_install(pkg_path: str, signature: str = None, *,
 
         candidate = installer.prepare(
             pkg_path, signature, allow_unsigned=allow_unsigned)
+        prior_browser_overlay = None
         try:
             # Rebind V1 approval to the inode authenticated by prepare(), not
             # merely the earlier inspection of the package path.
@@ -1737,6 +1799,9 @@ def do_install(pkg_path: str, signature: str = None, *,
                 running_pid is not None or has_run_record or lifecycle_fence)
 
             if not pre_installed:
+                prior_browser_overlay = appbrowseroverlay.load()["preferences"].get(
+                    app_id, {}).get("enabled", False)
+                _reset_browser_overlay(app_id, reason="fresh_install")
                 # An app id can remain selected after an uninstall performed by
                 # older firmware.  Clear that stale intent before publishing
                 # any files from the new package.  Failure is fatal here: once
@@ -1998,6 +2063,14 @@ def do_install(pkg_path: str, signature: str = None, *,
                     "auto_started": restarted,
                     "requires_manual_start": unsigned_install,
                     "signature": sig}
+        except BaseException:
+            if prior_browser_overlay is not None:
+                # Keep revisions monotonic even when restoring an old intent.
+                # If package rollback failed, never enable stale intent on the
+                # retained new package; its safe false tombstone stays in force.
+                _restore_browser_overlay_after_failed_install(
+                    app_id, prior_browser_overlay)
+            raise
         finally:
             # Upgrade step 2b: any failed/rolled-back transaction leaves the
             # previous override untouched (no-op once committed above).
@@ -2034,6 +2107,7 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     if not os.path.isdir(paths.app_dir(app_id)):
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
+        _require_installed(app_id)
         stopped = False
         rec = state.get_app(app_id)
         if supervisor.is_running(app_id) is not None:
@@ -2055,6 +2129,16 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 rec["instance_id"], int(rec.get("generation", 0)))
         installer.uninstall(app_id)
         state.remove_app(app_id)
+        try:
+            _reset_browser_overlay(app_id, reason="uninstall")
+        except Exception as exc:
+            # Removal must remain possible when optional display storage is
+            # unavailable. PUT rejects this absent app; a subsequent fresh
+            # install MUST persist its false fence before publishing files.
+            _audit("v1_browser_overlay_cleanup_failed", id=app_id,
+                   reason="uninstall", error=str(exc))
+            print("[appmgr] browser overlay cleanup failed for %s: %r" %
+                  (app_id, exc), flush=True)
         if (_result_hub_instance is not None
                 and hasattr(_result_hub_instance, "invalidate_app_manifest")):
             _result_hub_instance.invalidate_app_manifest(app_id)
@@ -3925,6 +4009,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": str(exc)})
             return False
 
+    def _browser_overlay_error(self, exc: Exception) -> None:
+        if isinstance(exc, appbrowseroverlay.RevisionConflict):
+            return self._send(409, {
+                "error": "revision_conflict",
+                "current_revision": exc.current_revision,
+            })
+        if isinstance(exc, appbrowseroverlay.BrowserOverlayError):
+            return self._send(400, {
+                "error": "invalid_browser_overlay",
+                "field": exc.field,
+                "detail": exc.detail,
+            })
+        if isinstance(exc, appbrowseroverlay.StorageError):
+            return self._send(503, {"error": "browser_overlay_storage_unavailable"})
+        return self._v1_error(exc)
+
     def _render_override_error(self, exc: Exception) -> None:
         if isinstance(exc, apprenderoverride.RevisionConflict):
             return self._send(409, {
@@ -4119,6 +4219,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_get_visualization())
             except Exception as exc:
                 return self._v1_error(exc)
+        if path == "/api/app-center/v1/browser-overlays":
+            try:
+                return self._send(200, do_get_browser_overlays())
+            except Exception as exc:
+                return self._browser_overlay_error(exc)
         if path == "/api/app-center/v1/recording/sources":
             try:
                 return self._send(200, do_get_recording_sources())
@@ -4572,6 +4677,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        browser_overlay_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/browser-overlay", path)
+        if browser_overlay_match:
+            try:
+                return self._send(200, do_set_browser_overlay(
+                    browser_overlay_match.group(1), self._body_json_v1(),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._browser_overlay_error(exc)
         if path == "/api/app-center/v1/visualization":
             try:
                 return self._send(
