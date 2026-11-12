@@ -20,6 +20,16 @@ owns; it does not reach the official preview unless that image is itself
 published through a supported sink. Do not claim frontend boxes from OpenCV
 drawing alone.
 
+## Default behavior
+
+When an App produces recognition results, enable the browser AI result overlay
+by default; do not wait for the user to ask for it. This applies to detection,
+classification, tracking, keypoint, zone, OCR, and comparable inference output:
+if the App can emit `results`, declare the browser overlay contract below.
+Only data-only Apps, or an App whose user explicitly opted out, omit it.
+Stream burn-in OSD is a separate, opt-in capability and does not change this
+default.
+
 ## Browser overlay contract
 
 For a Kit App that declares a detector model and emits `results`, the manifest
@@ -75,7 +85,8 @@ adapters and must not be used to claim ownership of the reserved `8124` port.
 See [managed-runtime.md](managed-runtime.md).
 
 Data-only applications need not declare `render.boxes` or `render.stream_osd`.
-The checks below apply when browser rendering is requested.
+For Apps that produce recognition results, the browser overlay contract is the
+default and the checks below apply.
 
 ## Debugging "no boxes on the frontend"
 
