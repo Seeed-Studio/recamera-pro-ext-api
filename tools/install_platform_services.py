@@ -125,6 +125,19 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         for directory in ("etc/init.d", "userdata/config/system/etc/init.d"):
             (rootfs / directory / name).unlink(missing_ok=True)
     _copy_file(repo / "market/deploy/ext_appmgr.conf", oem / "etc/nginx/ext_appmgr.conf", 0o644)
+    # motion-detect system service: pure-Python daemon staged read-only into the
+    # rootfs, boot hook into rootfs /etc/init.d.  Runtime config lives in
+    # /userdata/local/motion-detect (created by the init script on first boot).
+    motion_src = repo / "services/motion-detect"
+    motion_dst = rootfs / "usr/share/motion-detect"
+    _replace_tree(motion_src, motion_dst)
+    # tests/、deploy/ 与文档留在仓库，不进镜像。
+    shutil.rmtree(motion_dst / "tests", ignore_errors=True)
+    shutil.rmtree(motion_dst / "deploy", ignore_errors=True)
+    for extra in ("API.md", "README.md"):
+        (motion_dst / extra).unlink(missing_ok=True)
+    _copy_file(motion_src / "deploy/S95motion-detectd",
+               rootfs / "etc/init.d/S95motion-detectd", 0o755)
     _assert_clean(platform)
     required = (
         platform / "appmgr/__main__.py",
@@ -141,11 +154,21 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         oem / "etc/init.d/S93inferenced",
         oem / "etc/init.d/S94appmgr",
         oem / "etc/nginx/ext_appmgr.conf",
+        rootfs / "usr/share/motion-detect/motion_daemon.py",
+        rootfs / "usr/share/motion-detect/motion_core.py",
+        rootfs / "usr/share/motion-detect/config_schema.py",
+        rootfs / "usr/share/motion-detect/config_schema.json",
+        rootfs / "etc/init.d/S95motion-detectd",
     )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError("platform staging is incomplete: " + ", ".join(missing))
-    for script in required[-3:-1]:
+    init_scripts = (
+        oem / "etc/init.d/S93inferenced",
+        oem / "etc/init.d/S94appmgr",
+        rootfs / "etc/init.d/S95motion-detectd",
+    )
+    for script in init_scripts:
         if not stat.S_IMODE(script.stat().st_mode) & stat.S_IXUSR:
             raise PermissionError(f"init script is not executable: {script}")
 

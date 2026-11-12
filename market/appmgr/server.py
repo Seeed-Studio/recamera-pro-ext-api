@@ -76,10 +76,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from . import workflow_models
 
-from . import (acousticslab, assets, builtin, config as appconfig,
+from . import (acousticslab, assets, builtin, browser_overlay as appbrowseroverlay,
+               config as appconfig,
                coordinator as appcoordinator, gateway as resultgateway,
                inference_auth, installer, kitversion, manifest as appmanifest, modelstore,
-               memory_guard, memory_control,
+               memory_guard, memory_control, motiondetect,
                mqtt as mqttcfg, operations as appoperations, paths,
                recording as apprecording, recording_migration,
                result_hub as canonical_results,
@@ -98,6 +99,7 @@ _result_hub_instance = None
 _visualization_bridge_instance = None
 _recording_bridge_instance = None
 _acousticslab_forwarder = None
+_motiondetect_forwarder = None
 _operation_manager_instance = None
 _operation_manager_layout = None
 _operation_manager_lock = threading.Lock()
@@ -441,6 +443,66 @@ def do_set_app_visualization(app_id: str, incoming: dict, *,
             stream_burn_in={"enabled": requested})
         return _app_visualization_view(
             app_id, manifest=manifest, config=saved)
+
+
+def do_get_browser_overlays() -> dict:
+    return appbrowseroverlay.load()
+
+
+def _publish_browser_overlay(app_id: str, document: dict, *, action: str) -> None:
+    """Notify only after persistence; notification failures cannot undo a save."""
+    try:
+        _operation_manager().events.publish(
+            "browser_overlay", action=action, app_id=app_id,
+            revision=document["revision"])
+    except Exception as exc:
+        print("[appmgr] browser overlay notification failed for %s: %r" %
+              (app_id, exc), flush=True)
+
+
+def do_set_browser_overlay(app_id: str, incoming: dict, *,
+                           _busy_timeout: float = 0.0) -> dict:
+    enabled, revision = appbrowseroverlay.validate_request(incoming)
+    with busy_gate(wait_timeout=_busy_timeout):
+        # Firmware system cards have no installed app directory. Legacy and
+        # workflow apps use the same stable installed ID as manifest-v2 apps.
+        if app_id not in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+            _require_installed(app_id)
+        document = appbrowseroverlay.replace(app_id, enabled, revision)
+        _audit("v1_browser_overlay", id=app_id, op="replace",
+               revision=document["revision"], enabled=enabled)
+        _publish_browser_overlay(app_id, document, action="updated")
+        return document
+
+
+def _reset_browser_overlay(app_id: str, *, reason: str) -> None:
+    # Lifecycle callers already hold busy_gate. Fresh installs MUST persist
+    # before publishing a new package; completed uninstalls use best effort.
+    document = appbrowseroverlay.reset_for_lifecycle(app_id)
+    _audit("v1_browser_overlay", id=app_id, op="reset", reason=reason,
+           revision=document["revision"], enabled=False)
+    _publish_browser_overlay(app_id, document, action=reason)
+
+
+def _restore_browser_overlay_after_failed_install(app_id: str, enabled: bool) -> None:
+    """Restore prior intent only when no failed new package remains installed."""
+    if os.path.isdir(paths.app_dir(app_id)):
+        return
+    try:
+        current = appbrowseroverlay.load()["preferences"].get(app_id, {})
+        if current.get("enabled", False) == enabled:
+            return
+        document = appbrowseroverlay.replace(
+            app_id, enabled, current.get("revision", 0))
+        _audit("v1_browser_overlay", id=app_id, op="restore",
+               reason="fresh_install_failed", revision=document["revision"],
+               enabled=enabled)
+        _publish_browser_overlay(app_id, document, action="fresh_install_rollback")
+    except Exception as exc:
+        _audit("v1_browser_overlay_cleanup_failed", id=app_id,
+               reason="fresh_install_rollback", error=str(exc))
+        print("[appmgr] browser overlay rollback failed for %s: %r" %
+              (app_id, exc), flush=True)
 
 
 def _render_override_manifest(app_id: str) -> dict:
@@ -1054,6 +1116,8 @@ def _icon_info_cached(app_id: str, manifest: dict = None):
     with a symlink/special file can never reuse an earlier cache entry.  Full
     hashing is skipped only for a settled, identical inode/mtime/size tuple.
     """
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.icon_info()       # 系统应用：固件内置固定路径
     if not paths.valid_app_id(app_id):
         return None
     manifest = manifest if isinstance(manifest, dict) else _read_manifest(app_id)
@@ -1136,6 +1200,8 @@ def do_icon(app_id: str):
     """
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.icon_bytes()      # 系统应用：固件内置图标
     manifest = _read_manifest(app_id)
     info = _icon_info_cached(app_id, manifest)
     if info is None:
@@ -1276,10 +1342,11 @@ def do_list() -> dict:
             # extraction) contain a dot -> never a valid app id -> not listed.
             if not os.path.isdir(d) or not paths.valid_app_id(name):
                 continue
-            if name in ("kit", builtin.BUILTIN_ID, acousticslab.AL_ID):
-                # ``kit`` is the shared runtime; ``builtin``/``acousticslab``
-                # are reserved firmware system identities. Neither is an
-                # installed app card.
+            if name in ("kit", builtin.BUILTIN_ID, acousticslab.AL_ID,
+                        motiondetect.MD_ID):
+                # ``kit`` is the shared runtime; ``builtin``/``acousticslab``/
+                # ``motion-detect`` are reserved firmware system identities.
+                # None is an installed app card.
                 continue
             man = _read_manifest(name)
             if man is None:
@@ -1681,6 +1748,7 @@ def do_install(pkg_path: str, signature: str = None, *,
 
         candidate = installer.prepare(
             pkg_path, signature, allow_unsigned=allow_unsigned)
+        prior_browser_overlay = None
         try:
             # Rebind V1 approval to the inode authenticated by prepare(), not
             # merely the earlier inspection of the package path.
@@ -1737,6 +1805,9 @@ def do_install(pkg_path: str, signature: str = None, *,
                 running_pid is not None or has_run_record or lifecycle_fence)
 
             if not pre_installed:
+                prior_browser_overlay = appbrowseroverlay.load()["preferences"].get(
+                    app_id, {}).get("enabled", False)
+                _reset_browser_overlay(app_id, reason="fresh_install")
                 # An app id can remain selected after an uninstall performed by
                 # older firmware.  Clear that stale intent before publishing
                 # any files from the new package.  Failure is fatal here: once
@@ -1998,6 +2069,14 @@ def do_install(pkg_path: str, signature: str = None, *,
                     "auto_started": restarted,
                     "requires_manual_start": unsigned_install,
                     "signature": sig}
+        except BaseException:
+            if prior_browser_overlay is not None:
+                # Keep revisions monotonic even when restoring an old intent.
+                # If package rollback failed, never enable stale intent on the
+                # retained new package; its safe false tombstone stays in force.
+                _restore_browser_overlay_after_failed_install(
+                    app_id, prior_browser_overlay)
+            raise
         finally:
             # Upgrade step 2b: any failed/rolled-back transaction leaves the
             # previous override untouched (no-op once committed above).
@@ -2027,13 +2106,15 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
     Uninstalling an unknown app is a hard ValueError (not a crash); the running /
     active handling is idempotent so double-uninstall is safe.
     """
-    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
+                  motiondetect.MD_ID):
         raise ValueError("a firmware system application cannot be uninstalled")
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
         raise ValueError(f"app not installed: {app_id}")
     with busy_gate(wait_timeout=_busy_timeout):
+        _require_installed(app_id)
         stopped = False
         rec = state.get_app(app_id)
         if supervisor.is_running(app_id) is not None:
@@ -2055,6 +2136,16 @@ def do_uninstall(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 rec["instance_id"], int(rec.get("generation", 0)))
         installer.uninstall(app_id)
         state.remove_app(app_id)
+        try:
+            _reset_browser_overlay(app_id, reason="uninstall")
+        except Exception as exc:
+            # Removal must remain possible when optional display storage is
+            # unavailable. PUT rejects this absent app; a subsequent fresh
+            # install MUST persist its false fence before publishing files.
+            _audit("v1_browser_overlay_cleanup_failed", id=app_id,
+                   reason="uninstall", error=str(exc))
+            print("[appmgr] browser overlay cleanup failed for %s: %r" %
+                  (app_id, exc), flush=True)
         if (_result_hub_instance is not None
                 and hasattr(_result_hub_instance, "invalidate_app_manifest")):
             _result_hub_instance.invalidate_app_manifest(app_id)
@@ -2234,6 +2325,12 @@ def do_start(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 _acousticslab_invalidate()
             _audit("start", id=acousticslab.AL_ID, result=result)
             return {"id": acousticslab.AL_ID, "started": True, "detail": result}
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            result = motiondetect.start()
+            _audit("start", id=motiondetect.MD_ID, result=result)
+            return {"id": motiondetect.MD_ID, "started": True,
+                    "detail": result}
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2271,6 +2368,12 @@ def do_restart(app_id: str, *, _busy_timeout: float = 0.0) -> dict:
                 _acousticslab_invalidate()
             _audit("restart", id=acousticslab.AL_ID, restarted=result.get("restarted"))
             return {"id": acousticslab.AL_ID, **result}
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            result = motiondetect.restart()
+            _audit("restart", id=motiondetect.MD_ID,
+                   restarted=result.get("restarted"))
+            return {"id": motiondetect.MD_ID, **result}
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -2434,6 +2537,13 @@ def do_activate(app_id: str) -> dict:
 def do_stop(app_id: str = None, *, _busy_timeout: float = 0.0) -> dict:
     with busy_gate(wait_timeout=_busy_timeout):
         target = app_id or state.get_active()
+        if target == motiondetect.MD_ID:
+            try:
+                res = motiondetect.stop()
+            finally:
+                pass
+            _audit("stop", id=motiondetect.MD_ID, result=res)
+            return {"stopped": motiondetect.MD_ID, "detail": res}
         if target == acousticslab.AL_ID:
             try:
                 res = acousticslab.stop()
@@ -2481,6 +2591,8 @@ def do_get_config(app_id: str) -> dict:
         return builtin.get_config()          # driver-backed, app-isomorphic shape
     if app_id == acousticslab.AL_ID:
         raise ValueError("acousticslab is configured from its own console")
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.get_config()     # system service, app-isomorphic shape
     if not paths.valid_app_id(app_id):
         raise ValueError(f"invalid app id {app_id!r}")
     if not os.path.isdir(paths.app_dir(app_id)):
@@ -2590,6 +2702,12 @@ def do_set_config(app_id: str, incoming: dict, *,
                   _busy_timeout: float = 0.0) -> dict:
     if app_id == acousticslab.AL_ID:
         raise ValueError("acousticslab is configured from its own console")
+    if app_id == motiondetect.MD_ID:
+        with busy_gate(wait_timeout=_busy_timeout):
+            res = motiondetect.set_config(incoming)
+        _audit("config", id=motiondetect.MD_ID, keys=sorted(incoming.keys()),
+               applied=res.get("applied"), restarted=res.get("restarted"))
+        return res
     if app_id == builtin.BUILTIN_ID:
         with busy_gate(wait_timeout=_busy_timeout):
             try:
@@ -3123,11 +3241,60 @@ def _acousticslab_app_view(operations) -> dict:
     }
 
 
+def _motiondetect_app_view(operations) -> dict:
+    """Third system-owned v1 app: the motion-detectd firmware service.
+
+    Like acousticslab it is NOT part of the single-active/NPU world: the
+    CPU-only detection service runs orthogonally to vision apps and the
+    built-in AI.  Unlike acousticslab it IS configured through the platform
+    config API (schema in motiondetect.CONFIG_SCHEMA).
+    """
+    detail = motiondetect.snapshot()
+    observed = detail["state"]
+    status = "failed" if observed == "unknown" else observed
+    operation = operations.active_for(motiondetect.MD_ID)
+    if operation:
+        status = "stopping" if operation["type"] == "stop" else "starting"
+    enabled = detail["enabled"]
+    running = observed == "running"
+    mutable = not operation and observed in ("running", "stopped")
+    descriptor = motiondetect.manifest()
+    return {
+        "id": motiondetect.MD_ID, "type": "system", "system": True,
+        "installed": True, "name": descriptor["name"],
+        "name_zh": descriptor["name_zh"], "version": descriptor["version"],
+        "manifest": descriptor, "description": descriptor["description"],
+        "description_zh": descriptor["description_zh"],
+        "icon_url": _icon_url(motiondetect.MD_ID, descriptor),
+        "source": {"kind": "system", "id": motiondetect.MD_ID},
+        "status": status, "running": running, "pid": detail.get("pid"),
+        "instance": None,
+        "actions": {
+            "start": bool(mutable and not running),
+            "stop": bool(mutable and (running or enabled)),
+            "restart": bool(mutable and running),
+            "configure": True, "uninstall": False,
+        },
+        "capabilities": ["system-results"],
+        "runtime": {
+            "status": status,
+            "desired_state": "running" if enabled else "stopped",
+            "observed_state": observed, "pid": detail.get("pid"),
+            "reason": None,
+        },
+        "reason": None,
+        "error": None if running else (None if observed == "stopped"
+                                       else "service unavailable"),
+        "resource_conflicts": [],
+    }
+
+
 def do_v1_apps() -> dict:
     """Stable list envelope consumed by the Web App Center."""
     listing = do_list()
     operations = _operation_manager()
-    items = [_builtin_app_view(operations), _acousticslab_app_view(operations)]
+    items = [_builtin_app_view(operations), _acousticslab_app_view(operations),
+             _motiondetect_app_view(operations)]
     for raw in listing.get("apps") or []:
         app_id = raw.get("id")
         item = dict(raw)
@@ -3764,7 +3931,8 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
 
 def do_v1_delete(app_id: str) -> dict:
-    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
+                  motiondetect.MD_ID):
         raise ValueError("a firmware system application cannot be uninstalled")
     _require_installed(app_id)
 
@@ -3779,6 +3947,14 @@ def do_v1_delete(app_id: str) -> dict:
 
 
 def do_v1_logs(app_id: str, tail: int = 200) -> dict:
+    if app_id == motiondetect.MD_ID:
+        try:
+            tail = int(tail)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tail must be an integer") from exc
+        tail = min(2000, max(1, tail))
+        lines = motiondetect.read_log_tail(tail=tail)
+        return {"id": app_id, "lines": lines, "text": "\n".join(lines)}
     if app_id == acousticslab.AL_ID:
         # The daemon keeps its own daily logs under its workspace; there is no
         # supervisor-managed app log to read.
@@ -3924,6 +4100,22 @@ class _Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send(403, {"error": str(exc)})
             return False
+
+    def _browser_overlay_error(self, exc: Exception) -> None:
+        if isinstance(exc, appbrowseroverlay.RevisionConflict):
+            return self._send(409, {
+                "error": "revision_conflict",
+                "current_revision": exc.current_revision,
+            })
+        if isinstance(exc, appbrowseroverlay.BrowserOverlayError):
+            return self._send(400, {
+                "error": "invalid_browser_overlay",
+                "field": exc.field,
+                "detail": exc.detail,
+            })
+        if isinstance(exc, appbrowseroverlay.StorageError):
+            return self._send(503, {"error": "browser_overlay_storage_unavailable"})
+        return self._v1_error(exc)
 
     def _render_override_error(self, exc: Exception) -> None:
         if isinstance(exc, apprenderoverride.RevisionConflict):
@@ -4119,6 +4311,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, do_get_visualization())
             except Exception as exc:
                 return self._v1_error(exc)
+        if path == "/api/app-center/v1/browser-overlays":
+            try:
+                return self._send(200, do_get_browser_overlays())
+            except Exception as exc:
+                return self._browser_overlay_error(exc)
         if path == "/api/app-center/v1/recording/sources":
             try:
                 return self._send(200, do_get_recording_sources())
@@ -4572,6 +4769,15 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._guard_mutation_origin():
             return
         path = urlparse(self.path).path.rstrip("/")
+        browser_overlay_match = re.fullmatch(
+            r"/api/app-center/v1/apps/([a-z0-9-]{1,64})/browser-overlay", path)
+        if browser_overlay_match:
+            try:
+                return self._send(200, do_set_browser_overlay(
+                    browser_overlay_match.group(1), self._body_json_v1(),
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC))
+            except Exception as exc:
+                return self._browser_overlay_error(exc)
         if path == "/api/app-center/v1/visualization":
             try:
                 return self._send(
@@ -5167,6 +5373,19 @@ def _stop_acousticslab_forwarder() -> None:
                   file=sys.stderr)
 
 
+def _stop_motiondetect_forwarder() -> None:
+    """Stop the motion-detect state forwarder alongside the other bridges."""
+    global _motiondetect_forwarder
+    forwarder = _motiondetect_forwarder
+    _motiondetect_forwarder = None
+    if forwarder is not None:
+        try:
+            forwarder.stop()
+        except Exception:
+            print("[appmgr] motion-detect forwarder did not stop cleanly",
+                  file=sys.stderr)
+
+
 def _stop_recording_bridge() -> bool:
     """Detach and close the recording observer without hiding a stuck worker."""
     global _recording_bridge_instance
@@ -5269,7 +5488,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     global _memory_controller
     global _result_gateway_instance, _result_hub_instance
     global _visualization_bridge_instance, _recording_bridge_instance
-    global _acousticslab_forwarder
+    global _acousticslab_forwarder, _motiondetect_forwarder
     global _operation_manager_instance
     global _store_manager_instance
     global _service_stopping
@@ -5285,6 +5504,8 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
     # Enforce the AcousticsLab system app's persisted desired state (the OEM
     # init script always starts the daemon first). Never blocks service startup.
     acousticslab.reconcile()
+    # Same persisted-intent restore for the motion-detect system service.
+    motiondetect.reconcile()
     try:
         recovered_uploads = appuploads.recover_startup()
         if (recovered_uploads.get("removed")
@@ -5370,6 +5591,12 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
                     _recording_bridge_instance.register_system_source(
                         acousticslab.AL_ID, declaration)),
             ).start()
+        # motion-detect system service: daemon HTTP state -> Hub system
+        # envelopes (source "motion-detect").  Same in-process trust seam;
+        # no recording-bridge capability (motion state is not a vigil rule).
+        if callable(_al_publish):
+            _motiondetect_forwarder = motiondetect.ResultForwarder(
+                publish=_al_publish).start()
         _result_gateway_instance = resultgateway.ResultGateway(
             uds_path=paths.RESULT_GATEWAY_SOCK,
             ws_host=paths.RESULT_GATEWAY_HOST,
@@ -5404,6 +5631,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
         _stop_acousticslab_forwarder()
+        _stop_motiondetect_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()
@@ -5461,6 +5689,7 @@ def _serve(host: str = None, port: int = None, *, lifecycle: dict) -> None:
             _visualization_bridge_instance.close()
             _visualization_bridge_instance = None
         _stop_acousticslab_forwarder()
+        _stop_motiondetect_forwarder()
         _stop_recording_bridge()
         if _result_hub_instance is not None:
             _result_hub_instance.stop()

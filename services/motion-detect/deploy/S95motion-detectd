@@ -1,0 +1,63 @@
+#!/bin/sh
+# S95motion-detectd -- motion-detect 系统服务（固件内置，不占 App Center）
+#
+# 程序在 rootfs：/usr/share/motion-detect/（只读，恢复出厂不丢）
+# 配置在 /userdata/local/motion-detect/config.json（可在线修改；恢复出厂后
+# 从 rootfs 默认配置重新生成）。
+#
+# 出厂默认关闭：开机不自启。期望状态文件由 AppMgr 在用户启停时写入；
+# 文件存在且 desired=running 才会在开机时拉起。调试可用 forcestart 绕过。
+
+CONF_DIR=/userdata/local/motion-detect
+CONF=$CONF_DIR/config.json
+DEFAULTS=/usr/share/motion-detect/config.json
+LOG=/userdata/local/motion-detect/daemon.log
+PIDFILE=/var/run/motion-detectd.pid
+DESIRED=/userdata/local/appmgr/motion-detect.json
+
+case "$1" in
+start)
+	# 出厂/未记忆状态：不启动；只有 AppMgr 明确记录 running 才拉起
+	if [ ! -f "$DESIRED" ] || ! grep -q '"desired": *"running"' "$DESIRED" 2>/dev/null; then
+		exit 0
+	fi
+	mkdir -p "$CONF_DIR"
+	[ -f "$CONF" ] || cp "$DEFAULTS" "$CONF"
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+		echo "motion-detectd already running" >&2
+		exit 0
+	fi
+	cd /usr/share/motion-detect
+	nohup /usr/bin/python3 motion_daemon.py --config "$CONF" \
+		>>"$LOG" 2>&1 &
+	echo $! > "$PIDFILE"
+	;;
+forcestart)
+	mkdir -p "$CONF_DIR"
+	[ -f "$CONF" ] || cp "$DEFAULTS" "$CONF"
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+		echo "motion-detectd already running" >&2
+		exit 0
+	fi
+	cd /usr/share/motion-detect
+	nohup /usr/bin/python3 motion_daemon.py --config "$CONF" \
+		>>"$LOG" 2>&1 &
+	echo $! > "$PIDFILE"
+	;;
+stop)
+	if [ -f "$PIDFILE" ]; then
+		kill "$(cat $PIDFILE)" 2>/dev/null
+		rm -f "$PIDFILE"
+	fi
+	;;
+restart)
+	$0 stop
+	sleep 1
+	$0 forcestart
+	;;
+*)
+	echo "usage: $0 {start|stop|restart|forcestart}" >&2
+	exit 1
+	;;
+esac
+exit 0

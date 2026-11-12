@@ -111,6 +111,73 @@ canonical envelope 的 `render` 不是应用运行时数据：Hub 会丢弃 payl
 持续 QR/OCR/drowsiness 观测滚动淹没 fall、line_cross、transcript 等真正边沿。同一帧
 多个 QR/OCR 会作为一个 state group 展示，下一帧整组替换。
 
+## 设备保存的网页叠加默认值
+
+网页叠加默认开关保存在设备 `/userdata/local/appmgr/browser-overlays.json`，由所有
+已授权浏览器共享，不是账号私有设置。它仅决定浏览器是否绘制应用结果，既不启停推理，
+也不改动结果输出、RTSP、录像、设备 OSD 或 manifest 的 `render` 样式。
+旧浏览器的 localStorage 偏好不会自动上传为设备默认。
+
+`GET /api/app-center/v1/browser-overlays` 返回完整快照：
+
+```json
+{
+  "schema_version": 1,
+  "revision": 8,
+  "preferences": {
+    "fall-detection": {"enabled": true, "revision": 8},
+    "builtin": {"enabled": false, "revision": 5}
+  }
+}
+```
+
+缺失条目默认 `enabled:false, revision:0`。顶层 `revision` 随每次保存单调递增；
+条目 `revision` 等于该条目最近修改时的全局版本。停止/重启应用、appmgr 重启以及 OTA
+不会清除选择。普通应用、legacy、workflow 使用安装应用的稳定 ID；固件系统应用
+`builtin` 和 `acousticslab` 无需安装目录。不得使用进程 PID、instance 或 generation。
+
+`PUT /api/app-center/v1/apps/<id>/browser-overlay` 只接受以下字段：
+
+```json
+{"enabled": true, "revision": 8}
+```
+
+`enabled` 必须是 JSON boolean；`revision` 必填，必须是非负安全整数；无条目时传0。
+这里比较的是目标应用条目的版本，不是顶层版本，所以两个浏览器分别修改不同应用不会
+相互覆盖。成功返回200及完整GET快照。同一应用版本冲突返回409：
+
+```json
+{"error":"revision_conflict","current_revision":9}
+```
+
+冲突后重新读取设备当前值、保留未保存草稿，让用户决定是否重试，不要自动覆盖另一个浏览器。
+未安装的普通应用返回404；非法字段/类型返回400；全局 mutation gate 繁忙返回409。
+接口复用 `/api/app-center/v1/` 的 JWT、同源检查和 `Cache-Control: no-store`。
+
+写入在 appmgr mutation gate 内比较版本，写临时文件并 fsync、原子替换及同步目录；
+只有保存成功后才发送 SSE `type:"browser_overlay"`，携带 `app_id` 和新全局 `revision`。
+通知只用于使缓存失效，没有断线历史重放：浏览器首次加载、重连和页面恢复可见时应重新GET。
+不同HTTP请求可能乱序返回，前端应拒绝用较低全局revision覆盖较新的快照。
+
+存储损坏或不可读/不可写返回503 `{"error":"browser_overlay_storage_unavailable"}`，
+不会把损坏文件重置成revision0。网络断开或替换后的目录fsync失败时，保存结果可能不确定；
+应先重新GET确认，不要显示虚假成功或直接重放旧版本。通知失败不会把已保存的配置回滚。
+
+成功卸载后会尽力写入 `enabled:false` 并推进版本，保留版本墓碑。停止或删除失败不改变
+原偏好；偏好存储损坏也不阻止卸载。若卸载后的偏好清理失败，未安装应用的PUT仍返回404。
+全新安装必须在发布新包前写入false并推进版本，失败则不发布，保证旧页面不能在重装后
+重放旧版本。新安装失败且包已回滚时，以更高版本恢复之前的enabled值；若包回滚或偏好
+恢复失败，保留关闭状态并记录错误，不把旧选择应用到残留新包。升级（含原版本重装）和
+升级失败回滚保留原值与版本。不要直接删除墓碑或配置文件，否则会丢失版本历史。
+预览页“显示 AI 叠加（当前页面）”只临时隐藏或显示当前页的叠加，不保存到设备，
+也不移除来源选择器中的应用；刷新页面后恢复设备默认。内置模型级的临时选择同样
+属于独立前端语义，不应通过这个设备级应用开关重写模型设置。
+
+跨浏览器共享需要固件同时包含新版前端与 appmgr。旧 appmgr 明确返回404/501时，
+前端保留浏览器本地设置并标明“仅当前浏览器”；网络、认证和存储故障不会触发这个回退。
+设备首次启用该功能时，缺失设置默认关闭，需要在应用配置中显式保存；旧浏览器偏好
+不会自动覆盖设备值。
+
 ## 与烧流 OSD 的区别
 
 | 路径 | 浏览器可视化 | 进入 RTSP/录像 |

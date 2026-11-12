@@ -223,9 +223,9 @@ jobs:
                   print(f"::error::Failed to fetch assets for {app_id}")
                   exit(1)
 
-              # 0.5 验证 Manifest 格式、中英双语国际化与发布质量
+              # 0.5 验证 Manifest 和标准资源/打包/发布回归测试
               print(f"Validating manifest schema and localization for {app_id}...")
-              test_cmd = ["uv", "run", "pytest", "apps/test_manifest_schema.py"]
+              test_cmd = ["uv", "run", "pytest", "apps/test_manifest_schema.py", "market/packaging/"]
               res = subprocess.run(test_cmd)
               if res.returncode != 0:
                   print(f"::error::Manifest validation test failed for {app_id}")
