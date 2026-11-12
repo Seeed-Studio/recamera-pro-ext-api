@@ -54,7 +54,7 @@ for name in ("sqlite3", "_sqlite3"):
 assert len(attempts) == 4
 
 from kit.run import find_app, load_app_module
-module = load_app_module(str(root / "apps/cvsprout-capture/app.py"))
+module = load_app_module(str(root / "apps/cvsprout-link/app.py"))
 app = find_app(module)
 app.setup({"server_url": "https://controlled.example", "device_token": "cvsprout_device_test_token"})
 spool = app.uploader.spool

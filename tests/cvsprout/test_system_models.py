@@ -681,7 +681,7 @@ def test_capture_and_deployment_threads_share_total_shutdown_deadline(monkeypatc
         def is_alive(self):
             return True
 
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     app.uploader = SimpleNamespace(stop=threading.Event())
     app.model_worker = SimpleNamespace(stop=threading.Event())
     app.upload_thread, app.model_thread = Hung(), Hung()

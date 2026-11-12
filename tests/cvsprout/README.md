@@ -1,4 +1,10 @@
-# CVSprout device application validation
+# CVSprout Link validation
+
+CVSprout Link (source: `apps/cvsprout-link`, stable App ID: `cvsprout-capture`)
+is the device integration application. It
+uploads captured images and deploys compatible trained models into the device's
+system model library. Training runs on CVSprout; inference runs through the
+device's system model service, without a separate inference application.
 
 Run the host tests from the SDK checkout:
 
@@ -35,7 +41,7 @@ port, and removes the isolated instance afterwards:
 uv run --frozen python tests/cvsprout/live_backend.py \
   --cvsprout-root /path/to/CVSprout \
   --backend-python /path/to/CVSprout-venv/bin/python \
-  --report dist/cvsprout/cvsprout-capture-1.1.1-live-backend.json
+  --report dist/cvsprout/cvsprout-capture-1.1.2-live-backend.json
 ```
 
 It checks the actual upload authentication/body-limit middleware, multipart image
@@ -48,26 +54,24 @@ as the explicit `--sdk-root`. For example, with `RECAMERA_SKILL_ROOT` set to the
 installed skill directory and `RECAMERA_SDK_ROOT` set to the SDK checkout:
 
 ```sh
-uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/validate_app.py" --app-dir apps/cvsprout-capture --mode publish --sdk-root "$RECAMERA_SDK_ROOT"
-uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/package_app.py" --app-dir apps/cvsprout-capture --out dist/cvsprout --sdk-root "$RECAMERA_SDK_ROOT"
-uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/package_app.py" --app-dir apps/cvsprout-inference --out dist/cvsprout --sdk-root "$RECAMERA_SDK_ROOT"
+uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/validate_app.py" --app-dir apps/cvsprout-link --mode publish --sdk-root "$RECAMERA_SDK_ROOT"
+uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/package_app.py" --app-dir apps/cvsprout-link --out dist/cvsprout --sdk-root "$RECAMERA_SDK_ROOT"
 ```
 
-Repeat the publish validation for the inference App. Use the archive paths printed
-by the packager, then run `scripts/smoke_app.py --archive <printed-path> --sdk-root
-"$RECAMERA_SDK_ROOT" --smoke-test tests/cvsprout/smoke_capture.py` (or
-`smoke_inference.py`) against each exact archive. These hooks use the actual Kit
-loader and the application's actual loop/postprocessor with controlled frames
-and model tensors; they do not connect to a device.
+Use the archive path printed by the packager, then run
+`scripts/smoke_app.py --archive <printed-path> --sdk-root "$RECAMERA_SDK_ROOT"
+--smoke-test tests/cvsprout/smoke_capture.py` against that exact archive. The hook
+uses the actual Kit loader and the application's capture/upload loop with
+controlled frames; it does not connect to a device.
 
-For the CVSprout Link 1.1.1 archive, the full smoke command is:
+For the CVSprout Link 1.1.2 archive, the full smoke command is:
 
 ```sh
 uv run --frozen python "$RECAMERA_SKILL_ROOT/scripts/smoke_app.py" \
-  --archive dist/cvsprout/cvsprout-capture-1.1.1-arm64.tar.gz \
+  --archive dist/cvsprout/cvsprout-capture-1.1.2-arm64.tar.gz \
   --sdk-root "$RECAMERA_SDK_ROOT" \
   --smoke-test tests/cvsprout/smoke_capture.py --timeout 20 \
-  --report dist/cvsprout/cvsprout-capture-1.1.1-host-smoke.json
+  --report dist/cvsprout/cvsprout-capture-1.1.2-host-smoke.json
 ```
 
 The official helper performs its first import before loading external hooks, so
@@ -76,10 +80,8 @@ that exact extracted entry with real Kit while SQLite imports are blocked. It
 then runs setup and the real capture/upload loop with a controlled RGB frame,
 checks the decoded original JPEG, and checks the acknowledged queue is empty.
 Its `capture_portability` log records the missing-module guard and reload evidence.
-The original 1.0.0 archive fails this test with `ModuleNotFoundError`; 1.1.1 must pass.
+The original 1.0.0 archive fails this test with `ModuleNotFoundError`; 1.1.2 must pass.
 Hardware frame/result sockets and AppMgr device startup still require a device test.
 
-The inference source requires its real `models/model.rknn` artifact before
-packaging. Model weights are intentionally ignored by Git. CVSprout-generated
-releases replace the artifact, its manifest digest and model contract together.
-Never use an empty model or synthesize an archive without the official builder.
+Link does not bundle a model. System model delivery and activation use the
+compatible firmware's public model APIs, covered by `test_system_models.py`.

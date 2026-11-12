@@ -171,7 +171,9 @@ jobs:
                       print(f"Skipping {app_id}: invalid manifest.json ({e})")
                       continue
 
-                  live_v = live_apps.get(app_id)
+                  # Source directory names may change while the installed ID
+                  # remains stable for upgrades and persisted configuration.
+                  live_v = live_apps.get(mf["id"])
                   # 仅当版本号严格大于线上版本，或线上尚无该应用且资产齐全时，才触发发版！
                   if live_v is None:
                       # 预检模型资产是否齐全，避免半成品上架
@@ -202,16 +204,20 @@ jobs:
 
           # 逐个发布所有符合发版条件的应用
           python3 - << EOF
-          import json, subprocess, os, glob
+          import json, subprocess, os
 
           apps = json.loads('''$APPS''')
-          for app_id in apps:
+          for app_dir_name in apps:
+              app_dir = f"apps/{app_dir_name}"
+              with open(f"{app_dir}/manifest.json") as f:
+                  manifest = json.load(f)
+              app_id = manifest["id"]
               print(f"\n=======================================================")
               print(f"   Building and Publishing: {app_id}")
               print(f"=======================================================")
               
               # 0. 自动拉取缺失模型/资源文件 (若已存在或已缓存则秒级跳过)
-              fetch_cmd = ["uv", "run", "python3", "market/packaging/fetch_assets.py", f"apps/{app_id}"]
+              fetch_cmd = ["uv", "run", "python3", "market/packaging/fetch_assets.py", app_dir]
               res = subprocess.run(fetch_cmd)
               if res.returncode != 0:
                   print(f"::error::Failed to fetch assets for {app_id}")
@@ -226,18 +232,17 @@ jobs:
                   exit(1)
 
               # 1. 确定性打包
-              build_cmd = ["uv", "run", "python3", "market/packaging/build.py", f"apps/{app_id}", "--out", "market/packaging/dist/"]
+              build_cmd = ["uv", "run", "python3", "market/packaging/build.py", app_dir, "--out", "market/packaging/dist/"]
               res = subprocess.run(build_cmd)
               if res.returncode != 0:
                   print(f"::error::Build failed for {app_id}")
                   exit(1)
 
               # 2. 找到产物
-              pkgs = sorted(glob.glob(f"market/packaging/dist/{app_id}-*-arm64.tar.gz"), key=os.path.getmtime, reverse=True)
-              if not pkgs:
+              pkg_file = f"market/packaging/dist/{app_id}-{manifest['version']}-arm64.tar.gz"
+              if not os.path.isfile(pkg_file):
                   print(f"::error::Package not found for {app_id}")
                   exit(1)
-              pkg_file = pkgs[0]
 
               # 3. 签名并推送到应用商店
               pub_cmd = ["uv", "run", "python3", "market/packaging/publish_app.py", pkg_file, "--sign", "--yes"]

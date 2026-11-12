@@ -1,4 +1,4 @@
-"""Host tests for CVSprout delivery and actual Kit postprocessing (no hardware)."""
+"""Host tests for CVSprout Link capture and delivery (no hardware)."""
 import errno
 import importlib.util
 import os
@@ -14,7 +14,6 @@ import urllib.request
 import cv2
 import numpy as np
 import pytest
-from kit.runtime.preprocess import LetterboxInfo
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,10 +27,9 @@ def load(name, path):
     return module
 
 
-transport = load("transport", "apps/cvsprout-capture/transport.py")
-system_models = load("system_models", "apps/cvsprout-capture/system_models.py")
-capture = load("cvsprout_capture_app", "apps/cvsprout-capture/app.py")
-decoder = load("decoder", "apps/cvsprout-inference/decoder.py")
+transport = load("transport", "apps/cvsprout-link/transport.py")
+system_models = load("system_models", "apps/cvsprout-link/system_models.py")
+capture = load("cvsprout_link_app", "apps/cvsprout-link/app.py")
 
 
 def test_spool_survives_restart_and_only_matching_ack_deletes(tmp_path):
@@ -273,7 +271,7 @@ def test_legacy_queue_is_preserved_and_upgrade_explains_recovery(tmp_path, monke
     data_dir.mkdir()
     legacy = data_dir / legacy_name
     legacy.write_bytes(b"legacy data must not be discarded")
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     try:
         with pytest.raises(transport.DeliveryError, match="legacy_spool_migration_required"):
             app.setup({"server_url": "https://controlled.example", "device_token": "cvsprout_device_controlled"})
@@ -421,7 +419,7 @@ def test_capture_preserves_original_resolution_and_rgb_color():
 def test_frame_failure_stops_upload_thread_and_repeated_finish_is_safe(tmp_path, monkeypatch):
     monkeypatch.setenv("APPMGR_APPDATA_DIR", str(tmp_path))
     monkeypatch.setattr(capture, "EdgeClient", lambda *args: FakeClient())
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     app.setup({"server_url": "https://controlled.example", "device_token": "cvsprout_device_controlled"})
 
     def failed_frames():
@@ -457,51 +455,6 @@ def test_server_capacity_limit_and_revocation_stop_new_captures(tmp_path):
     uploader.step()
     assert not uploader.capture_state()["enabled"]
     assert spool.stats()["pending_images"] == 1
-
-
-def contract(size=320, classes=None):
-    return dict(schema_version=1, task="detect", architecture="yolo26", target_platform="rv1126b",
-                input_size=size, classes=classes or ["person"], output_layout="yolo_decoded_xywh",
-                end2end=False, nms=False)
-
-
-def test_non640_singleclass_single_anchor_maps_to_original_pixels():
-    data = np.array([[[160], [160], [80], [40], [0.9]]], np.float32)
-    info = LetterboxInfo(scale=0.5, pad_w=0, pad_h=80, orig_w=640, orig_h=320)
-    result = decoder.decode([data], info, contract(), 0.35, 0.45)
-    assert result == [{"box": [240.0, 120.0, 400.0, 200.0], "cls": 0, "cls_name": "person", "score": 0.9}]
-
-
-def test_customclasses_nms_empty_and_transposed_outputs():
-    spec = contract(classes=["helmet", "person"])
-    data = np.array([[[160, 160, 80, 40, 0.9, 0.1], [160, 160, 80, 40, 0.8, 0.1],
-                      [40, 40, 20, 20, 0.1, 0.95]]], np.float32)
-    info = LetterboxInfo(1, 0, 0, 320, 320)
-    result = decoder.decode([data], info, spec, 0.35, 0.45)
-    assert len(result) == 2
-    assert [d["cls_name"] for d in result] == ["person", "helmet"]
-    data[..., 4:] = 0
-    assert decoder.decode([data.transpose(0, 2, 1)], info, spec, 0.35, 0.45) == []
-
-
-def test_contract_rejects_wrong_labels_end2end_and_unsupported_output():
-    spec = contract()
-    model = {"input": [1, 320, 320, 3], "classes": ["person"]}
-    assert decoder.validate_contract(spec, model) == spec
-    for bad in [dict(spec, end2end=True), dict(spec, classes=["cat"]), dict(spec, output_layout="yolo_end2end")]:
-        with pytest.raises(ValueError):
-            decoder.validate_contract(bad, model)
-    with pytest.raises(ValueError, match="class dimension"):
-        decoder.decode([np.zeros((1, 6, 8400))], LetterboxInfo(1, 0, 0, 320, 320), spec, 0.35, 0.45)
-    with pytest.raises(ValueError, match="non-finite"):
-        decoder.decode([np.full((1, 5, 8400), np.nan)], LetterboxInfo(1, 0, 0, 320, 320), spec, 0.35, 0.45)
-
-
-@pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int16, np.int32, np.bool_])
-def test_quantized_integer_outputs_are_rejected(dtype):
-    with pytest.raises(ValueError, match="dequantized floating-point"):
-        decoder.decode([np.zeros((1, 5, 8400), dtype=dtype)],
-                       LetterboxInfo(1, 0, 0, 320, 320), contract(), 0.35, 0.45)
 
 
 class DiagnosticClient(FakeClient):
@@ -615,7 +568,7 @@ def test_upload_thread_connects_and_heartbeats_while_no_frames_arrive(tmp_path, 
     monkeypatch.setenv('APPMGR_APPDATA_DIR', str(tmp_path))
     client = DiagnosticClient()
     monkeypatch.setattr(capture, 'EdgeClient', lambda *args: client)
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     app.setup({'server_url': 'https://controlled.example', 'device_token': 'cvsprout_device_controlled'})
 
     def no_frames():
@@ -645,7 +598,7 @@ def test_real_kit_start_and_frame_iteration_capture_cpu_originals(tmp_path, monk
     monkeypatch.setenv('APPMGR_APPDATA_DIR', str(tmp_path))
     client = DiagnosticClient()
     monkeypatch.setattr(capture, 'EdgeClient', lambda *args: client)
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     opened = []
     pixels = np.zeros((40, 80, 3), dtype=np.uint8)
     pixels[:, :, 0] = 255
@@ -666,10 +619,10 @@ def test_real_kit_start_and_frame_iteration_capture_cpu_originals(tmp_path, monk
 
     source = Source()
     monkeypatch.setattr(kit_app, 'open_frame_source', lambda **kw: opened.append(kw) or source)
-    manifest = json.loads((ROOT / 'apps/cvsprout-capture/manifest.json').read_text())
+    manifest = json.loads((ROOT / 'apps/cvsprout-link/manifest.json').read_text())
     try:
         app.start(sink=StdoutSink(), manifest=manifest,
-                  app_dir=str(ROOT / 'apps/cvsprout-capture'), verbose=False,
+                  app_dir=str(ROOT / 'apps/cvsprout-link'), verbose=False,
                   config={'server_url': 'https://controlled.example', 'device_token': 'cvsprout_device_controlled',
                           'max_session_images': 1})
         app.run()  # real Kit warm-up, iteration and emit, only camera backend controlled
@@ -705,7 +658,7 @@ def test_encoding_failure_is_visible_and_does_not_kill_uploader(tmp_path, monkey
     monkeypatch.setenv('APPMGR_APPDATA_DIR', str(tmp_path))
     client = DiagnosticClient()
     monkeypatch.setattr(capture, 'EdgeClient', lambda *args: client)
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     app.setup({'server_url': 'https://controlled.example', 'device_token': 'cvsprout_device_controlled'})
 
     def bad_encode(*args):
@@ -767,7 +720,7 @@ def test_heartbeat_auth_failure_immediately_expires_capture_lease(tmp_path, erro
 def test_hung_uploader_has_one_shutdown_budget_across_repeated_finish(monkeypatch):
     now = [100.0]
     monkeypatch.setattr(capture, 'time', SimpleNamespace(monotonic=lambda: now[0]))
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     waits = []
 
     class HungWorker:
@@ -810,7 +763,7 @@ def test_terminal_heartbeat_runs_only_in_upload_worker(tmp_path, monkeypatch):
 
     client.heartbeat = heartbeat
     monkeypatch.setattr(capture, 'EdgeClient', lambda *args: client)
-    app = capture.CVSproutCaptureApp()
+    app = capture.CVSproutLinkApp()
     app.setup({'server_url': 'https://controlled.example', 'device_token': 'cvsprout_device_controlled'})
 
     def no_frames():

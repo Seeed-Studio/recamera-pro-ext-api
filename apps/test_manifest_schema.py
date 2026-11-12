@@ -51,8 +51,10 @@ class ManifestSchemaShapeTests(unittest.TestCase):
         """Examples must work after install without a front-end asset rebuild."""
         for path in _MANIFESTS:
             app_dir = os.path.dirname(path)
-            app_id = os.path.basename(app_dir)
             manifest = _load(path)
+            # Source directories can be renamed without changing the installed
+            # App identity or its catalog thumbnail URL.
+            app_id = manifest["id"]
             with self.subTest(app=app_id):
                 if app_id == "inference-rv1126b":
                     self.assertEqual(manifest.get("icon"), {

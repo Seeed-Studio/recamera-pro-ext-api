@@ -6,6 +6,8 @@
 
 1.1.1 将展示名称由 CVSprout Connector 更新为 **CVSprout Link / CVSprout 设备连接**，同时更新图标和中英文说明。应用 ID 仍为 `cvsprout-capture`，原有采集版本及 Connector 1.1.0 均沿用原升级路径、配置和数据目录。
 
+1.1.2 将源码目录统一为 `apps/cvsprout-link/`，入口类为 `CVSproutLinkApp`。应用 ID 和安装包前缀继续使用 `cvsprout-capture`，以保留已有安装的升级、配置和数据关联。手动发布时填写源码目录名 `cvsprout-link`；安装包由 manifest 生成，例如 `cvsprout-capture-1.1.2-arm64.tar.gz`。
+
 ## 使用
 
 1. 在 CVSprout 的设备页面创建一个绑定项目的设备，复制只显示一次的设备令牌。
@@ -86,8 +88,8 @@ Python 核心标准库负责 HTTP 和文件队列，不使用 SQLite；`kit`、`
 在开发主机使用 ImageMagick 从源稿导出 512×512 PNG：
 
 ```sh
-convert -background white -density 384 apps/cvsprout-capture/icon.svg \
-  -resize 512x512 -strip PNG24:apps/cvsprout-capture/icon.png
+convert -background white -density 384 apps/cvsprout-link/icon.svg \
+  -resize 512x512 -strip PNG24:apps/cvsprout-link/icon.png
 ```
 
 发布前检查 24、32、48 像素下的辨识度。安装包只包含 `icon.png`，通过 `package.exclude` 排除矢量源稿；PNG 须小于 1 MiB。官方发布工具默认从包内图标生成商店缩略图，无需另传不同版本的图片。更换图标后须递增 `release.sequence` 并重新打包。

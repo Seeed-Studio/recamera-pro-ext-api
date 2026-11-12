@@ -33,7 +33,7 @@ def encode_original(frame, quality):
     return result.tobytes()
 
 
-class CVSproutCaptureApp(App):
+class CVSproutLinkApp(App):
     id = "cvsprout-capture"
     name = "CVSprout Link"
     owns_loop = True
@@ -171,4 +171,4 @@ class CVSproutCaptureApp(App):
 
 
 if __name__ == "__main__":
-    run_app(CVSproutCaptureApp())
+    run_app(CVSproutLinkApp())

@@ -24,7 +24,7 @@ import numpy as np
 
 
 def exercise(backend_root, backend_python):
-    source = Path(__file__).resolve().parents[2] / "apps/cvsprout-capture/transport.py"
+    source = Path(__file__).resolve().parents[2] / "apps/cvsprout-link/transport.py"
     spec = importlib.util.spec_from_file_location("cvsprout_acceptance_transport", source)
     transport = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(transport)

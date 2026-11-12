@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_SPOOL_BYTES = 512 * 1024 * 1024
 MAX_SPOOL_IMAGES = 10000

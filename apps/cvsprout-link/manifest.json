@@ -84,9 +84,9 @@
   "id": "cvsprout-capture",
   "name": "CVSprout Link",
   "name_zh": "CVSprout 设备连接",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "release": {
-    "sequence": 5,
+    "sequence": 6,
     "channel": "stable"
   },
   "type": "self-hosted",
