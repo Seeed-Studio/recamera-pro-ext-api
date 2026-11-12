@@ -42,7 +42,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _MARKET = os.path.dirname(_HERE)
 if _MARKET not in sys.path:
     sys.path.insert(0, _MARKET)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 from appmgr import manifest as manifest_contract  # noqa: E402
+from runtime_checks import validate_runtime_payload  # noqa: E402
 
 # Packaging collects the WHOLE app directory tree, not a fixed whitelist.
 #
@@ -226,6 +229,11 @@ def build(app_dir: str, out_dir: str, *, payload_roots=()) -> str:
         manifest_contract.validate_package_files(manifest, records)
     except manifest_contract.ManifestValidationError as e:
         sys.exit(f"error: invalid package payload: {e}")
+
+    try:
+        validate_runtime_payload(manifest, lambda name: open(physical[name], "rb"))
+    except ValueError as e:
+        sys.exit(f"error: invalid runtime payload: {e}")
 
     virtual_members = {}
     if schema_version == manifest_contract.MANIFEST_VERSION:
