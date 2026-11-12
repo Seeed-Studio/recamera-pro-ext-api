@@ -235,6 +235,20 @@ adb shell "/oem/usr/etc/init.d/S94appmgr status"
 adb shell "/oem/usr/etc/init.d/S94appmgr restart"
 ```
 
+安装应用时，AppMgr 为每个版本创建独立 Python 环境，再导入 manifest 的
+`python.imports` 验证依赖。探针默认超时为 **180 秒**，避免工作流等依赖较多的应用
+在 RV1126B 首次加载或设备繁忙时触发原来的 60 秒超时；超时仍会终止探针并清理候选环境。
+可在启动 AppMgr 时用 `APPMGR_ENV_PROBE_TIMEOUT` 覆盖（单位：秒），例如：
+
+```sh
+adb shell "APPMGR_ENV_PROBE_TIMEOUT=180 /oem/usr/etc/init.d/S94appmgr restart"
+```
+
+重启 AppMgr 会按原有启动意图恢复受管应用。上述命令的环境变量只对本次服务进程有效；
+设备重启或重新启动服务后恢复固件默认值。旧固件需要升级 AppMgr 才能持久获得新的默认值，
+单独更新应用包不会改变这个超时。Python 环境创建的默认超时仍为 300 秒
+（`APPMGR_ENV_BUILD_TIMEOUT`）。
+
 升级时必须同时提供匹配的 rootfs 和 OEM 内容。`market/deploy/appmgr-restore.sh`
 仅作为旧运维入口兼容：验证固件内两个 OEM 脚本存在后按序启动，不再复制旧 launcher。
 若新固件缺少服务，需安装匹配固件，不能用历史 `/userdata` 代码补齐。

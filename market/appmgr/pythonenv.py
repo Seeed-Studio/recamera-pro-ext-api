@@ -41,7 +41,8 @@ MAX_WHEEL_MEMBERS = int(os.environ.get("APPMGR_MAX_WHEEL_MEMBERS", "8192"))
 MAX_ENV_UNPACKED_BYTES = int(os.environ.get(
     "APPMGR_MAX_ENV_UNPACKED_BYTES", str(512 * 1024 * 1024)))
 ENV_BUILD_TIMEOUT = int(os.environ.get("APPMGR_ENV_BUILD_TIMEOUT", "300"))
-ENV_PROBE_TIMEOUT = int(os.environ.get("APPMGR_ENV_PROBE_TIMEOUT", "60"))
+# Large workflow imports can exceed a minute on a busy RV1126B during install.
+ENV_PROBE_TIMEOUT = int(os.environ.get("APPMGR_ENV_PROBE_TIMEOUT", "180"))
 
 _RELEASE_ID_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,127}")
 _PLATFORM_PROJECTS = frozenset((
