@@ -30,4 +30,4 @@ jobs:
         run: uv sync
 
       - name: Run Apps and Manifest Tests
-        run: uv run pytest apps/ services/ tools/ market/appmgr/tests/
+        run: uv run pytest apps/ services/ tools/ market/appmgr/tests/ market/packaging/

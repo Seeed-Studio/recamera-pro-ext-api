@@ -38,6 +38,7 @@ import argparse
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -53,9 +54,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _MARKET = os.path.dirname(_HERE)
 if _MARKET not in sys.path:
     sys.path.insert(0, _MARKET)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from appmgr import manifest as contract  # noqa: E402  (stdlib-only validator)
 from appmgr import paths as appmgr_paths  # noqa: E402
+from runtime_checks import validate_runtime_payload  # noqa: E402
 
 
 def _load(name: str, path: str):
@@ -232,6 +236,11 @@ def inspect_package(path: str) -> dict:
             contract.verify_release_metadata(manifest, lock, read(contract.BOM_PATH), records)
         except (ValueError, contract.ManifestValidationError) as e:
             raise PublishError(f"BOM/release lock check failed: {e}")
+
+        try:
+            validate_runtime_payload(manifest, lambda name: io.BytesIO(read(name)))
+        except ValueError as e:
+            raise PublishError(f"Runtime payload check failed: {e}")
 
         icon = None
         if "icon" in manifest:

@@ -20,6 +20,11 @@ Resolution order per missing file:
 Integrity:
 - Compares SHA-256 against manifest `sha256` if declared.
 - Idempotent: skips files that already exist locally with matching SHA-256.
+
+An optional manifest `x-asset-bundle: {url, sha256, size}` selects one pinned
+HTTPS tar.gz instead of per-file lookups. Only declared bundled assets are
+copied, after verifying both the archive and every selected file. This keeps
+the standard fetch/build/publish sequence usable for multi-wheel applications.
 """
 from __future__ import annotations
 
@@ -28,9 +33,13 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.parse
 import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +47,7 @@ _MARKET = os.path.dirname(_HERE)
 if _MARKET not in sys.path:
     sys.path.insert(0, _MARKET)
 from appmgr import manifest as manifest_contract
+from appmgr import paths
 
 OSS_DEFAULT_BASE = "oss://sensecraft-statics/solution-app/recamera_pro/models"
 CDN_DEFAULT_BASE = "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/models"
@@ -53,20 +63,112 @@ def compute_sha256(path: str) -> str:
 
 def _safe_dest_path(app_dir: str, rel_path: str) -> str:
     """Validate relative path does not escape the application directory."""
-    if os.path.isabs(rel_path) or ".." in rel_path.split("/"):
+    if (not rel_path or os.path.isabs(rel_path) or "\\" in rel_path
+            or any(part in ("", ".", "..") for part in rel_path.split("/"))):
         raise ValueError(f"Path traversal detected in path {rel_path!r}")
     dest = os.path.abspath(os.path.join(app_dir, rel_path))
     app_dir_abs = os.path.abspath(app_dir)
+    if os.path.islink(app_dir_abs):
+        raise ValueError(f"Application directory must not be a symlink: {app_dir_abs}")
     if not (dest == app_dir_abs or dest.startswith(app_dir_abs + os.sep)):
         raise ValueError(f"Destination {dest} escapes application directory {app_dir_abs}")
     current = app_dir_abs
     for component in rel_path.split("/"):
         current = os.path.join(current, component)
         if os.path.islink(current):
-            resolved = os.path.realpath(current)
-            if not resolved.startswith(app_dir_abs + os.sep):
-                raise ValueError(f"Symlink {current} -> {resolved} escapes application directory")
+            raise ValueError(f"Asset path must not use symlinks: {current}")
     return dest
+
+
+def _matches_asset(path: str, item: dict) -> bool:
+    return (os.path.isfile(path)
+            and (item.get("size") is None or os.path.getsize(path) == item["size"])
+            and (not item.get("sha256") or compute_sha256(path) == item["sha256"]))
+
+
+def _fetch_asset_bundle(app_dir: str, bundle: dict, declared: dict) -> list[str]:
+    """Fill declared assets from one pinned archive, never overlay application code.
+
+    A prior published package can act as an immutable asset cache. Its manifest,
+    entry and release metadata are not copied unless explicitly declared as
+    assets by the current manifest. No archive member is extracted by tarfile.
+    """
+    if not isinstance(bundle, dict) or set(bundle) != {"url", "sha256", "size"}:
+        raise ValueError("x-asset-bundle requires url, sha256 and size")
+    if not isinstance(bundle["url"], str):
+        raise ValueError("x-asset-bundle.url must be an HTTPS asset URL")
+    url = urllib.parse.urlsplit(bundle["url"])
+    if (url.scheme != "https" or not url.hostname or url.username or url.password
+            or url.fragment):
+        raise ValueError("x-asset-bundle.url must be an HTTPS asset URL")
+    if not isinstance(bundle["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", bundle["sha256"]):
+        raise ValueError("x-asset-bundle.sha256 must pin the archive digest")
+    if type(bundle["size"]) is not int or not 0 < bundle["size"] <= paths.MAX_PKG_BYTES:
+        raise ValueError("x-asset-bundle.size exceeds the package limit")
+
+    missing = {}
+    for relative, item in declared.items():
+        if not item.get("sha256") or not item.get("size"):
+            raise ValueError(f"Bundle asset {relative} requires sha256 and size")
+        destination = _safe_dest_path(app_dir, relative)
+        if not _matches_asset(destination, item):
+            missing[relative] = item
+    if not missing:
+        print("  All pinned bundle assets are cached and verified")
+        return []
+
+    # Keep temporary files on the destination filesystem for atomic replacement.
+    with tempfile.TemporaryDirectory(prefix=".asset-bundle-", dir=app_dir) as temporary:
+        archive_path = os.path.join(temporary, "bundle.tar.gz")
+        print(f"  -> Downloading pinned asset bundle: {bundle['url']}")
+        request = urllib.request.Request(bundle["url"], headers={"User-Agent": "recamera-fetch-assets/1.0"})
+        digest, received = hashlib.sha256(), 0
+        with urllib.request.urlopen(request, timeout=60) as response, open(archive_path, "wb") as output:
+            if urllib.parse.urlsplit(response.geturl()).scheme != "https":
+                raise ValueError("Asset bundle redirected outside HTTPS")
+            for chunk in iter(lambda: response.read(1 << 20), b""):
+                received += len(chunk)
+                if received > bundle["size"]:
+                    raise ValueError("Asset bundle exceeds declared size")
+                digest.update(chunk)
+                output.write(chunk)
+        if received != bundle["size"] or digest.hexdigest() != bundle["sha256"]:
+            raise ValueError("Asset bundle digest/size mismatch")
+
+        prepared, seen, expanded = {}, set(), 0
+        with tarfile.open(archive_path, "r|gz") as archive:
+            for member in archive:
+                relative = member.name.rstrip("/")
+                manifest_contract.validate_package_member_path(relative)
+                if relative in seen or not (member.isfile() or member.isdir()) or member.mode & 0o7000:
+                    raise ValueError(f"Invalid or duplicate asset bundle member: {member.name}")
+                seen.add(relative)
+                expanded += member.size
+                if len(seen) > paths.MAX_MEMBERS or expanded > paths.MAX_UNPACKED_BYTES:
+                    raise ValueError("Asset bundle exceeds member/unpacked limits")
+                if relative not in missing:
+                    continue
+                item = missing[relative]
+                if not member.isfile() or member.size != item["size"]:
+                    raise ValueError(f"Asset bundle member size/type mismatch: {relative}")
+                candidate = os.path.join(temporary, str(len(prepared)))
+                with archive.extractfile(member) as source, open(candidate, "wb") as output:
+                    shutil.copyfileobj(source, output, 1 << 20)
+                if not _matches_asset(candidate, item):
+                    raise ValueError(f"Asset bundle member digest/size mismatch: {relative}")
+                prepared[relative] = candidate
+        absent = sorted(set(missing) - set(prepared))
+        if absent:
+            raise ValueError(f"Declared assets missing from bundle: {absent}")
+        downloaded = []
+        # Verify the whole set before publishing any asset into the app tree.
+        for relative, candidate in sorted(prepared.items()):
+            destination = _safe_dest_path(app_dir, relative)
+            os.makedirs(os.path.dirname(destination), exist_ok=True)
+            os.replace(candidate, destination)
+            downloaded.append(destination)
+        print(f"  Verified and staged {len(downloaded)} declared assets")
+        return downloaded
 
 
 def _has_ossutil() -> bool:
@@ -122,6 +224,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
             declared.append({
                 "rel_path": a["file"],
                 "sha256": a.get("sha256"),
+                "size": a.get("size"),
                 "x_url": a.get("x-url"),
                 "kind": "artifact",
             })
@@ -132,6 +235,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
                 declared.append({
                     "rel_path": model_file,
                     "sha256": m.get("sha256"),
+                    "size": m.get("size"),
                     "x_url": m.get("x-url"),
                     "kind": "model",
                 })
@@ -140,6 +244,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
             declared.append({
                 "rel_path": w["file"],
                 "sha256": w.get("sha256"),
+                "size": w.get("size"),
                 "x_url": w.get("x-url"),
                 "kind": "wheel",
             })
@@ -151,6 +256,11 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
         if rp not in unique:
             unique[rp] = dict(item)
         else:
+            for field in ("sha256", "size"):
+                if item.get(field) is not None:
+                    if unique[rp].get(field) not in (None, item[field]):
+                        raise ValueError(f"Conflicting {field} for asset {rp}")
+                    unique[rp][field] = item[field]
             if item.get("sha256") and not unique[rp].get("sha256"):
                 unique[rp]["sha256"] = item["sha256"]
             if item.get("x_url") and not unique[rp].get("x_url"):
@@ -158,6 +268,9 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
 
     downloaded_files = []
     print(f"[{app_id}] Checking {len(unique)} declared bundled assets...")
+
+    if "x-asset-bundle" in mf:
+        return _fetch_asset_bundle(app_dir, mf["x-asset-bundle"], unique)
 
     for rel_path, item in sorted(unique.items()):
         dest = _safe_dest_path(app_dir, rel_path)
@@ -168,7 +281,7 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
         # Check if already cached with valid sha256
         if os.path.isfile(dest):
             if expected_sha:
-                if compute_sha256(dest) == expected_sha:
+                if _matches_asset(dest, item):
                     print(f"  ✓ Cached: {rel_path}")
                     continue
                 else:
@@ -219,6 +332,9 @@ def fetch_app_assets(app_dir: str, oss_base: str = OSS_DEFAULT_BASE, cdn_base: s
             )
 
         # Verify sha256
+        if item.get("size") is not None and os.path.getsize(dest) != item["size"]:
+            os.remove(dest)
+            raise ValueError(f"Size verification failed for {rel_path} in {app_id}")
         if expected_sha:
             actual_sha = compute_sha256(dest)
             if actual_sha != expected_sha:

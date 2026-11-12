@@ -77,6 +77,29 @@ apps/<app_id>/
   python3 market/packaging/fetch_assets.py apps/<app_id>
   ```
 
+多 wheel 应用也使用同一下载、打包、发布流程。先在 `python.wheels` 和 `artifacts`
+中完整声明每个文件的相对路径、SHA-256 和大小；不要提交等待专用脚本填充的空模板。
+如果这些资源集中存放在一个 tar.gz 中，可以在 manifest 顶层声明：
+
+```json
+"x-asset-bundle": {
+  "url": "https://example.com/immutable-runtime-assets.tar.gz",
+  "sha256": "<归档文件的完整 SHA-256>",
+  "size": 123456
+}
+```
+
+声明该字段后，`fetch_assets.py` 从固定 HTTPS 归档获取所有缺失或损坏的资源，
+不再逐文件查找模型池。归档中的路径必须与当前 manifest 的声明一致，必须提供
+每个资源的哈希和大小；程序先校验整个归档及全部待写文件，再写入应用目录。
+未声明的文件不会复制，旧归档的入口、manifest 和发布元数据不会覆盖当前源码。
+匹配哈希的本地缓存无需再次下载。删除该归档会使干净环境无法构建，资源发布方应
+保留固定 URL 与内容。
+
+标准 `build.py` 与 `publish_app.py` 还会静态检查 `python.imports` 对应模块是否由
+wheel 或已知固件运行时提供，并检查 scheduled NPU 应用的 RKNN artifact。
+检查不执行应用代码，不能替代目标设备上的真实导入和运行验证。
+
 ### 4. 本地打包与设备端测试（Owner Key 信任机制）
 设备端 AppMgr 默认采用签名验证机制。为了实现本地开发与旁加载（Sideloading），推荐使用 **Owner Key（开发者所有者密钥）** 进行本地签名与安装：
 

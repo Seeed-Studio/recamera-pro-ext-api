@@ -206,6 +206,9 @@ def build_app(sdk_root, wheelhouse, model_root, out, *, engine_root, source_lock
     template = json.loads(
         (Path(__file__).parent / "manifest.json").read_text()
     )
+    # This maintainer-only source build selects new assets explicitly. Do not
+    # claim that they can be recovered from the standard release's old bundle.
+    template.pop("x-asset-bundle", None)
     template["python"]["wheels"] = [wheel_record(path) for path in wheels]
     environment_bytes = validate_wheels(sdk, wheels, template["python"]["wheels"])
     template["models"] = []
