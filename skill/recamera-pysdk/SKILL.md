@@ -151,15 +151,20 @@ enforces the ones that can be checked offline.
   `model_dma_input = True`, and `infer(prepared)`; read the lifetime and RGB/BGR
   rules in [kit-app-patterns.md](references/kit-app-patterns.md). Keep ndarray
   input and CPU/original-pixel paths where the application needs them.
-- **Optional frontend boxes:** data-only applications need no renderer. When
-  browser overlay is requested, a Kit detector is frontend-renderable only when the
-  manifest declares `output.contract_version: 2`, `output.sink: "ws"`, a direct
+- **AI result overlay is on by default:** when an App produces recognition
+  results (detection, classification, tracking, keypoints, zones, OCR, or any
+  other inference output), declare the browser AI result overlay by default and
+  do not wait for the user to request it. A Kit result App is
+  frontend-renderable only when the manifest declares
+  `output.contract_version: 2`, `output.sink: "ws"`, a direct
   `output.fields[]` entry named `box` from `results[].box` with one consistent
   `coord` (`pixel_xyxy` or `normalized_xyxy`), and `render.schema_version: 1`
-  with `render.boxes`. Burning boxes into the RTSP/recording stream additionally
-  needs `render.stream_osd` with `default: false` plus a user opt-in. Calling
-  `self.emit(results=...)`, logging `dets=N`, or drawing with `cv2.rectangle()`
-  on an app-owned image does not put a box on the official preview. See
+  with `render.boxes`. Data-only Apps need no renderer. Burning boxes into the
+  RTSP/recording stream additionally needs `render.stream_osd` with
+  `default: false` plus a user opt-in, and remains separate from the default
+  browser overlay. Calling `self.emit(results=...)`, logging `dets=N`, or
+  drawing with `cv2.rectangle()` on an app-owned image does not put a box on
+  the official preview. See
   [result-overlay.md](references/result-overlay.md).
 - Do not open `/dev/video*`, build a competing VI/VPSS/VENC pipeline, or access
   `/var/tmp/rkipc`. Public Apps must not expose configurable or shell-based
