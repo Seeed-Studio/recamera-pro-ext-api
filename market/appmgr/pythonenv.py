@@ -28,11 +28,12 @@ from email.parser import BytesParser
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
-from . import manifest as manifest_contract, paths
+from . import durability, manifest as manifest_contract, paths
 
 
 ENV_FORMAT_VERSION = 1
 ENV_METADATA = "release-env.json"
+ENV_INTEGRITY = ".payload-integrity.json"
 CURRENT_LINK = "current"
 ROLLBACK_RECORD = "rollback.json"
 DEFAULT_BASE_PYTHON = "/usr/bin/python3"
@@ -63,6 +64,7 @@ class StagedEnvironment:
     final_dir: str
     release_lock_sha256: str
     reused: bool = False
+    integrity: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -74,16 +76,7 @@ class EnvironmentActivation:
 
 
 def _fsync_dir(path: str) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    durability.fsync_dir(path)
 
 
 def _atomic_json(path: str, value: Mapping[str, Any]) -> None:
@@ -491,7 +484,30 @@ def stage_environment(
             raise PythonEnvError(f"existing environment {final} has invalid metadata: {exc}")
         if existing != metadata:
             raise PythonEnvError(f"immutable environment collision at {final}")
-        return StagedEnvironment(app_id, release_id, None, final, lock_sha, reused=True)
+        try:
+            integrity_path = os.path.join(final, ENV_INTEGRITY)
+            if os.path.exists(integrity_path):
+                with open(integrity_path, "rb") as source:
+                    integrity = json.load(source)
+                durability.verify_tree(final, integrity)
+            else:
+                # Upgrade environments created before integrity inventories:
+                # compare expanded dependencies against authenticated wheels,
+                # never bless the existing bytes merely by hashing them.
+                wheels = _resolve_wheels(app_dir, manifest, wheelhouse_root=wheelhouse_root)
+                site = _site_packages(final)
+                if wheels:
+                    with tempfile.TemporaryDirectory(prefix=f".{release_id}.stage.verify.", dir=releases) as reference:
+                        _expand_wheels(wheels, reference)
+                        durability.verify_tree(site, durability.seal_tree(reference))
+                _probe_imports(final, list(manifest["python"]["imports"]))
+                integrity = durability.seal_tree(
+                    final, exclude=(ENV_INTEGRITY,), ignore_bytecode=True)
+                _atomic_json(integrity_path, integrity)
+        except (OSError, ValueError) as exc:
+            raise PythonEnvError(f"existing environment failed integrity verification: {exc}") from exc
+        return StagedEnvironment(app_id, release_id, None, final, lock_sha,
+                                 reused=True, integrity=integrity)
 
     wheels = _resolve_wheels(app_dir, manifest, wheelhouse_root=wheelhouse_root)
     python = base_python or os.environ.get("APPMGR_PLATFORM_PYTHON", DEFAULT_BASE_PYTHON)
@@ -507,7 +523,10 @@ def stage_environment(
         _atomic_json(os.path.join(staging, ENV_METADATA), metadata)
         _probe_imports(staging, list(manifest["python"]["imports"]))
         _harden_files(staging)
-        return StagedEnvironment(app_id, release_id, staging, final, lock_sha)
+        integrity = durability.seal_tree(staging, ignore_bytecode=True)
+        _atomic_json(os.path.join(staging, ENV_INTEGRITY), integrity)
+        return StagedEnvironment(app_id, release_id, staging, final, lock_sha,
+                                 integrity=integrity)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -516,6 +535,27 @@ def stage_environment(
 def discard_staged(candidate: StagedEnvironment) -> None:
     if candidate.staging_dir and os.path.isdir(candidate.staging_dir):
         shutil.rmtree(candidate.staging_dir, ignore_errors=True)
+
+
+def discard_damaged_release(app_id: str, release_id: str, integrity: dict) -> None:
+    release_id = _release_id({"release_id": release_id})
+    root = _app_root(app_id)
+    current = _read_current(root)
+    final = os.path.join(root, "releases", release_id)
+    if not os.path.lexists(final):
+        return
+    try:
+        durability.verify_tree(final, integrity)
+        return
+    except (OSError, ValueError) as exc:
+        if current == release_id:
+            # A same-release reinstall may share the retained environment.
+            # If that shared generation is damaged, no healthy rollback exists.
+            raise PythonEnvError("retained environment is also damaged") from exc
+    if os.path.islink(final) or not os.path.isdir(final):
+        raise PythonEnvError("damaged environment path changed identity")
+    shutil.rmtree(final)
+    _fsync_dir(os.path.dirname(final))
 
 
 def _read_current(root: str) -> str | None:

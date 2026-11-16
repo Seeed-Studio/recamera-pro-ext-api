@@ -846,7 +846,7 @@ def test_failed_install_operation_removes_single_use_upload(layout, monkeypatch)
     }
     manifest = {
         "manifest_version": 2, "id": "demo", "permissions": permissions,
-        "resources": {"claims": []},
+        "resources": {"claims": []}, "version": "1.0.0",
     }
     monkeypatch.setattr(paths, "DEVELOPER_MODE_ALLOWED", True)
     monkeypatch.setattr(server.installer, "inspect", lambda *args, **kwargs: {
@@ -2578,7 +2578,11 @@ def test_http_v1_upload_finalize_and_operations(layout, monkeypatch, legacy_risk
                 running_upgrade_confirmed=False,
                 force_reinstall_confirmed=False,
                 _enforce_v1_confirmations=False,
-                _busy_timeout=0.0):
+                _busy_timeout=0.0, _operation_binding=None):
+        assert _operation_binding["type"] == "install"
+        assert _operation_binding["app_id"] == "demo"
+        assert _operation_binding["install_target"]["version"] == "1.0.0"
+        assert _operation_binding["install_target"]["release_id"] == "demo-1"
         installs.append((package, signature, allow_unsigned,
                          expected_preflight, _busy_timeout,
                          running_upgrade_confirmed,

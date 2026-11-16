@@ -131,15 +131,21 @@ class StoreTaskManager:
         snapshot = self.snapshot(record["upload_id"]) if snapshot is None else snapshot
         operation = snapshot["operation"]
         if operation is not None:
+            target = operation.get("install_target")
+            if target is not None and (
+                    operation.get("app_id") != record["app_id"] or
+                    target.get("version") != record["version"] or
+                    target.get("package_sha256") != record["package_sha256"]):
+                raise ValueError("store task install operation identity mismatch")
             status = (operation["status"] if operation["status"] in operations.TERMINAL
                       else "installing")
-            changed = record["status"] != status or record.get("operation_id") != operation["id"]
+            error = ({"code": "storeInstallFailed", "message": operation.get("error") or "Installation failed"}
+                     if status == "failed" else None)
+            changed = (record["status"] != status or record.get("operation_id") != operation["id"] or
+                       record.get("error") != error)
             if changed:
-                record.update(status=status, operation_id=operation["id"], updated_at=time.time())
-                if status == "failed":
-                    record["error"] = {"code": "storeInstallFailed", "message": operation.get("error") or "Installation failed"}
-                elif status == "succeeded":
-                    record["error"] = None
+                record.update(status=status, operation_id=operation["id"],
+                              error=error, updated_at=time.time())
             return changed
         if record["status"] in TERMINAL:
             return False
@@ -177,6 +183,17 @@ class StoreTaskManager:
             if changed:
                 self._save()
             return [self._public(record) for record in reversed(self._records)]
+
+    def reconcile_operations(self):
+        """Persist operation outcomes before the install journal is removed.
+
+        Save even when the in-memory projection already matches: an earlier
+        fsync may have failed after _sync updated that in-memory projection.
+        """
+        with self._lock:
+            for record in self._records:
+                self._sync(record)
+            self._save()
 
     def get(self, task_id):
         with self._lock:

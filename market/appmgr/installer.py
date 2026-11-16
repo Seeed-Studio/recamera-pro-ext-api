@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from . import (config as appconfig, kitversion, manifest as manifest_contract,
+from . import (config as appconfig, durability, kitversion, manifest as manifest_contract,
                paths, pythonenv, signing)
 
 
@@ -65,24 +65,11 @@ class PreparedInstall:
     transaction_id: str | None = None
     published: bool = False
     consumed: bool = False
+    integrity: dict | None = None
 
 
 def _fsync_dir(path: str) -> None:
-    """Flush a directory entry to disk so a rename survives a power cut (健壮#16).
-
-    Best-effort: some filesystems refuse O_RDONLY fsync on a directory, and the
-    dev box's tmpfs has nothing to flush -- neither is a reason to fail an
-    install."""
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    durability.fsync_dir(path)
 
 
 def _install_transaction_path() -> str:
@@ -177,13 +164,20 @@ def load_install_transaction() -> dict | None:
 
 def begin_install_transaction(candidate: PreparedInstall, *,
                               config_snapshot: dict,
-                              lifecycle_snapshot: dict) -> dict:
+                              lifecycle_snapshot: dict,
+                              operation_binding: dict | None = None) -> dict:
     """Durably bind rollback inputs before lifecycle or filesystem mutation."""
     if not isinstance(candidate, PreparedInstall) or not candidate.staging:
         raise InstallError("invalid prepared install transaction")
     pathname = _install_transaction_path()
     if os.path.lexists(pathname):
         raise InstallError("an interrupted install transaction requires reconciliation")
+    if operation_binding is not None:
+        target = operation_binding.get("install_target") or {}
+        if (operation_binding.get("app_id") != candidate.app_id or
+                target.get("version") != candidate.manifest.get("version") or
+                target.get("release_id") != (candidate.info.get("release_lock") or {}).get("release_id")):
+            raise InstallError("prepared install does not match operation target")
     transaction_id = secrets.token_hex(16)
     value = {
         "journal_version": INSTALL_TRANSACTION_VERSION,
@@ -204,6 +198,9 @@ def begin_install_transaction(candidate: PreparedInstall, *,
             "release_id")),
         "config_snapshot": config_snapshot,
         "lifecycle_snapshot": lifecycle_snapshot,
+        "code_integrity": candidate.integrity,
+        "environment_integrity": getattr(candidate.env_candidate, "integrity", None),
+        "operation_binding": operation_binding,
     }
     try:
         value["previous_environment_release_id"] = \
@@ -224,7 +221,8 @@ def begin_install_transaction(candidate: PreparedInstall, *,
     return value
 
 
-def mark_install_transaction(candidate: PreparedInstall, phase: str) -> dict | None:
+def mark_install_transaction(candidate: PreparedInstall, phase: str, *,
+                             result: dict | None = None) -> dict | None:
     if phase not in _INSTALL_PHASES:
         raise InstallError("invalid install transaction phase %r" % phase)
     if not candidate.transaction_id:
@@ -237,6 +235,8 @@ def mark_install_transaction(candidate: PreparedInstall, phase: str) -> dict | N
         raise InstallError("install transaction phase cannot move backwards")
     value["phase"] = phase
     value["updated_at"] = time.time()
+    if result is not None:
+        value["result"] = result
     _atomic_install_transaction(value)
     return value
 
@@ -865,7 +865,8 @@ def prepare(pkg_path: str, signature: Optional[str] = None, *,
             info, allow_unsigned=allow_unsigned)
         result = PreparedInstall(
             app_id=app_id, manifest=manifest, info=info, dest=dest,
-            staging=staging, env_candidate=env_candidate)
+            staging=staging, env_candidate=env_candidate,
+            integrity=durability.seal_tree(staging))
         staging = None
         env_candidate = None
         return result
@@ -1212,6 +1213,42 @@ def validate_committed_transaction_files(transaction: dict) -> None:
             raise InstallError(
                 "committed code/environment mismatch: code=%r env=%r" % (
                     target_release, current))
+    try:
+        durability.verify_tree(paths.app_dir(app_id), transaction.get("code_integrity"))
+        if isinstance(target_release, str):
+            durability.verify_tree(
+                os.path.join(paths.venv_dir(app_id), "releases", target_release),
+                transaction.get("environment_integrity"))
+    except (OSError, ValueError) as exc:
+        raise InstallError("committed install payload verification failed: %s" % exc) from exc
+
+
+def mark_transaction_rollback(transaction: dict, error: str) -> dict:
+    """Persist rollback intent before modifying a formerly terminal candidate."""
+    current = load_install_transaction()
+    if current is None or current["transaction_id"] != transaction["transaction_id"]:
+        raise InstallError("install transaction journal identity changed")
+    current["recovery_action"] = "rollback"
+    current["recovery_error"] = error
+    _atomic_install_transaction(current)
+    return current
+
+
+def finalize_transaction_rollback_files(transaction: dict) -> None:
+    """Retire damaged candidates and flush even an already-applied rollback."""
+    integrity = transaction.get("environment_integrity")
+    release = transaction.get("target_release_id")
+    app_id = transaction["app_id"]
+    try:
+        if transaction.get("recovery_action") == "rollback" and integrity is not None and release:
+            pythonenv.discard_damaged_release(app_id, release, integrity)
+        _fsync_dir(paths.APPS_DIR)
+        root = paths.venv_dir(app_id)
+        for directory in (os.path.join(root, "releases"), root):
+            if os.path.isdir(directory):
+                _fsync_dir(directory)
+    except (OSError, ValueError, pythonenv.PythonEnvError) as exc:
+        raise InstallError("cannot finalize install rollback files: %s" % exc) from exc
 
 
 def reconcile_interrupted_installs() -> list:
