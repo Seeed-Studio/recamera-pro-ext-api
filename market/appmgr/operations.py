@@ -5,10 +5,13 @@ worker executes mutations in order; this matches appmgr's existing process-wide
 busy gate while keeping uploads/install/restart from holding an nginx request
 open.  Operation history is diagnostic state under ``APPMGR_DIR``.  Queued or
 running records found after a daemon restart are marked failed because Python
-callables cannot be reconstructed safely from a journal.
+callables cannot be reconstructed safely from a journal. The install transaction
+reconciler may subsequently replace that outcome using its verified result and
+exact operation/upload/target binding; it never replays the callback.
 """
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import os
@@ -118,9 +121,11 @@ class OperationManager:
 
     def __init__(self, journal: Optional[str] = None,
                  event_bus: Optional[EventBus] = None,
-                 queue_depth: Optional[int] = None):
+                 queue_depth: Optional[int] = None,
+                 on_terminal: Optional[Callable[[dict], None]] = None):
         self.journal = journal or paths.operation_state_file()
         self.events = event_bus or EventBus()
+        self.on_terminal = on_terminal
         self._lock = threading.RLock()
         self._max_pending = max(
             1, int(paths.MAX_PENDING_OPERATIONS if queue_depth is None
@@ -141,6 +146,7 @@ class OperationManager:
                     "updated_at": now,
                     "error": "appmgr restarted before the operation completed",
                     "message": "interrupted by appmgr restart",
+                    "interrupted_by_restart": True,
                     "progress": {"percent": 100},
                 })
                 interrupted = True
@@ -193,7 +199,8 @@ class OperationManager:
     def submit(self, kind: str, app_id: Optional[str],
                callback: Callable[[], object], *,
                upload_id: Optional[str] = None,
-               request_fingerprint: Optional[str] = None) -> dict:
+               request_fingerprint: Optional[str] = None,
+               install_target: Optional[dict] = None) -> dict:
         if upload_id is not None and (
                 not isinstance(upload_id, str)
                 or _UPLOAD_ID.fullmatch(upload_id) is None):
@@ -220,6 +227,11 @@ class OperationManager:
             record["upload_id"] = upload_id
         if request_fingerprint is not None:
             record["request_fingerprint"] = request_fingerprint
+        if install_target is not None:
+            if kind != "install" or upload_id is None or request_fingerprint is None:
+                raise ValueError("install_target requires a correlated install operation")
+            record["install_target"] = dict(install_target)
+            self.install_binding(record)
         with self._lock:
             if self._closed:
                 raise OperationBusyError("operation manager is closed")
@@ -234,7 +246,8 @@ class OperationManager:
                         raise OperationBusyError(
                             "upload_id is already bound to a different operation")
                     if (existing.get("request_fingerprint")
-                            != request_fingerprint):
+                            != request_fingerprint or
+                            existing.get("install_target") != install_target):
                         raise OperationBusyError(
                             "upload_id finalize request does not match the "
                             "original operation")
@@ -337,6 +350,78 @@ class OperationManager:
                                  progress={"percent": 100})
                 except Exception:
                     pass
+            if self.on_terminal is not None:
+                try:
+                    record = next(item for item in self.list() if item["id"] == operation_id)
+                    self.on_terminal(record)
+                except Exception:
+                    # The install journal remains the recovery authority if
+                    # persisting its result/acknowledgement fails.
+                    pass
+
+    @staticmethod
+    def install_binding(record: dict) -> dict:
+        fields = ("id", "type", "app_id", "upload_id", "request_fingerprint", "install_target")
+        if (not isinstance(record, dict) or record.get("type") != "install" or
+                any(record.get(field) is None for field in fields)):
+            raise ValueError("install operation has no durable correlation")
+        target = record["install_target"]
+        if (not all(isinstance(record[field], str) for field in fields[:-1]) or
+                not paths.valid_app_id(record["app_id"]) or
+                _UPLOAD_ID.fullmatch(record["id"]) is None or
+                _UPLOAD_ID.fullmatch(record["upload_id"]) is None or
+                _REQUEST_FINGERPRINT.fullmatch(record["request_fingerprint"]) is None or
+                not isinstance(target, dict) or
+                not isinstance(target.get("version"), str) or
+                not isinstance(target.get("release_id"), str) or
+                not isinstance(target.get("package_sha256"), str) or
+                _REQUEST_FINGERPRINT.fullmatch(target["package_sha256"]) is None):
+            raise ValueError("invalid install operation identity")
+        return {field: copy.deepcopy(record[field]) for field in fields}
+
+    def reconcile_install(self, transaction: dict, *, committed: bool) -> dict:
+        """Use only an exact transaction binding to repair an install result.
+
+        The caller verifies the published payload or completes rollback first.
+        A transaction is authoritative even if a post-commit callback failed.
+        """
+        binding = transaction.get("operation_binding")
+        if self.install_binding(binding) != binding:
+            raise ValueError("invalid install operation binding")
+        target = binding["install_target"]
+        if (binding["app_id"] != transaction.get("app_id") or
+                target.get("version") != transaction.get("target_version") or
+                target.get("release_id") != transaction.get("target_release_id")):
+            raise ValueError("install transaction target does not match operation")
+        with self._lock:
+            record = next((item for item in self._records if item.get("id") == binding["id"]), None)
+            if record is None or self.install_binding(record) != binding:
+                raise ValueError("install transaction operation identity mismatch")
+            result = transaction.get("result") if committed else None
+            if committed and (not isinstance(result, dict) or
+                              result.get("id") != binding["app_id"] or
+                              result.get("version") != target["version"] or
+                              result.get("installed") is not True):
+                raise ValueError("committed install transaction has invalid result")
+            previous = dict(record)
+            record.update(
+                status="succeeded" if committed else "failed", result=result,
+                error=None if committed else transaction.get("recovery_error", "Installation interrupted; rolled back"),
+                message="completed" if committed else "interrupted installation rolled back",
+                interrupted_by_restart=False, progress={"percent": 100},
+                updated_at=time.time(), finished_at=record.get("finished_at") or time.time())
+            try:
+                self._save()
+            except Exception:
+                record.clear()
+                record.update(previous)
+                raise
+            result_record = dict(record)
+        try:
+            self.events.publish("operation", operation=result_record)
+        except Exception:
+            pass
+        return result_record
 
     def list(self) -> list[dict]:
         with self._lock:

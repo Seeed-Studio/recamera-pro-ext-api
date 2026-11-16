@@ -684,7 +684,8 @@ def _operation_manager() -> appoperations.OperationManager:
                 or _operation_manager_layout != layout):
             if _operation_manager_instance is not None:
                 _operation_manager_instance.close()
-            _operation_manager_instance = appoperations.OperationManager(layout)
+            _operation_manager_instance = appoperations.OperationManager(
+                layout, on_terminal=_finish_install_operation)
             _operation_manager_layout = layout
         return _operation_manager_instance
 
@@ -1720,7 +1721,8 @@ def do_install(pkg_path: str, signature: str = None, *,
                running_upgrade_confirmed: bool = False,
                force_reinstall_confirmed: bool = False,
                _enforce_v1_confirmations: bool = False,
-               _busy_timeout: float = 0.0) -> dict:
+               _busy_timeout: float = 0.0,
+               _operation_binding: dict = None) -> dict:
     """Install (or UPGRADE) an app as a transaction (健壮#15).
 
     An upgrade of the running app is the dangerous case: installer.install()
@@ -1829,7 +1831,8 @@ def do_install(pkg_path: str, signature: str = None, *,
 
             installer.begin_install_transaction(
                 candidate, config_snapshot=config_snapshot,
-                lifecycle_snapshot=prior_lifecycle)
+                lifecycle_snapshot=prior_lifecycle,
+                operation_binding=_operation_binding)
 
             if must_stop:
                 try:
@@ -1974,9 +1977,20 @@ def do_install(pkg_path: str, signature: str = None, *,
                     restarted = True
                     if was_active:
                         state.set_active(app_id, manifest.get("version"))
-                    installer.mark_install_transaction(candidate, "ready")
+                install_result = {
+                    "id": app_id, "version": manifest.get("version"),
+                    "installed": True, "restarted": restarted,
+                    "auto_started": restarted,
+                    "requires_manual_start": unsigned_install, "signature": sig}
+                installer.mark_install_transaction(candidate, "ready", result=install_result)
                 installer.mark_install_transaction(candidate, "committed")
             except Exception as exc:
+                transaction = installer.load_install_transaction()
+                if transaction is not None and transaction["phase"] in ("ready", "committed"):
+                    # A journal replace can succeed before its fsync fails.
+                    # Record rollback intent before undoing a terminal phase,
+                    # so a second restart cannot mistake it for a valid commit.
+                    installer.mark_transaction_rollback(transaction, str(exc))
                 if pre_installed:
                     try:
                         restored = _rollback_upgrade(
@@ -2027,7 +2041,8 @@ def do_install(pkg_path: str, signature: str = None, *,
                 cache_clear()
                 raise
 
-            installer.clear_install_transaction(candidate)
+            if _operation_binding is None:
+                installer.clear_install_transaction(candidate)
             if pre_installed:
                 # Upgrade step 2a: the package transaction committed.
                 try:
@@ -2064,11 +2079,7 @@ def do_install(pkg_path: str, signature: str = None, *,
                    channel=(expected_preflight or {}).get("channel"),
                    requires_manual_start=unsigned_install)
             _refresh_result_manifest(app_id, manifest)
-            return {"id": app_id, "version": manifest.get("version"),
-                    "installed": True, "restarted": restarted,
-                    "auto_started": restarted,
-                    "requires_manual_start": unsigned_install,
-                    "signature": sig}
+            return install_result
         except BaseException:
             if prior_browser_overlay is not None:
                 # Keep revisions monotonic even when restoring an old intent.
@@ -3758,7 +3769,8 @@ def do_v1_install(body: dict) -> dict:
                     force_reinstall_confirmed=(
                         body.get("force_reinstall_confirmed") is True),
                     _enforce_v1_confirmations=True,
-                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC)
+                    _busy_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC,
+                    _operation_binding=manager.install_binding(manager.for_upload(upload_id)))
             except Exception as exc:
                 try:
                     appuploads.update(upload_id, status="failed", error=str(exc))
@@ -3784,7 +3796,10 @@ def do_v1_install(body: dict) -> dict:
         try:
             operation = manager.submit(
                 "install", app_id, install_job, upload_id=upload_id,
-                request_fingerprint=request_fingerprint)
+                request_fingerprint=request_fingerprint,
+                install_target={"version": manifest.get("version"),
+                                "release_id": preflight.get("release_id"),
+                                "package_sha256": upload.get("sha256")})
         except Exception as submit_error:
             # OperationManager retains a terminal upload binding if queue
             # admission became uncertain. Such bytes are no longer reusable;
@@ -4934,6 +4949,32 @@ def _reconcile_startup_state() -> dict:
     return result
 
 
+def _reconcile_install_result(transaction: dict, *, committed: bool) -> None:
+    if transaction.get("operation_binding") is None:
+        return  # Synchronous/legacy installs have no async operation.
+    _operation_manager().reconcile_install(transaction, committed=committed)
+    # The store derives its outcome from the exact upload/operation binding.
+    # Persist that projection before acknowledging the transaction as well.
+    _store_manager().reconcile_operations()
+
+
+def _finish_install_operation(record: dict) -> None:
+    if record.get("type") != "install":
+        return
+    with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
+        transaction = installer.load_install_transaction()
+        if (transaction is None or (transaction.get("operation_binding") or {}).get("id") != record["id"] or
+                transaction["phase"] not in ("ready", "committed") or
+                transaction.get("recovery_action") == "rollback"):
+            return
+        if record.get("status") != "succeeded":
+            # A callback may fail during rollback or in post-commit reporting.
+            # Only intact committed payloads can override that failed outcome.
+            installer.validate_committed_transaction_files(transaction)
+        _reconcile_install_result(transaction, committed=True)
+        installer.clear_install_transaction(transaction_id=transaction["transaction_id"])
+
+
 def _reconcile_install_transaction() -> Optional[dict]:
     """Finish or roll back a power-interrupted code/env install transaction."""
     with busy_gate(wait_timeout=paths.V1_OPERATION_BUSY_TIMEOUT_SEC):
@@ -4942,12 +4983,17 @@ def _reconcile_install_transaction() -> Optional[dict]:
             return None
         app_id = transaction["app_id"]
         phase = transaction["phase"]
-        if phase in ("ready", "committed"):
-            installer.validate_committed_transaction_files(transaction)
-            installer.clear_install_transaction(
-                transaction_id=transaction["transaction_id"])
-            cache_clear()
-            return {"app_id": app_id, "phase": phase, "action": "committed"}
+        if phase in ("ready", "committed") and transaction.get("recovery_action") != "rollback":
+            try:
+                installer.validate_committed_transaction_files(transaction)
+            except installer.InstallError as exc:
+                transaction = installer.mark_transaction_rollback(transaction, str(exc))
+            else:
+                _reconcile_install_result(transaction, committed=True)
+                installer.clear_install_transaction(
+                    transaction_id=transaction["transaction_id"])
+                cache_clear()
+                return {"app_id": app_id, "phase": phase, "action": "committed"}
 
         rec = state.get_app(app_id) or {}
         running_pid = supervisor.is_running(app_id)
@@ -4976,8 +5022,10 @@ def _reconcile_install_transaction() -> Optional[dict]:
                 "interrupted install teardown remains incomplete: %s" % app_id)
 
         installer.rollback_install_transaction_files(transaction)
+        installer.finalize_transaction_rollback_files(transaction)
         appconfig.restore_upgrade_config(transaction.get("config_snapshot"))
         state.restore_app_snapshot(transaction.get("lifecycle_snapshot"))
+        _reconcile_install_result(transaction, committed=False)
         installer.clear_install_transaction(
             transaction_id=transaction["transaction_id"])
         cache_clear()
