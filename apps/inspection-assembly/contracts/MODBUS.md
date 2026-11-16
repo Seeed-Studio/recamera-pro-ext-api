@@ -4,6 +4,15 @@
 每次判定的写入顺序固定：**先原子更新保持寄存器，再写线圈**。
 消费方读到线圈翻转时，寄存器内容已经是同一次判定的数据。
 
+应用包固定使用 **pymodbus 3.15.0**。服务端使用 `SimDevice` / `SimData`
+初始化四个独立地址空间，运行期通过 server 的 `async_getValues` /
+`async_setValues` 在同一事件循环内读写。不要恢复 `ModbusSlaveContext`、
+`zero_mode` 或旧 datastore 的同步 `getValues` / `setValues`：随包版本已移除
+这些接口。协议地址仍从 0 开始，PLC 寄存器配置无需迁移。
+
+在仓库根目录执行 `uv run pytest apps/inspection-assembly/tests/test_modbus_server.py`
+可用随包版本验证真实 TCP 读写、心跳、启停及受控检测帧；该测试不验证相机/NPU。
+
 ## 寄存器表
 
 | 类型/地址 | 含义 |

@@ -291,9 +291,9 @@ class InspectionApp:
 
     def run(self, max_frames: int | None = None,
             duration_s: float | None = None) -> dict[str, Any]:
-        self.start()
-        deadline = (time.monotonic() + duration_s) if duration_s else None
         try:
+            self.start()
+            deadline = (time.monotonic() + duration_s) if duration_s else None
             while not self._stop:
                 progressed = False
                 for source in self.sources:
@@ -312,8 +312,10 @@ class InspectionApp:
                 if not progressed:
                     time.sleep(0.005)
         finally:
-            summary = self.health()
-            self.stop()
+            try:
+                summary = self.health()
+            finally:
+                self.stop()
         return summary
 
 
