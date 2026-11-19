@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muse Gadget</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="brand-block">
+        <img class="brand" src="/icon.jpg" alt="Muse">
+        <div>
+          <h1>Muse Gadget</h1>
+          <p class="sub">reCamera Pro · 蓝牙配对与连接状态</p>
+        </div>
+      </div>
+      <span id="health" class="pill">加载中…</span>
+    </header>
+
+    <section id="auth" class="card hidden">
+      <h2>访问令牌</h2>
+      <p class="muted">App Center 的 Open 链接应自动带上令牌。如果没有，请粘贴 appdata/webui_token。</p>
+      <div class="row">
+        <input id="token-input" type="password" placeholder="webui token" autocomplete="off">
+        <button id="token-save" class="primary">使用令牌</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>状态</h2>
+      <div class="grid">
+        <div><span class="label">配对</span><b id="st-paired">—</b></div>
+        <div><span class="label">BLE 名</span><b id="st-ble">—</b></div>
+        <div><span class="label">Node ID</span><b id="st-node">—</b></div>
+        <div><span class="label">服务</span><b id="st-service">—</b></div>
+        <div><span class="label">蓝牙适配器</span><b id="st-hci">—</b></div>
+        <div><span class="label">D-Bus / gi</span><b id="st-dbus">—</b></div>
+        <div><span class="label">CA 过滤</span><b id="st-ca">—</b></div>
+        <div><span class="label">SDK 令牌</span><b id="st-token">—</b></div>
+      </div>
+      <p id="st-pair" class="muted"></p>
+    </section>
+
+    <section class="card">
+      <h2>配对</h2>
+      <p class="muted">点击“开始配对”，然后在手机 Muse App 的 Settings → Devices → Developer mode → Add Device 中选择上面的 BLE 名。</p>
+      <div class="row wrap">
+        <button id="pair" class="primary">开始配对</button>
+        <button id="pair-force">强制重新配对</button>
+        <button id="pair-cancel">取消配对</button>
+        <button id="unpair" class="danger">解除配对</button>
+        <button id="restart">重启服务</button>
+      </div>
+      <pre id="pair-log" class="log small"></pre>
+    </section>
+
+    <section class="card">
+      <h2>设置</h2>
+      <div class="form">
+        <label>SDK token <input id="s-sdk" type="password" placeholder="mgst_..." autocomplete="off"></label>
+        <label>HTTPS 代理 <input id="s-proxy" type="text" placeholder="http://192.168.8.103:7897"></label>
+        <label class="check"><input id="s-proxy-clear" type="checkbox"> 清除代理设置</label>
+        <label>代理绕过 <input id="s-noproxy" type="text" placeholder="127.0.0.1,localhost"></label>
+        <label>命令账户
+          <select id="s-runas">
+            <option value="admin">admin（推荐）</option>
+            <option value="root">root（高风险）</option>
+          </select>
+        </label>
+        <label>配对窗口（秒）<input id="s-timeout" type="number" min="60" max="1800" step="30"></label>
+        <label class="check"><input id="s-autopair" type="checkbox"> 首次启动自动配对</label>
+        <label class="check"><input id="s-force" type="checkbox"> 允许替换现有配对</label>
+        <label class="check"><input id="s-wifiprov" type="checkbox"> 配对时配置 WiFi（关闭则只绑定，使用当前网络）</label>
+      </div>
+      <div class="row">
+        <button id="save" class="primary">保存设置</button>
+        <button id="doctor">运行 Doctor</button>
+        <span id="save-msg" class="muted"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>日志</h2>
+      <div class="row">
+        <button id="logs-refresh">刷新</button>
+        <label class="check"><input id="logs-auto" type="checkbox" checked> 自动刷新</label>
+      </div>
+      <pre id="logs" class="log"></pre>
+    </section>
+
+    <pre id="doctor-out" class="log hidden"></pre>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

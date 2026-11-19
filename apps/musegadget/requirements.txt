@@ -1,0 +1,6 @@
+# Target-only wheels for the reCamera Pro app venv.  musegadget itself is built
+# from the Muse checkout and added by linux/tools/recamera/package_app.py.
+cryptography==45.0.7
+websockets==17.1
+cffi==1.15.1
+pycparser==2.22
