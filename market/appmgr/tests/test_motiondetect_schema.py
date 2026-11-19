@@ -4,7 +4,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-from appmgr import motiondetect
+from appmgr import motiondetect, server
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -32,3 +32,16 @@ def test_validate_uses_shared_bounds():
 
     _, errors, _ = motiondetect._validate({"min_changed_ratio": 0.9})
     assert "min_changed_ratio" in errors
+
+
+def test_motiondetect_is_a_complete_firmware_system_app():
+    assert server._is_firmware_system_app(motiondetect.MD_ID)
+    assert server._firmware_system_manifest(motiondetect.MD_ID)["id"] == motiondetect.MD_ID
+
+    config = server.do_get_config(motiondetect.MD_ID)
+    assert config["id"] == motiondetect.MD_ID
+    assert config["config_schema"]["groups"]
+
+    visualization = server.do_get_app_visualization(motiondetect.MD_ID)
+    assert visualization["stream_burn_in"]["supported"] is False
+    assert visualization["stream_burn_in"]["status"] == "unsupported"
