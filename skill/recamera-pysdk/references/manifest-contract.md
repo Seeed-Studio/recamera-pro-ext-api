@@ -208,13 +208,16 @@ manifest fields.
 
 ### Browser-renderable detection output
 
-Browser rendering is optional. Only when the app declares `render.boxes` does
-the skill require its matching browser result contract:
+Browser AI result overlay is the default for Apps that produce recognition
+results. When an App emits `results`, the skill requires its matching browser
+result contract by default:
 
 - `output.contract_version: 2` and `output.sink: "ws"`;
 - a direct output field named `box` from `results[].box` with one of
   `coord: "pixel_xyxy"` or `coord: "normalized_xyxy"`;
 - `render.schema_version: 1` and a `render.boxes` object.
+
+Apps with no recognition results need not declare this contract.
 
 The current official Kit detector convention uses original-frame pixel
 `xyxy` boxes. The browser Result Hub uses this contract for canvas overlays;
