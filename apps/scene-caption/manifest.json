@@ -1,0 +1,334 @@
+{
+  "manifest_version": 2,
+  "release": {
+    "sequence": 8,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.2,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [],
+    "imports": [
+      "numpy",
+      "cv2"
+    ]
+  },
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "exclusive",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 896,
+      "cpu_percent": 300,
+      "storage_mb": 8,
+      "shutdown_grace_sec": 90
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts",
+        "appdata"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "scene-caption",
+  "name": "Scene Caption",
+  "name_zh": "VLM 画面描述",
+  "version": "0.4.0",
+  "type": "self-hosted",
+  "entry": "app.py",
+  "author": "reCamera",
+  "description": "InternVL3-1B streams Chinese descriptions of sampled camera frames on the RV1126B.",
+  "description_zh": "InternVL3-1B 在 RV1126B 上分析摄像头采样画面，逐段显示中文描述。",
+  "capabilities": [
+    "output"
+  ],
+  "config_schema": {
+    "groups": [
+      {
+        "key": "scene_analysis",
+        "title": "Scene analysis",
+        "title_zh": "画面分析",
+        "items": [
+          {
+            "key": "prompt",
+            "type": "string",
+            "apply": "live",
+            "title": "Analysis prompt",
+            "title_zh": "分析提示词",
+            "default": "请用一句简短的中文描述这张图片，只描述清楚可见的内容。",
+            "help": "Tell the model what to look for and which language to use. The first 128 characters are used. Leave blank for the default caption.",
+            "help_zh": "可指定关注的物体、回答格式和语言。使用前 128 个字符，留空使用默认描述。"
+          },
+          {
+            "key": "interval_seconds",
+            "type": "integer",
+            "apply": "live",
+            "title": "Pause between analyses (seconds)",
+            "title_zh": "两次分析之间的等待时间（秒）",
+            "default": 1,
+            "help": "Time from the end of one description until the next frame is sampled. Zero samples again as soon as the model is free.",
+            "help_zh": "从上一条描述完成后开始计时。设为 0 时，模型空闲后立即取新画面。",
+            "min": 0,
+            "max": 120,
+            "step": 1
+          },
+          {
+            "key": "stream_results",
+            "type": "boolean",
+            "apply": "live",
+            "title": "Show text as it is generated",
+            "title_zh": "逐段显示分析结果",
+            "default": true,
+            "help": "Display partial text on the preview. Turn off to show only completed captions. Takes effect on the next frame analyzed.",
+            "help_zh": "开启时在预览中逐段显示文字，关闭时仅显示完整描述。从下一张分析画面生效。"
+          },
+          {
+            "key": "max_new_tokens",
+            "type": "integer",
+            "apply": "restart",
+            "title": "Maximum output tokens",
+            "title_zh": "最大输出长度（token）",
+            "default": 256,
+            "help": "Upper limit per description. Larger values allow longer answers and may take longer. Changing this restarts the app.",
+            "help_zh": "每次回答最多生成的 token 数。较大的值允许更长的回答，也可能增加耗时。修改此项会重启应用。",
+            "min": 8,
+            "max": 512,
+            "step": 1
+          }
+        ]
+      }
+    ]
+  },
+  "models": [],
+  "artifacts": [
+    {
+      "id": "vision-0",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-0.rknn",
+      "mount": "models/vision-0.rknn",
+      "sha256": "590837a6d0347535b984e5d421a4b47772eb1bbd844501174796168b77833d3f",
+      "size": 106553317,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "vision-1",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-1.rknn",
+      "mount": "models/vision-1.rknn",
+      "sha256": "a6d2742d7224a2ad94ee12a9aa8dbd32ff7421ca96fdf00270efc37d5e645122",
+      "size": 102831174,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "vision-2",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-2.rknn",
+      "mount": "models/vision-2.rknn",
+      "sha256": "7f08c901e97bbb99d8077e3f5768eddf528e857e787a9df579f31fc4f9ea3d96",
+      "size": 102831495,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "vision-3",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-3.rknn",
+      "mount": "models/vision-3.rknn",
+      "sha256": "50a5ea0335f158f52b9d252b1a09eda60d28e7174fd51e4568df9acb6bf3b648",
+      "size": 102831752,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "vision-4",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-4.rknn",
+      "mount": "models/vision-4.rknn",
+      "sha256": "e958f969dea0ab7871616ad1dda8fc0d70cce99ad49b025b5bc46b10a57ceda5",
+      "size": 102831752,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "vision-5",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/vision-5.rknn",
+      "mount": "models/vision-5.rknn",
+      "sha256": "8aaae512a5b847e51e365b3ae01d48d273e6e6f1365c7199f13b47d3ce33b034",
+      "size": 112158183,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "language",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/language.rkllm",
+      "mount": "models/language.rkllm",
+      "sha256": "22d687787eb8168e03a65cdd6de2c963612d72d8457da407300836cf16b83b83",
+      "size": 605606740,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "rkllm-runtime",
+      "kind": "data",
+      "source": "bundled",
+      "file": "lib/librkllmrt.so",
+      "mount": "lib/librkllmrt.so",
+      "sha256": "bbcf28a8666b9fbf7361d6aad892b957920f6ea92400c074899b48f4c5b2c96f",
+      "size": 7543744,
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "caption-bridge",
+      "kind": "data",
+      "source": "bundled",
+      "file": "lib/libcaption.so",
+      "mount": "lib/libcaption.so",
+      "sha256": "51a1c34e6dccaffbfeebd7158a5127eba5a1bfa55a845e22e96a4d01a35e81f8",
+      "size": 73520,
+      "required": true,
+      "share_scope": "content"
+    }
+  ],
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "events[]{kind,text,vision_ms,first_text_ms,decode_ms} + results[]{text,final} + geometry[]",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "text",
+        "from": "results[].text",
+        "type": "string",
+        "description": "Description of the sampled frame"
+      },
+      {
+        "name": "final",
+        "from": "results[].final",
+        "type": "boolean",
+        "description": "True when generation for this frame is complete"
+      },
+      {
+        "name": "caption",
+        "from": "events[kind=caption].text",
+        "type": "string",
+        "event_kind": "caption",
+        "description": "Scene caption"
+      },
+      {
+        "name": "geometry",
+        "from": "geometry[]",
+        "type": "geometry[]",
+        "coord": "normalized_points",
+        "description": "Caption lines on the live preview"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "events.caption | map(attribute='text') | list | last",
+        "target": "text",
+        "topic": "recamera/{{ app }}/caption"
+      }
+    ]
+  },
+  "render": {
+    "schema_version": 1,
+    "geometry": {
+      "types": [
+        "point"
+      ],
+      "style": {
+        "color": "#ffffff",
+        "point_radius": 1
+      }
+    }
+  },
+  "package": {
+    "exclude": [
+      "native"
+    ]
+  }
+}
