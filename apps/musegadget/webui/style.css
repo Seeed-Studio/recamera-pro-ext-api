@@ -77,6 +77,20 @@ body {
   min-width: 0;
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lang-select {
+  width: auto;
+  min-width: 92px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .brand {
   width: 180px;
   max-width: 38vw;
@@ -216,6 +230,7 @@ input:focus, select:focus {
 
 @media (max-width: 620px) {
   .top { align-items: flex-start; flex-direction: column; }
+  .top-actions { align-self: flex-start; }
   .brand { width: 150px; max-width: 55vw; }
   .shell { padding: 20px 14px 48px; }
 }

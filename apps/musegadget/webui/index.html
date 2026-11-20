@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,79 +13,85 @@
         <img class="brand" src="/icon.jpg" alt="Muse">
         <div>
           <h1>Muse Gadget</h1>
-          <p class="sub">reCamera Pro · 蓝牙配对与连接状态</p>
+          <p class="sub" data-i18n="subtitle">reCamera Pro · Bluetooth pairing and connection status</p>
         </div>
       </div>
-      <span id="health" class="pill">加载中…</span>
+      <div class="top-actions">
+        <select id="lang" class="lang-select" aria-label="Language">
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+        <span id="health" class="pill" data-i18n="loading">Loading…</span>
+      </div>
     </header>
 
     <section id="auth" class="card hidden">
-      <h2>访问令牌</h2>
-      <p class="muted">App Center 的 Open 链接应自动带上令牌。如果没有，请粘贴 appdata/webui_token。</p>
+      <h2 data-i18n="access_token">Access token</h2>
+      <p class="muted" data-i18n="access_token_help">The App Center Open link should include the token. If it does not, paste the contents of appdata/webui_token.</p>
       <div class="row">
         <input id="token-input" type="password" placeholder="webui token" autocomplete="off">
-        <button id="token-save" class="primary">使用令牌</button>
+        <button id="token-save" class="primary" data-i18n="use_token">Use token</button>
       </div>
     </section>
 
     <section class="card">
-      <h2>状态</h2>
+      <h2 data-i18n="status">Status</h2>
       <div class="grid">
-        <div><span class="label">配对</span><b id="st-paired">—</b></div>
-        <div><span class="label">BLE 名</span><b id="st-ble">—</b></div>
-        <div><span class="label">Node ID</span><b id="st-node">—</b></div>
-        <div><span class="label">服务</span><b id="st-service">—</b></div>
-        <div><span class="label">蓝牙适配器</span><b id="st-hci">—</b></div>
-        <div><span class="label">D-Bus / gi</span><b id="st-dbus">—</b></div>
-        <div><span class="label">CA 过滤</span><b id="st-ca">—</b></div>
-        <div><span class="label">SDK 令牌</span><b id="st-token">—</b></div>
+        <div><span class="label" data-i18n="pairing_label">Pairing</span><b id="st-paired">—</b></div>
+        <div><span class="label" data-i18n="ble_name">BLE name</span><b id="st-ble">—</b></div>
+        <div><span class="label" data-i18n="node_id">Node ID</span><b id="st-node">—</b></div>
+        <div><span class="label" data-i18n="service">Service</span><b id="st-service">—</b></div>
+        <div><span class="label" data-i18n="bluetooth_adapter">Bluetooth adapter</span><b id="st-hci">—</b></div>
+        <div><span class="label" data-i18n="dbus_gi">D-Bus / gi</span><b id="st-dbus">—</b></div>
+        <div><span class="label" data-i18n="ca_filter">CA filter</span><b id="st-ca">—</b></div>
+        <div><span class="label" data-i18n="sdk_token_label">SDK token</span><b id="st-token">—</b></div>
       </div>
       <p id="st-pair" class="muted"></p>
     </section>
 
     <section class="card">
-      <h2>配对</h2>
-      <p class="muted">点击“开始配对”，然后在手机 Muse App 的 Settings → Devices → Developer mode → Add Device 中选择上面的 BLE 名。</p>
+      <h2 data-i18n="pairing">Pairing</h2>
+      <p class="muted" data-i18n="pairing_help">Click Start pairing, then in the Muse app open Settings → Devices → Developer mode → Add Device and choose the BLE name above.</p>
       <div class="row wrap">
-        <button id="pair" class="primary">开始配对</button>
-        <button id="pair-force">强制重新配对</button>
-        <button id="pair-cancel">取消配对</button>
-        <button id="unpair" class="danger">解除配对</button>
-        <button id="restart">重启服务</button>
+        <button id="pair" class="primary" data-i18n="start_pairing">Start pairing</button>
+        <button id="pair-force" data-i18n="force_repair">Force re-pair</button>
+        <button id="pair-cancel" data-i18n="cancel_pairing">Cancel pairing</button>
+        <button id="unpair" class="danger" data-i18n="unpair">Unpair</button>
+        <button id="restart" data-i18n="restart_service">Restart service</button>
       </div>
       <pre id="pair-log" class="log small"></pre>
     </section>
 
     <section class="card">
-      <h2>设置</h2>
+      <h2 data-i18n="settings">Settings</h2>
       <div class="form">
-        <label>SDK token <input id="s-sdk" type="password" placeholder="mgst_..." autocomplete="off"></label>
-        <label>HTTPS 代理 <input id="s-proxy" type="text" placeholder="http://192.168.8.103:7897"></label>
-        <label class="check"><input id="s-proxy-clear" type="checkbox"> 清除代理设置</label>
-        <label>代理绕过 <input id="s-noproxy" type="text" placeholder="127.0.0.1,localhost"></label>
-        <label>命令账户
+        <label><span data-i18n="sdk_token_label">SDK token</span><input id="s-sdk" type="password" placeholder="mgst_..." autocomplete="off"></label>
+        <label><span data-i18n="https_proxy">HTTPS proxy</span><input id="s-proxy" type="text" placeholder="http://host:port"></label>
+        <label class="check"><input id="s-proxy-clear" type="checkbox"> <span data-i18n="clear_proxy">Clear proxy settings</span></label>
+        <label><span data-i18n="proxy_bypass">Proxy bypass</span><input id="s-noproxy" type="text" placeholder="127.0.0.1,localhost"></label>
+        <label><span data-i18n="command_account">Command account</span>
           <select id="s-runas">
-            <option value="admin">admin（推荐）</option>
-            <option value="root">root（高风险）</option>
+            <option value="admin" data-i18n="runas_admin">admin (recommended)</option>
+            <option value="root" data-i18n="runas_root">root (high risk)</option>
           </select>
         </label>
-        <label>配对窗口（秒）<input id="s-timeout" type="number" min="60" max="1800" step="30"></label>
-        <label class="check"><input id="s-autopair" type="checkbox"> 首次启动自动配对</label>
-        <label class="check"><input id="s-force" type="checkbox"> 允许替换现有配对</label>
-        <label class="check"><input id="s-wifiprov" type="checkbox"> 配对时配置 WiFi（关闭则只绑定，使用当前网络）</label>
+        <label><span data-i18n="pairing_window">Pairing window (seconds)</span><input id="s-timeout" type="number" min="60" max="1800" step="30"></label>
+        <label class="check"><input id="s-autopair" type="checkbox"> <span data-i18n="auto_pair">Auto-pair on first start</span></label>
+        <label class="check"><input id="s-force" type="checkbox"> <span data-i18n="allow_replace">Allow replacing an existing pairing</span></label>
+        <label class="check"><input id="s-wifiprov" type="checkbox"> <span data-i18n="provision_wifi">Provision WiFi during pairing (off: bind only, use current network)</span></label>
       </div>
       <div class="row">
-        <button id="save" class="primary">保存设置</button>
-        <button id="doctor">运行 Doctor</button>
+        <button id="save" class="primary" data-i18n="save_settings">Save settings</button>
+        <button id="doctor" data-i18n="run_doctor">Run Doctor</button>
         <span id="save-msg" class="muted"></span>
       </div>
     </section>
 
     <section class="card">
-      <h2>日志</h2>
+      <h2 data-i18n="logs">Logs</h2>
       <div class="row">
-        <button id="logs-refresh">刷新</button>
-        <label class="check"><input id="logs-auto" type="checkbox" checked> 自动刷新</label>
+        <button id="logs-refresh" data-i18n="refresh">Refresh</button>
+        <label class="check"><input id="logs-auto" type="checkbox" checked> <span data-i18n="auto_refresh">Auto refresh</span></label>
       </div>
       <pre id="logs" class="log"></pre>
     </section>

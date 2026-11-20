@@ -9,7 +9,7 @@
   "description_zh": "通过蓝牙 LE 与 Muse 手机应用配对，并将 Seeed reCamera Pro 作为无显示器的 Muse 设备保持在线。reCamera Pro 带有 800 万像素摄像头、喇叭、麦克风和 RV1126B NPU；Muse 可通过内置的 reCamera-Intellisense 只读命令查看相机/检测事件、录像、声音模型、应用、GPIO 和视频参数。",
   "entry": "app.py",
   "release": {
-    "sequence": 17,
+    "sequence": 18,
     "channel": "stable"
   },
   "compatibility": {
@@ -33,7 +33,7 @@
         "version": "0.1.0",
         "filename": "musegadget-0.1.0-py3-none-any.whl",
         "file": "wheels/musegadget-0.1.0-py3-none-any.whl",
-        "sha256": "a23440e470ac2dd62546081ab135e60197102ce558d6f88735c0d60fcf6403d8",
+        "sha256": "3a2b4afb3bd2bdbb297395636c4bf6e150e02f946caf084dd3c1442cd2d7c6e0",
         "size": 187077,
         "tags": [
           "py3-none-any"
