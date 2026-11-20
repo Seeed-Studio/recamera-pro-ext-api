@@ -24,6 +24,7 @@ import uuid
 from typing import Callable, Optional
 
 from . import paths
+from .installer import FirmwareInstallError
 
 
 TERMINAL = frozenset(("succeeded", "failed"))
@@ -336,10 +337,13 @@ class OperationManager:
                 # API.  The concrete exception class plus message is actionable
                 # and is also recorded in appmgr's normal audit/log paths.
                 message = "%s: %s" % (type(exc).__name__, exc)
+                failure = {}
+                if isinstance(exc, FirmwareInstallError):
+                    failure["error_detail"] = {"code": exc.code, **exc.details}
                 try:
                     self._update(operation_id, status="failed", error=message,
                                  message="failed", finished_at=time.time(),
-                                 progress={"percent": 100})
+                                 progress={"percent": 100}, **failure)
                 except Exception:
                     pass
             else:
@@ -404,6 +408,7 @@ class OperationManager:
                               result.get("installed") is not True):
                 raise ValueError("committed install transaction has invalid result")
             previous = dict(record)
+            record.pop("error_detail", None)
             record.update(
                 status="succeeded" if committed else "failed", result=result,
                 error=None if committed else transaction.get("recovery_error", "Installation interrupted; rolled back"),
