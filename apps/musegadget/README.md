@@ -117,7 +117,7 @@ Everything belongs to the app, in the App Center's per-app locations:
   recamera_runner.py                      # Muse service + camera commands
   vendor/recamera_intellisense/           # vendored MIT SDK
   guide.md                                # device.guide text
-  icon.jpg / webui/                       # App Center icon and UI
+  icon.png / icon.jpg / webui/            # App Center icon and UI assets
 /userdata/local/appdata/musegadget/       # persistent app data (survives upgrades)
   config.json  state/  run/  ca/
   home/.recamera/                         # skill device registry (root, 0600)

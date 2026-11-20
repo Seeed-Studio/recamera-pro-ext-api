@@ -7,6 +7,9 @@
   "type": "self-hosted",
   "description": "Pairs this Seeed reCamera Pro with the Muse phone app over Bluetooth LE and keeps it registered as a headless Muse gadget. The reCamera Pro has an 8 MP camera, speaker, microphone and RV1126B NPU; Muse can inspect camera/detection events, records, acoustic models, apps, GPIO and video settings through the bundled reCamera-Intellisense read-only commands.",
   "description_zh": "通过蓝牙 LE 与 Muse 手机应用配对，并将 Seeed reCamera Pro 作为无显示器的 Muse 设备保持在线。reCamera Pro 带有 800 万像素摄像头、喇叭、麦克风和 RV1126B NPU；Muse 可通过内置的 reCamera-Intellisense 只读命令查看相机/检测事件、录像、声音模型、应用、GPIO 和视频参数。",
+  "scene": "Interaction & Control",
+  "scene_zh": "交互控制",
+  "image": "/appcenter/apps/musegadget.png",
   "entry": "app.py",
   "release": {
     "sequence": 18,
@@ -260,8 +263,8 @@
     }
   },
   "icon": {
-    "path": "icon.jpg",
-    "media_type": "image/jpeg"
+    "path": "icon.png",
+    "media_type": "image/png"
   },
   "package": {
     "exclude": [
