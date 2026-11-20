@@ -12,7 +12,7 @@
   "image": "/appcenter/apps/musegadget.png",
   "entry": "app.py",
   "release": {
-    "sequence": 18,
+    "sequence": 19,
     "channel": "stable"
   },
   "compatibility": {
@@ -36,7 +36,7 @@
         "version": "0.1.0",
         "filename": "musegadget-0.1.0-py3-none-any.whl",
         "file": "wheels/musegadget-0.1.0-py3-none-any.whl",
-        "sha256": "3a2b4afb3bd2bdbb297395636c4bf6e150e02f946caf084dd3c1442cd2d7c6e0",
+        "sha256": "6cdadcf71ff2b8463f9e08f880082016bc6812ed7aefd16c58251441e4d5a768",
         "size": 187077,
         "tags": [
           "py3-none-any"
