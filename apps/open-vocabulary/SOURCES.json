@@ -1,0 +1,74 @@
+{
+  "v21": {
+    "source_commit": "b1b09f2f0340ca7dede69e10b7e909c469677fd9",
+    "checkpoint_sha256": "d1c1d7d8611a3b97f74cf813faf911c2e047a6529622621943b4022c679ecce0",
+    "model": "v21-s",
+    "opset": 13,
+    "onnx": [
+      {
+        "file": "world_v21s.onnx",
+        "sha256": "647a39b067dc5fc4b4b9096ef32f6d516139d9a5f799e68703d5ea5216b088e5"
+      },
+      {
+        "file": "clip_v21.onnx",
+        "sha256": "0bd444b584d472dfbb8b569bdb74833d51da3ace79a7f8d37b63466ec26547a2"
+      }
+    ],
+    "weights_repository": "wondervictor/YOLO-World-V2.1",
+    "weights_revision": "c620164ee3979bf49b895c8a8e0f49aeaca89209",
+    "weights_file": "s_stage1-d1c1d7d8.pth",
+    "mmyolo_commit": "4d97b3a06609dba94b8ec584be2f2029cfdb7519",
+    "padding": "normalized embedding of a blank prompt",
+    "source_repository": "https://github.com/AILab-CVC/YOLO-World"
+  },
+  "tokenizer": {
+    "repository": "openai/clip-vit-base-patch32",
+    "commit": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+    "files": [
+      {
+        "file": "tokenizer/merges.txt",
+        "sha256": "f526393189112391ce6f9795d4695f704121ce452c3aad1f5335cc41337eba85"
+      },
+      {
+        "file": "tokenizer/vocab.json",
+        "sha256": "5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363"
+      }
+    ]
+  },
+  "conversion": {
+    "rknn_toolkit2": "2.3.2",
+    "target": "rv1126b",
+    "quantization": false,
+    "detector_inputs": {
+      "images": [
+        1,
+        3,
+        640,
+        640
+      ],
+      "texts": [
+        1,
+        80,
+        512
+      ]
+    },
+    "image_normalization": {
+      "mean": [
+        0,
+        0,
+        0
+      ],
+      "std": [
+        255,
+        255,
+        255
+      ]
+    },
+    "encoder_input": {
+      "input_ids": [
+        1,
+        20
+      ]
+    }
+  }
+}
