@@ -55,6 +55,12 @@
         "arch": {"const": "aarch64"},
         "python": {"const": "==3.11.*"},
         "firmware_api": {"$ref": "#/$defs/versionConstraint"},
+        "firmware_version": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Device OTA version. All comma-separated comparisons must match.",
+          "pattern": "^(?:==|!=|>=|<=|>|<)[0-9]+\\.[0-9]+\\.[0-9]+(?:,(?:==|!=|>=|<=|>|<)[0-9]+\\.[0-9]+\\.[0-9]+)*(?![\\s\\S])"
+        },
         "kit_api": {"$ref": "#/$defs/versionConstraint"},
         "sdk_abi": {"$ref": "#/$defs/versionConstraint"},
         "rknn_runtime": {"$ref": "#/$defs/versionConstraint"}

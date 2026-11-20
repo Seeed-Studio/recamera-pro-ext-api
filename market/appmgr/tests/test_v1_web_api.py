@@ -678,6 +678,38 @@ def test_rejected_preflight_removes_uploaded_bytes(layout, monkeypatch):
     assert os.listdir(paths.uploads_dir()) == []
 
 
+def test_local_upload_reports_firmware_mismatch_before_confirmation(layout, monkeypatch):
+    from appmgr.tests.test_installer_v2 import package_v2
+
+    monkeypatch.setenv("APPMGR_PLATFORM_ARCH", "aarch64")
+    monkeypatch.setattr(paths, "ALLOWED_PKG_ROOTS", (str(layout),))
+    ota = layout / "ota_version"
+    ota.write_text("V1.1.8\n")
+    monkeypatch.setattr(server.appmanifest, "OTA_VERSION_FILE", str(ota))
+    archive = layout / "demo.tar.gz"
+    package_v2(str(archive), firmware_version=">=1.2.0,<1.4.0")
+    body, content_type = _multipart(archive.read_bytes())
+    with server._AppHTTPServer(("127.0.0.1", 0), server._Handler) as httpd:
+        connection = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=5)
+        try:
+            connection.request("POST", "/api/app-center/v1/uploads", body=body, headers={
+                "Host": "camera.local", "Origin": "https://camera.local",
+                "X-Forwarded-Proto": "https", "Content-Type": content_type,
+                "Authorization": "Bearer test",
+                server.V1_TRUSTED_EDGE_HEADER: server.V1_TRUSTED_EDGE_VALUE,
+            })
+            httpd.handle_request()
+            response = connection.getresponse()
+            assert response.status == 400
+            error = json.loads(response.read())
+        finally:
+            connection.close()
+    assert error["code"] == "firmwareIncompatible"
+    assert error["current"] == "V1.1.8"
+    assert error["required"] == ">=1.2.0,<1.4.0"
+    assert os.listdir(paths.uploads_dir()) == []
+
+
 def test_unsigned_preflight_is_local_only_and_install_requires_permissions(
         layout, monkeypatch):
     permissions = {

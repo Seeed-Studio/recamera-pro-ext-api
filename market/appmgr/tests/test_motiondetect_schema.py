@@ -8,7 +8,7 @@ from appmgr import motiondetect
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
-SCHEMA_FILE = os.path.join(REPO_ROOT, "services", "motion-detect",
+SCHEMA_FILE = os.path.join(REPO_ROOT, "apps", "motion-detect",
                            "config_schema.json")
 
 

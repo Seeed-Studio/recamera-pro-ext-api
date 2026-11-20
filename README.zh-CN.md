@@ -110,7 +110,7 @@ with FrameSource() as src, ResultSink(source_id="my-app") as sink:
 | [`docs/guide/`](docs/guide/) | [开发者综合指南](docs/guide/README.md) 及各专题手册（控制 API、结果推送、GPIO 控制、音频 PCM、前端扩展、FFmpeg / GStreamer 集成、应用中心上架、部署运维、Kit 设计、适配器路径、语音应用开发等）；AI 结果叠加样式自定义见 [`overlay-customization.md`](docs/guide/overlay-customization.md)，交接说明见 [`overlay-customization-handoff.md`](docs/guide/overlay-customization-handoff.md)。 |
 | [`sdk/`](sdk/) | 设备侧基础 SDK：C ABI 动态库 `librecamera_ext.so.1`、Python 封装包 `recamera_ext`（基于 ctypes 薄封装）及 C/C++ 头文件。 |
 | [`kit/`](kit/) | 可复用 Python 推理套件：L0 适配器层、前处理/后处理 runtime 库、业务逻辑 logic 库、应用主循环基类 `app.py`。 |
-| [`apps/`](apps/) | 丰富生产级示例应用（yolo-detector、face-analysis、fall-detection、voice-transcribe 等）及 [Inference Workflows](apps/inference-rv1126b/README.md)。 |
+| [`apps/`](apps/) | 示例应用（yolo-detector、face-analysis、fall-detection、voice-transcribe 等）、[开放词汇目标检测 Demo](apps/open-vocabulary/README.md)及 [Inference Workflows](apps/inference-rv1126b/README.md)。 |
 | [`examples/`](examples/) | SDK 最小用法示例（取帧、结果注入、帧→推理→OSD 全流程、GPIO 触发联动、C ABI 访问、浏览器叠加层自由绘制 `11-overlay-geometry`）。 |
 | [`market/`](market/) | 应用中心控制面、推理调度管理服务、manifest-v2 打包与应用商店 catalog 工具。 |
 | [`release/`](release/) | 历史交付归档；注意当前 `release/pkg` **不可部署**，正式生产产物须通过固定 commit 的统一源码构建生成。 |

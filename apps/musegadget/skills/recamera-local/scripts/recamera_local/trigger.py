@@ -1,0 +1,410 @@
+"""Record rule system: config, schedule, trigger tagged-union, and the
+recording-source discovery surface (``/record/rule/...`` +
+``/api/app-center/v1/recording/sources``).
+
+Only ONE record trigger is active at a time: `inference_set`, `timer`,
+`gpio`, `tty`, `http`, or `always_on`. Switching kinds replaces the active
+trigger but preserves the other kinds' remembered settings.
+
+Firmware note: the legacy ``sed`` (sound-event) trigger kind is retired.
+Sound-triggered recording is an ``inference_set`` rule whose
+``source_filter`` names the ``acousticslab`` source; devices auto-migrate
+legacy ``dSED`` sections at boot.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from . import _local as http
+from ._coerce import to_bool
+from ._errors import RecameraError
+
+__all__ = [
+    "get_record_config",
+    "set_record_config",
+    "get_schedule_rule",
+    "set_schedule_rule",
+    "get_record_trigger",
+    "set_record_trigger",
+    "activate_http_trigger",
+    "get_record_sources",
+    "parse_trigger",
+    "trigger_to_json",
+]
+
+PATH_CONFIG = "/cgi-bin/entry.cgi/record/rule/config"
+PATH_SCHEDULE = "/cgi-bin/entry.cgi/record/rule/schedule-rule-config"
+PATH_RECORD_RULE = "/cgi-bin/entry.cgi/record/rule/record-rule-config"
+PATH_HTTP_ACTIVATE = "/cgi-bin/entry.cgi/record/rule/http-rule-activate"
+PATH_SOURCES = "/api/app-center/v1/recording/sources"
+
+
+def get_record_config() -> Dict[str, Any]:
+    """Return `{rule_enabled, writer: {format, interval_ms}}`."""
+    d = http.get_json(PATH_CONFIG) or {}
+    writer = d.get("dWriterConfig") or {}
+    return {
+        "rule_enabled": bool(d.get("bRuleEnabled", False)),
+        "writer": {
+            "format": writer.get("sFormat", ""),
+            "interval_ms": int(writer.get("iIntervalMs", 0)),
+        },
+    }
+
+
+def set_record_config(
+    *,
+    rule_enabled: bool,
+    writer_format: str,
+    writer_interval_ms: int = 0,
+) -> None:
+    """Enable/disable the rule pipeline and set the writer format (`JPG`/`MP4`/`RAW`)."""
+    payload = {
+        "bRuleEnabled": to_bool(rule_enabled, "rule_enabled"),
+        "dWriterConfig": {
+            "sFormat": str(writer_format).upper(),
+            "iIntervalMs": int(writer_interval_ms),
+        },
+    }
+    resp = http.post_json(PATH_CONFIG, payload=payload)
+    http.expect_ok(resp, "set rule config")
+
+
+def get_schedule_rule() -> Optional[List[Dict[str, str]]]:
+    """Active-weekdays list, or `None` when the schedule is disabled."""
+    d = http.get_json(PATH_SCHEDULE) or {}
+    if not d.get("bEnabled"):
+        return None
+    ranges = []
+    for r in d.get("lActiveWeekdays") or []:
+        s = r.get("sStart")
+        e = r.get("sEnd")
+        if isinstance(s, str) and isinstance(e, str):
+            ranges.append({"start": s, "end": e})
+    return ranges or None
+
+
+def set_schedule_rule(schedule: Optional[List[Dict[str, str]]] = None) -> None:
+    """Pass `None` or `[]` (or omit) to disable (rule active 24/7)."""
+    ranges = schedule or []
+    enabled = bool(ranges)
+    weekdays = [
+        {"sStart": r["start"], "sEnd": r["end"]}
+        for r in ranges
+        if isinstance(r, dict) and "start" in r and "end" in r
+    ]
+    payload = {"bEnabled": enabled, "lActiveWeekdays": weekdays}
+    resp = http.post_json(PATH_SCHEDULE, payload=payload)
+    http.expect_ok(resp, "set schedule rule")
+
+
+_FULL_FRAME_REGION = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+
+
+def get_record_sources() -> List[Dict[str, Any]]:
+    """List the recording-rule sources this firmware exposes, normalized.
+
+    Each entry: ``{id, kind, name, running, frame_capable, event_capable,
+    supports_roi, classes}`` where ``classes`` is the union of labels the
+    source can currently produce (empty when unknowable, e.g. the ``builtin``
+    vision source — its labels follow the selected model, see
+    ``get_detection_models_info``). Use ``id`` values for a rule's
+    ``source_filter`` and ``classes`` to validate ``label_filter`` BEFORE
+    compiling a rule: an unknown source id or an unproducible label makes a
+    rule that never fires."""
+    data = http.get_json(PATH_SOURCES)
+    if not isinstance(data, dict):
+        raise RecameraError(
+            f"get record sources failed: unexpected payload type {type(data).__name__}"
+        )
+    out: List[Dict[str, Any]] = []
+    for s in data.get("sources") or []:
+        if not isinstance(s, dict) or not s.get("id"):
+            continue
+        classes: List[str] = []
+        for sig in s.get("signals") or []:
+            if not isinstance(sig, dict):
+                continue
+            if sig.get("type") not in ("detection", "classification"):
+                continue
+            for c in sig.get("classes") or []:
+                if isinstance(c, str) and c not in classes:
+                    classes.append(c)
+        out.append({
+            "id": s["id"],
+            "kind": s.get("kind", "app"),
+            "name": s.get("name") or s["id"],
+            "running": bool(s.get("running", False)),
+            "frame_capable": bool(s.get("frame_capable", False)),
+            "event_capable": bool(s.get("event_capable", False)),
+            "supports_roi": bool(s.get("supports_roi", False)),
+            "classes": classes,
+        })
+    return out
+
+
+def _fetch_record_rule() -> Dict[str, Any]:
+    """Raw `record-rule-config` payload (no tagged-union decoding)."""
+    d = http.get_json(PATH_RECORD_RULE)
+    return d if isinstance(d, dict) else {}
+
+
+def get_record_trigger() -> Dict[str, Any]:
+    """Return the current trigger as a tagged-union dict; see :func:`trigger_to_json`."""
+    return parse_trigger(_fetch_record_rule())
+
+
+def _get_inference_rules() -> List[Dict[str, Any]]:
+    """Decoded INFERENCE_SET rules, or `[]` when another kind is selected.
+
+    Gates on the raw ``sCurrentSelected`` (single GET): a retired-but-not-yet-
+    migrated ``SED`` selection (migration runs at boot) yields `[]` here
+    instead of tripping :func:`parse_trigger`'s refusal."""
+    raw = _fetch_record_rule()
+    if str(raw.get("sCurrentSelected", "")).upper() != "INFERENCE_SET":
+        return []
+    return [_parse_detection_rule(r) for r in (raw.get("lInferenceSet") or [])]
+
+
+def parse_trigger(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Decode a device trigger payload into the tagged-union form."""
+    kind = d.get("sCurrentSelected", "").upper()
+    if kind == "INFERENCE_SET":
+        rules = [_parse_detection_rule(r) for r in (d.get("lInferenceSet") or [])]
+        return {"kind": "inference_set", "rules": rules}
+    if kind == "TIMER":
+        t = d.get("dTimer") or {}
+        return {"kind": "timer", "interval_seconds": int(t.get("iIntervalSeconds", 0))}
+    if kind == "GPIO":
+        g = d.get("dGPIO") or {}
+        out: Dict[str, Any] = {
+            "kind": "gpio",
+            "state": g.get("sState", "FLOATING"),
+            "signal": g.get("sSignal", "RISING"),
+            "debounce_ms": int(g.get("iDebounceDurationMs", 0)),
+        }
+        if "sName" in g:
+            out["name"] = g["sName"]
+        if "iNum" in g:
+            out["num"] = int(g["iNum"])
+        return out
+    if kind == "TTY":
+        t = d.get("dTTY") or {}
+        return {
+            "kind": "tty",
+            "name": t.get("sName", ""),
+            "command": t.get("sCommand", ""),
+        }
+    if kind == "HTTP":
+        return {"kind": "http"}
+    if kind == "ALWAYS_ON":
+        return {"kind": "always_on"}
+    if kind == "SED":
+        raise ValueError(
+            "The 'sed' trigger kind is retired: firmware migrates dSED sections "
+            "to inference_set rules on boot. Use kind='inference_set' with "
+            "source_filter=['acousticslab'] for sound-triggered recording."
+        )
+    raise ValueError(f"Unknown trigger kind {kind!r}")
+
+
+def _parse_detection_rule(v: Dict[str, Any]) -> Dict[str, Any]:
+    confidence = v.get("lConfidenceFilter") or [0.0, 1.0]
+    labels = [x for x in (v.get("lClassFilter") or []) if isinstance(x, str)]
+    sources = [x for x in (v.get("lSourceFilter") or []) if isinstance(x, str)]
+    regions_raw = v.get("lRegionFilter")
+    regions: Optional[List[List[List[float]]]] = None
+    if isinstance(regions_raw, list):
+        regions = []
+        for r in regions_raw:
+            poly = r.get("lPolygon") if isinstance(r, dict) else None
+            if isinstance(poly, list):
+                regions.append(
+                    [[float(c) for c in pt] for pt in poly if isinstance(pt, list)]
+                )
+    return {
+        "name": v.get("sID", ""),
+        "debounce_times": int(v.get("iDebounceTimes", 0)),
+        "confidence_range_filter": [float(c) for c in confidence],
+        "label_filter": labels,
+        "source_filter": sources,
+        "region_filter": regions,
+    }
+
+
+def _detection_rule_to_json(rule: Dict[str, Any]) -> Dict[str, Any]:
+    regions = rule.get("region_filter")
+    if not regions:
+        # Empty/omitted region_filter means full-frame detection.
+        regions = [_FULL_FRAME_REGION]
+    confidence = list(rule.get("confidence_range_filter", [0.0, 1.0]))
+    _validate_confidence_range(rule.get("name", ""), confidence)
+    return {
+        "sID": str(rule.get("name", "")),
+        "iDebounceTimes": int(rule.get("debounce_times", 0)),
+        "lConfidenceFilter": confidence,
+        "lClassFilter": list(rule.get("label_filter", [])),
+        # Empty = match every source; name sources explicitly (e.g.
+        # ["builtin"] or ["acousticslab"]) to scope the rule.
+        "lSourceFilter": list(rule.get("source_filter", [])),
+        "lRegionFilter": [{"lPolygon": poly} for poly in regions],
+    }
+
+
+def _validate_confidence_range(rule_name: Any, confidence: List[Any]) -> None:
+    """Enforce `confidence_range_filter = [min, max]` with both ∈ [0, 1] and min ≤ max."""
+    label = f"rule {rule_name!r}" if rule_name else "rule"
+    if not isinstance(confidence, list) or len(confidence) != 2:
+        detail = len(confidence) if isinstance(confidence, list) else type(confidence).__name__
+        raise ValueError(
+            f"{label}: confidence_range_filter must be exactly [min, max]; got {detail} value(s)"
+        )
+    try:
+        lo, hi = float(confidence[0]), float(confidence[1])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label}: confidence_range_filter entries must be numeric; got {confidence!r}"
+        ) from exc
+    if lo < 0.0 or lo > 1.0 or hi < 0.0 or hi > 1.0:
+        raise ValueError(
+            f"{label}: confidence_range_filter values must be within [0.0, 1.0]; got [{lo}, {hi}]"
+        )
+    if lo > hi:
+        raise ValueError(
+            f"{label}: confidence_range_filter min ({lo}) must be <= max ({hi})"
+        )
+
+
+_TRIGGER_SIBLING_KEYS = ("lInferenceSet", "dTimer", "dGPIO", "dTTY")
+
+_SED_RETIRED = (
+    "trigger kind 'sed' is retired: sound-event recording is now an "
+    "inference_set rule with source_filter=['acousticslab'] (debounce_times "
+    "replaces consecutive_window_ms; ~960 ms per hop)"
+)
+
+
+def _trigger_patch(trigger: Dict[str, Any]) -> tuple:
+    """Return `(sCurrentSelected, {key: value, ...})` for *trigger*.
+
+    The patch dict contains only the sub-object(s) owned by the selected
+    kind. HTTP / ALWAYS_ON return an empty patch — they just flip the tag.
+    """
+    kind = str(trigger.get("kind", "")).lower()
+    if kind == "inference_set":
+        rules = trigger.get("rules") or []
+        return "INFERENCE_SET", {
+            "lInferenceSet": [_detection_rule_to_json(r) for r in rules],
+        }
+    if kind == "timer":
+        return "TIMER", {
+            "dTimer": {"iIntervalSeconds": int(trigger.get("interval_seconds", 0))},
+        }
+    if kind == "gpio":
+        name = trigger.get("name")
+        num = trigger.get("num")
+        if name is None and num is None:
+            raise ValueError("GPIO trigger requires either 'name' or 'num'.")
+        gpio: Dict[str, Any] = {}
+        if name is not None:
+            gpio["sName"] = str(name)
+        if num is not None:
+            gpio["iNum"] = int(num)
+        gpio["sState"] = str(trigger.get("state", "FLOATING"))
+        gpio["sSignal"] = str(trigger.get("signal", "RISING"))
+        gpio["iDebounceDurationMs"] = int(trigger.get("debounce_ms", 0))
+        return "GPIO", {"dGPIO": gpio}
+    if kind == "tty":
+        name = str(trigger.get("name", "")).strip()
+        command = str(trigger.get("command", "")).strip()
+        if not name or not command:
+            raise ValueError("TTY trigger requires non-empty 'name' and 'command'.")
+        return "TTY", {"dTTY": {"sName": name, "sCommand": command}}
+    if kind == "http":
+        return "HTTP", {}
+    if kind == "always_on":
+        return "ALWAYS_ON", {}
+    if kind == "sed":
+        raise ValueError(_SED_RETIRED)
+    raise ValueError(f"Unknown trigger kind {kind!r}")
+
+
+def _merge_trigger_payload(
+    current: Optional[Dict[str, Any]], trigger: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Layer the *trigger* patch on top of *current* config sibling fields.
+
+    Other trigger kinds' remembered sub-objects (e.g. `dGPIO` when switching
+    to `inference_set`) are copied forward so other clients — and later
+    switches back — don't lose state. Only allowlisted keys are carried to
+    avoid round-tripping server-only metadata.
+    """
+    kind, patch = _trigger_patch(trigger)
+    out: Dict[str, Any] = {}
+    if isinstance(current, dict):
+        for key in _TRIGGER_SIBLING_KEYS:
+            if key in current:
+                out[key] = current[key]
+    out["sCurrentSelected"] = kind
+    out.update(patch)
+    return out
+
+
+def trigger_to_json(trigger: Dict[str, Any]) -> Dict[str, Any]:
+    """Encode a tagged-union trigger as a standalone full-replace payload.
+
+    Accepted shapes::
+
+        {"kind": "timer", "interval_seconds": 60}
+        {"kind": "gpio", "name": "GPIO_01", "state": "FLOATING",
+         "signal": "RISING", "debounce_ms": 0}
+        {"kind": "inference_set", "rules": [...]}  # rule.source_filter:
+        #   ["builtin"] vision, ["acousticslab"] sound, [] matches every source
+        {"kind": "http"} | {"kind": "always_on"}
+        {"kind": "tty", "name": "...", "command": "..."}
+
+    Prefer :func:`set_record_trigger`, which performs a read-modify-write so
+    other trigger kinds' remembered settings survive a kind switch.
+    """
+    return _merge_trigger_payload(None, trigger)
+
+
+def set_record_trigger(*, trigger: Dict[str, Any]) -> None:
+    """Install *trigger* while preserving other kinds' remembered settings.
+
+    Fetches the current `record-rule-config`, copies the sibling sub-objects
+    (`lInferenceSet`, `dTimer`, `dGPIO`, `dTTY`) forward, overwrites
+    only `sCurrentSelected` and the sub-object for the selected kind, then
+    POSTs. A GET failure degrades gracefully to a full-replace payload so
+    this still works on a freshly provisioned device.
+
+    See :func:`trigger_to_json` for accepted trigger shapes.
+    """
+    try:
+        current = http.get_json(PATH_RECORD_RULE)
+    except RecameraError:  # fresh/unreachable device: degrade to full-replace
+        current = None
+    payload = _merge_trigger_payload(
+        current if isinstance(current, dict) else None, trigger
+    )
+    resp = http.post_json(PATH_RECORD_RULE, payload=payload)
+    http.expect_ok(resp, "set record trigger")
+
+
+def activate_http_trigger() -> None:
+    """Fire a one-shot record event on an HTTP-kind trigger."""
+    resp = http.post_json(PATH_HTTP_ACTIVATE)
+    http.expect_ok(resp, "activate HTTP trigger")
+
+
+COMMANDS = {
+    "get_record_config": get_record_config,
+    "set_record_config": set_record_config,
+    "get_schedule_rule": get_schedule_rule,
+    "set_schedule_rule": set_schedule_rule,
+    "get_record_trigger": get_record_trigger,
+    "set_record_trigger": set_record_trigger,
+    "activate_http_trigger": activate_http_trigger,
+    "get_record_sources": get_record_sources,
+}

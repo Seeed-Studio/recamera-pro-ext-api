@@ -31,12 +31,19 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from . import (config as appconfig, durability, kitversion, manifest as manifest_contract,
-               paths, pythonenv, signing)
+from . import (config as appconfig, default_apps, durability, kitversion,
+               manifest as manifest_contract, paths, pythonenv, signing)
 
 
 class InstallError(Exception):
     pass
+
+
+class FirmwareInstallError(InstallError):
+    def __init__(self, mismatch: manifest_contract.FirmwareVersionMismatch):
+        super().__init__(str(mismatch))
+        self.code = mismatch.code
+        self.details = mismatch.details
 
 
 class InsufficientStorageError(InstallError):
@@ -258,8 +265,9 @@ def _validate_pkg_path(pkg_path: str) -> str:
     real = os.path.realpath(pkg_path)
     if not real.endswith(".tar.gz"):
         raise InstallError(f"package must be .tar.gz: {pkg_path}")
-    if not any(real == r or real.startswith(r.rstrip("/") + "/")
-               for r in paths.ALLOWED_PKG_ROOTS):
+    if not (default_apps.is_firmware_path(real) or any(
+            real == r or real.startswith(r.rstrip("/") + "/")
+            for r in paths.ALLOWED_PKG_ROOTS)):
         raise InstallError(f"package path {real} not under allowed roots {paths.ALLOWED_PKG_ROOTS}")
     if not os.path.isfile(real):
         raise InstallError(f"package is not a regular file: {real}")
@@ -526,12 +534,14 @@ def _open_verified_package(pkg_path: str, signature: Optional[str], *,
             verify_path = snapshot_path
         before = os.fstat(verify_fd)
         try:
-            if allow_unsigned:
+            if signature_b64 is None and default_apps.is_firmware_path(real):
+                sig_status = default_apps.verify_package(real, verify_fd)
+            elif allow_unsigned:
                 sig_status = signing.verify_package(
                     verify_path, signature_b64, require=False)
             else:
                 sig_status = signing.verify_package(verify_path, signature_b64)
-        except signing.SignatureError as exc:
+        except (signing.SignatureError, ValueError) as exc:
             raise InstallError(str(exc)) from exc
         if snapshot_path is not None:
             try:
@@ -677,6 +687,8 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
         manifest_contract.validate_package_files(manifest, records)
         _validate_declared_icon_payload(tar, manifest)
         _validate_declared_overlay_payload(tar, manifest)
+    except manifest_contract.FirmwareVersionMismatch as exc:
+        raise FirmwareInstallError(exc) from exc
     except manifest_contract.ManifestValidationError as exc:
         raise InstallError(f"invalid package contract: {exc}") from exc
 
@@ -694,6 +706,9 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
                 manifest_contract.ManifestValidationError) as exc:
             raise InstallError(f"invalid manifest-v2 release metadata: {exc}") from exc
 
+    if (sig_status.get("signer_kind") == "firmware"
+            and sig_status.get("firmware_app_id") != manifest["id"]):
+        raise InstallError("firmware package id does not match its index")
     return {
         "id": manifest["id"],
         "version": manifest.get("version"),
@@ -707,7 +722,7 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
 def _preflight_summary(info: dict, *, allow_unsigned: bool) -> dict:
     manifest = info["manifest"]
     version = manifest_contract.manifest_version(manifest)
-    signed = bool((info.get("signature") or {}).get("signed"))
+    authenticated = bool((info.get("signature") or {}).get("verified"))
     return {
         "manifest_version": version,
         "release_id": ((info.get("release_lock") or {}).get("release_id")
@@ -717,8 +732,8 @@ def _preflight_summary(info: dict, *, allow_unsigned: bool) -> dict:
         "resources": manifest.get("resources"),
         "instances": manifest.get("instances"),
         "health": manifest.get("health"),
-        "requires_developer_mode": bool(not signed and paths.REQUIRE_SIGNATURE),
-        "developer_mode_allowed": bool(not signed and allow_unsigned),
+        "requires_developer_mode": bool(not authenticated and paths.REQUIRE_SIGNATURE),
+        "developer_mode_allowed": bool(not authenticated and allow_unsigned),
     }
 
 

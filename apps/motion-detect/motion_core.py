@@ -1,6 +1,6 @@
-"""motion_core -- 窗口化平方差移动检测核心（守护进程版）。
+"""motion_core -- 窗口化平方差移动检测核心（纯 CPU）。
 
-只依赖 numpy。与 App Center 版的差别：
+只依赖 numpy，App Center 与独立调试脚本共用：
   - 输入直接是 NV12 的 Y 平面（frame.array，零拷贝单通道灰度）；
   - 不做连通域/画框，只输出 是否运动 + 强度 + 变化占比。
 

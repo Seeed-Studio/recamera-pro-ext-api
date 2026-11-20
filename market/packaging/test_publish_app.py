@@ -74,13 +74,16 @@ def env(tmp_path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()
 
-    def make_pkg(app_id, version, out_dir, icon=True, extra=None):
+    def make_pkg(app_id, version, out_dir, icon=True, extra=None, firmware_version=None):
         src = work / f"{app_id}-{version}-{extra or 'x'}"
         (src / "src").mkdir(parents=True)
         (src / "src" / "main.py").write_text(f"# {app_id} {version} {extra}\n")
         if icon:
             (src / "icon.png").write_bytes(ICON_PNG)
-        (src / "manifest.json").write_text(json.dumps(manifest_v2(app_id, version, icon, extra)))
+        manifest = manifest_v2(app_id, version, icon, extra)
+        if firmware_version is not None:
+            manifest["compatibility"]["firmware_version"] = firmware_version
+        (src / "manifest.json").write_text(json.dumps(manifest))
         os.makedirs(out_dir, exist_ok=True)
         return build_mod.build(str(src), str(out_dir))
 
@@ -131,7 +134,7 @@ def load_cat(staging):
 
 
 def test_add_stages_only_live_packages(env):
-    pkg = env["make_pkg"]("gamma", "0.1.0", env["out"])
+    pkg = env["make_pkg"]("gamma", "0.1.0", env["out"], firmware_version=">=1.2.0,<1.4.0")
     rc, st = env["run"](pkg, "--sign")
     assert rc == 0
     assert staged_names(st) == sorted([
@@ -144,6 +147,8 @@ def test_add_stages_only_live_packages(env):
     for a in env["live"]["apps"]:
         assert by[a["id"]] == a
     assert by["gamma"]["icon_url"] == pa.ICONS_BASE + "gamma.png"
+    assert by["gamma"]["firmware_version"] == ">=1.2.0,<1.4.0"
+    assert "firmware_version" not in by["alpha"]
     assert cat["runtimes"] == env["live"]["runtimes"]
     assert (st / "catalog.prev.json").read_bytes() == pa.fetch_live()
     assert not os.path.exists(pkg + ".sig")               # source never modified

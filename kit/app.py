@@ -573,6 +573,10 @@ class App:
                                       # False: start() loads no RknnModel and
                                       # `pre()` is never used; run() does the work.
 
+    # Applications preserving an existing MQTT protocol own that publisher.
+    # Do not add a second generic MQTT publisher from global/CLI settings.
+    owns_mqtt: bool = False
+
     # ★Frame appetite★. True (default) = this app consumes camera frames, so
     # `start()` opens the frame source and `self.frames()` yields from it. Set it
     # False on a loop-owning app whose input is NOT the camera (voice-transcribe
@@ -2011,6 +2015,8 @@ def _maybe_open_mqtt_sink(app: "App", app_dir: str, args, *, verbose: bool):
     Precedence: --mqtt-host flag > RECAMERA_MQTT_ENABLED+RECAMERA_MQTT_HOST env >
     disabled. HA entities come from the app manifest's `ha_entities` array.
     """
+    if getattr(app, "owns_mqtt", False):
+        return None
     env = os.environ
     host = args.mqtt_host or (env.get("RECAMERA_MQTT_HOST")
                               if _env_flag("RECAMERA_MQTT_ENABLED") else None)
