@@ -12,6 +12,12 @@ Bluetooth/pairing sequencing, supervision and a small web UI.
 
 ## Prerequisites (firmware)
 
+The image must be reCamera Pro firmware **1.3.3 or newer**. The manifest
+declares `compatibility.firmware_version = ">=1.3.3"`; AppMgr reads
+`/etc/ota_version` and refuses to install on older firmware. Older AppMgrs
+that do not know the field also reject it as an unknown manifest field, so
+firmware 1.3.3 is both the feature and the packaging baseline.
+
 The image must provide:
 
 - Python 3.11, pip/venv, `dbus-python`, PyGObject, cffi/libffi, bash;
