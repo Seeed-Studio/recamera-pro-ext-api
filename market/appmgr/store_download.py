@@ -21,7 +21,7 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Callable, Optional
 
-from . import paths
+from . import manifest, paths
 
 
 CATALOG_URL = "https://sensecraft-statics.seeed.cc/solution-app/recamera_pro/catalog.json"
@@ -48,9 +48,10 @@ Cancelled = Optional[Callable[[], bool]]
 
 
 class StoreDownloadError(ValueError):
-    def __init__(self, code: str, message: str = ""):
+    def __init__(self, code: str, message: str = "", *, details=None):
         super().__init__(message or code)
         self.code = code
+        self.details = details
 
 
 def _fail(code: str, message: str = ""):
@@ -140,7 +141,7 @@ def _image(value, prefix):
     return value if _IMAGE_FILE.fullmatch(value[len(prefix):]) else ""
 
 
-def _normalize_app(source):
+def _normalize_app(source, current_firmware):
     if (not isinstance(source, dict) or not isinstance(source.get("id"), str)
             or not _ID.fullmatch(source["id"])):
         return None
@@ -186,6 +187,15 @@ def _normalize_app(source):
             _fail("storeExternalModelsUnsupported", "external models cannot be installed by this flow")
         if app["package"]["size"] > _package_limit():
             _fail("storePackageTooLarge", "package exceeds the device limit")
+        if "firmware_version" in source:
+            try:
+                manifest.check_firmware_version(source["firmware_version"], current_firmware)
+            except manifest.FirmwareVersionMismatch as exc:
+                app["unavailableReason"] = exc.code
+            app["firmware_version"] = source["firmware_version"]
+            app["device_firmware_version"] = current_firmware
+    except manifest.ManifestValidationError:
+        app["unavailableReason"] = "storePackageInvalid"
     except StoreDownloadError as exc:
         app["unavailableReason"] = exc.code
     return app
@@ -197,8 +207,9 @@ def normalize_catalog(source):
             or len(source["apps"]) > MAX_CATALOG_APPS):
         _fail("storeCatalogInvalid", "invalid application catalog")
     apps = {}
+    current_firmware = manifest.read_firmware_version()
     for item in source["apps"]:
-        app = _normalize_app(item)
+        app = _normalize_app(item, current_firmware)
         if app is None:
             continue
         if app["id"] in apps:
@@ -335,6 +346,16 @@ def fetch_catalog(*, cancelled: Cancelled = None):
     return normalize_catalog(source)
 
 
+def _require_available(app):
+    reason = app.get("unavailableReason")
+    if reason in ("firmwareIncompatible", "firmwareVersionUnknown") and app.get("firmware_version"):
+        mismatch = manifest.FirmwareVersionMismatch(
+            app["firmware_version"], app.get("device_firmware_version"))
+        raise StoreDownloadError(reason, str(mismatch), details=mismatch.details)
+    if reason:
+        _fail(reason, "application is unavailable in the store")
+
+
 def resolve_app(app_id, version, *, package_sha256, cancelled: Cancelled = None):
     """Resolve a selection against the device-fetched catalog, including its hash."""
     if (not isinstance(app_id, str) or not _ID.fullmatch(app_id)
@@ -345,8 +366,7 @@ def resolve_app(app_id, version, *, package_sha256, cancelled: Cancelled = None)
     for app in catalog["apps"]:
         if app["id"] != app_id:
             continue
-        if app["unavailableReason"]:
-            _fail(app["unavailableReason"], "application is unavailable in the store")
+        _require_available(app)
         if app["version"] != version or app["package"]["sha256"] != package_sha256.lower():
             _fail("storeCatalogChanged", "application changed; refresh the store")
         return app
@@ -379,12 +399,11 @@ def download_package(app, package_path, signature_path, *,
     HTTP API. Failed and cancelled transfers remove only files created here.
     """
     _check_active(cancelled)
-    validated = _normalize_app(app)
+    validated = _normalize_app(app, manifest.read_firmware_version())
     if validated is None:
         _fail("storePackageInvalid", "invalid application")
-    if app.get("unavailableReason") or validated["unavailableReason"]:
-        _fail(app.get("unavailableReason") or validated["unavailableReason"],
-              "application is unavailable in the store")
+    _require_available(app)
+    _require_available(validated)
     package = validated["package"]
     limit = _package_limit(max_package_bytes)
     if package["size"] > limit:

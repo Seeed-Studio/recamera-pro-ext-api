@@ -335,6 +335,24 @@ def test_v2_rejects_invalid_core_contract(mutation, match):
         contract.validate_manifest(value)
 
 
+@pytest.mark.parametrize("required,valid", [
+    ("==1.2.3", True), (">=1.2.0,<1.4.0", True), ("!=1.3.1,<=1.3.2", True),
+    ("1.2.3", False), (">=1.x", False), ("==1.2.3,", False),
+    ("==1.2.3\n", False), ("<1.4.0||>2.0.0", False), (None, False),
+])
+def test_firmware_requirement_schema_matches_package_validator(required, valid):
+    value = minimal_manifest()
+    value["compatibility"]["firmware_version"] = required
+    schema_path = os.path.join(os.path.dirname(contract.__file__), "schema", "manifest-v2.schema.json")
+    with open(schema_path, encoding="utf-8") as source:
+        assert Draft202012Validator(json.load(source)).is_valid(value) == valid
+    if valid:
+        contract.validate_manifest(value)
+    else:
+        with pytest.raises(contract.ManifestValidationError, match="compatibility.firmware_version"):
+            contract.validate_manifest(value)
+
+
 def test_wheel_descriptor_binds_name_version_tag_digest_and_package_path():
     wheel_bytes = b"wheel"
     wheel = {

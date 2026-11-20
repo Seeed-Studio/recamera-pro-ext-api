@@ -39,6 +39,13 @@ class InstallError(Exception):
     pass
 
 
+class FirmwareInstallError(InstallError):
+    def __init__(self, mismatch: manifest_contract.FirmwareVersionMismatch):
+        super().__init__(str(mismatch))
+        self.code = mismatch.code
+        self.details = mismatch.details
+
+
 class InsufficientStorageError(InstallError):
     code = "insufficient_storage"
 
@@ -677,6 +684,8 @@ def _inspect_open_tar(tar: tarfile.TarFile, sig_status: dict) -> dict:
         manifest_contract.validate_package_files(manifest, records)
         _validate_declared_icon_payload(tar, manifest)
         _validate_declared_overlay_payload(tar, manifest)
+    except manifest_contract.FirmwareVersionMismatch as exc:
+        raise FirmwareInstallError(exc) from exc
     except manifest_contract.ManifestValidationError as exc:
         raise InstallError(f"invalid package contract: {exc}") from exc
 

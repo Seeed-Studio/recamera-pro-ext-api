@@ -4192,6 +4192,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "max_request_bytes": int(
                     paths.MAX_PKG_BYTES + appuploads.MAX_MULTIPART_OVERHEAD),
             })
+        elif isinstance(exc, installer.FirmwareInstallError):
+            return self._send(400, {"code": exc.code, "error": str(exc), **exc.details})
         elif isinstance(exc, (appuploads.StagingQuotaError,
                               installer.InsufficientStorageError)):
             code = 507

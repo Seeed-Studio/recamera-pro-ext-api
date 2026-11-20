@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import operator
 import os
 import platform
 import re
@@ -47,6 +48,11 @@ _FORBIDDEN_KEY_BASENAMES = frozenset(("authorized_keys", "known_hosts"))
 _FORBIDDEN_KEY_SUFFIXES = (".jks", ".key", ".p12", ".pfx", ".pem")
 
 DEFAULT_PLATFORM_PROFILE = "rv1126b-linux-gnu-cp311-rknn232-v1"
+OTA_VERSION_FILE = "/etc/ota_version"
+_FIRMWARE_VERSION = r"[0-9]+\.[0-9]+\.[0-9]+"
+_FIRMWARE_CLAUSE = re.compile(rf"(==|!=|>=|<=|>|<)({_FIRMWARE_VERSION})")
+_FIRMWARE_COMPARISONS = {"==": operator.eq, "!=": operator.ne, ">=": operator.ge,
+                         "<=": operator.le, ">": operator.gt, "<": operator.lt}
 
 _APP_ID_RE = re.compile(r"[a-z0-9-]{1,64}")
 _SEMVER_RE = re.compile(
@@ -107,6 +113,14 @@ _MAX_RECORD_TRIGGER_CLASSES = 256
 
 class ManifestValidationError(ValueError):
     """A manifest or its release metadata violates the package contract."""
+
+
+class FirmwareVersionMismatch(ManifestValidationError):
+    def __init__(self, required: str, current: str | None):
+        self.code = "firmwareIncompatible" if current else "firmwareVersionUnknown"
+        self.details = {"required": required, "current": current}
+        super().__init__(f"compatibility.firmware_version: requires {required}, "
+                         f"device firmware is {current or 'unknown'}")
 
 
 def _fail(path: str, message: str) -> None:
@@ -1156,15 +1170,51 @@ def _validate_release(value: Any) -> None:
         _fail("release.channel", "must be stable, beta or dev")
 
 
+def _firmware_clauses(required: str) -> list[tuple[str, str]]:
+    _string(required, "compatibility.firmware_version", max_len=128)
+    clauses = []
+    for clause in required.split(","):
+        match = _FIRMWARE_CLAUSE.fullmatch(clause)
+        if not match:
+            _fail("compatibility.firmware_version",
+                  "expected an OTA version constraint such as ==1.2.3 or >=1.2.0,<1.4.0")
+        clauses.append(match.groups())
+    return clauses
+
+
+def read_firmware_version() -> str | None:
+    try:
+        with open(OTA_VERSION_FILE, encoding="ascii") as source:
+            raw = source.read(129)
+    except (OSError, UnicodeError):
+        return None
+    version = raw.strip()
+    if len(raw) <= 128 and re.fullmatch(rf"[Vv]?{_FIRMWARE_VERSION}", version):
+        return version
+    return None
+
+
+def check_firmware_version(required: str, current: str | None) -> None:
+    clauses = _firmware_clauses(required)
+    if current is None:
+        raise FirmwareVersionMismatch(required, current)
+    version = tuple(map(int, current.lstrip("Vv").split(".")))
+    for op, target in clauses:
+        if not _FIRMWARE_COMPARISONS[op](version, tuple(map(int, target.split(".")))):
+            raise FirmwareVersionMismatch(required, current)
+
+
 def _validate_compatibility(value: Any) -> None:
     obj = _expect_object(value, "compatibility")
     allowed = frozenset((
         "platform_profile", "arch", "python", "firmware_api", "kit_api",
-        "sdk_abi", "rknn_runtime",
+        "sdk_abi", "rknn_runtime", "firmware_version",
     ))
     _closed(obj, allowed, "compatibility")
     _required(obj, frozenset(("platform_profile", "arch", "python")), "compatibility")
     _safe_token(obj["platform_profile"], "compatibility.platform_profile")
+    if "firmware_version" in obj:
+        _firmware_clauses(obj["firmware_version"])
     if obj["arch"] != "aarch64":
         _fail("compatibility.arch", "RV1126B packages must declare aarch64")
     if obj["python"] != "==3.11.*":
@@ -1569,6 +1619,8 @@ def check_platform_compatibility(
     if actual_python != (3, 11):
         _fail("compatibility.python",
               f"requires CPython 3.11, device appmgr runs {actual_python[0]}.{actual_python[1]}")
+    if "firmware_version" in compat:
+        check_firmware_version(compat["firmware_version"], read_firmware_version())
 
 
 def _normalise_records(files: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:

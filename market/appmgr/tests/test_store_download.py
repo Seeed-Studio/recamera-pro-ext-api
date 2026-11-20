@@ -114,6 +114,28 @@ def test_catalog_preserves_localized_copy_and_trusted_icons_without_device_heade
     assert response.closed
 
 
+@pytest.mark.parametrize("current,reason", [
+    ("v1.3.2\n", ""), ("V1.3.20\n", "firmwareIncompatible"),
+    (None, "firmwareVersionUnknown"), ("V1.3.2-rc1\n", "firmwareVersionUnknown"),
+])
+def test_catalog_checks_firmware_before_transfer(tmp_path, monkeypatch, current, reason):
+    ota = tmp_path / "ota_version"
+    monkeypatch.setattr(store.manifest, "OTA_VERSION_FILE", str(ota))
+    if current is not None:
+        ota.write_text(current)
+    entry = app_entry(firmware_version="==1.3.2")
+    app = store.normalize_catalog({"schema": 1, "apps": [entry]})["apps"][0]
+    assert app["unavailableReason"] == reason
+    assert app["firmware_version"] == "==1.3.2"
+    if reason:
+        opener = serve(monkeypatch, catalog_response([entry]))
+        with pytest.raises(store.StoreDownloadError) as rejected:
+            store.resolve_app(app["id"], app["version"], package_sha256=app["package"]["sha256"])
+        assert rejected.value.code == reason
+        assert rejected.value.details == {"required": "==1.3.2", "current": app["device_firmware_version"]}
+        assert opener.open.call_count == 1
+
+
 def test_opener_verifies_tls_disables_proxies_and_refuses_redirects(monkeypatch):
     captured = []
     monkeypatch.setattr(urllib.request, "build_opener", lambda *handlers: captured.extend(handlers))

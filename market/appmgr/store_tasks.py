@@ -364,7 +364,8 @@ class StoreTaskManager:
                             error_code = "storePreflightFailed" if record["status"] == "preflighting" else "storeDownloadFailed"
                     record.update(status="cancelled" if cancelled else "failed", updated_at=time.time(),
                         error=None if cancelled else {"code": "storeInterrupted" if self._closed else error_code,
-                                                     "message": str(exc)[:1000]})
+                                                     "message": str(exc)[:1000],
+                                                     **(getattr(exc, "details", None) or {})})
                     try:
                         self._save()
                     except OSError:
