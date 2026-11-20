@@ -59,8 +59,9 @@ def layout(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def app(layout, monkeypatch):
-    archive, manifest, lock = package_v2(str(layout / "fixture.tar.gz"))
+def app(layout, monkeypatch, request):
+    archive, manifest, lock = package_v2(str(layout / "fixture.tar.gz"),
+                                         firmware_version=getattr(request, "param", None))
     key = layout / "private.pem"
     subprocess.run(["openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", str(key)],
                    check=True, capture_output=True)
@@ -217,6 +218,18 @@ def test_preflight_failures_never_expose_installable_task(layout, app, monkeypat
         manager.preflight = changed
     task = wait_task(manager, manager.create(body(app))["task"]["id"], ("failed",))
     assert task["error"]["code"] == code
+    assert "inspection" not in task
+    assert os.listdir(paths.uploads_dir()) == []
+
+
+@pytest.mark.parametrize("app", ["==1.3.2"], indirect=True)
+def test_signed_package_enforces_requirement_missing_from_catalog(layout, app, monkeypatch):
+    monkeypatch.setattr(manifest_contract, "OTA_VERSION_FILE", str(layout / "missing"))
+    manager = server._store_manager()
+    task = wait_task(manager, manager.create(body(app))["task"]["id"], ("failed",))
+    assert task["error"]["code"] == "firmwareVersionUnknown"
+    assert task["error"]["required"] == "==1.3.2"
+    assert task["error"]["current"] is None
     assert "inspection" not in task
     assert os.listdir(paths.uploads_dir()) == []
 

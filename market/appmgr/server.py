@@ -226,8 +226,10 @@ def do_set_visualization(incoming: dict) -> dict:
         clean = appvisualization.validate(
             incoming, current=appvisualization.load())
         for app_id in clean["osd"]["sources"]:
-            _require_installed(app_id)
-            manifest = _read_manifest(app_id)
+            manifest = _firmware_system_manifest(app_id)
+            if manifest is None:
+                _require_installed(app_id)
+                manifest = _read_manifest(app_id)
             if not _supports_detection_stream_osd(manifest):
                 raise appvisualization.VisualizationError(
                     "application does not support detection stream OSD: %s" %
@@ -282,11 +284,13 @@ def _app_visualization_view(app_id: str, *, manifest: dict = None,
     its setting without claiming that boxes are currently reaching the encoder.
     """
     builtin_app = app_id == builtin.BUILTIN_ID
-    if not builtin_app:
+    system_manifest = _firmware_system_manifest(app_id)
+    if system_manifest is None:
         _require_installed(app_id)
     trusted_manifest = (
         builtin.manifest() if builtin_app else
-        (manifest if isinstance(manifest, dict) else (_read_manifest(app_id) or {}))
+        (manifest if isinstance(manifest, dict) else
+         (system_manifest or _read_manifest(app_id) or {}))
     )
     supported = bool(
         not builtin_app and _supports_detection_stream_osd(trusted_manifest))
@@ -300,7 +304,11 @@ def _app_visualization_view(app_id: str, *, manifest: dict = None,
     bridge_running = bool(bridge_status.get("running"))
     active = app_id in (bridge_status.get("active_sources") or [])
     running = bool(
-        not builtin_app and supervisor.is_running(app_id) is not None)
+        not builtin_app and (
+            motiondetect.is_running()
+            if app_id == motiondetect.MD_ID
+            else supervisor.is_running(app_id) is not None
+        ))
     effective = bool(enabled and running and bridge_running)
 
     if builtin_app:
@@ -375,12 +383,14 @@ def _eligible_app_visualization_sources(sources: list) -> tuple[list, list]:
     eligible = []
     removed = []
     for source in sources:
-        try:
-            _require_installed(source)
-        except (FileNotFoundError, ValueError):
-            removed.append({"id": source, "reason": "not_installed"})
-            continue
-        manifest = _read_manifest(source) or {}
+        manifest = _firmware_system_manifest(source)
+        if manifest is None:
+            try:
+                _require_installed(source)
+            except (FileNotFoundError, ValueError):
+                removed.append({"id": source, "reason": "not_installed"})
+                continue
+            manifest = _read_manifest(source) or {}
         if not _supports_detection_stream_osd(manifest):
             removed.append({"id": source, "reason": "unsupported"})
             continue
@@ -402,8 +412,10 @@ def do_set_app_visualization(app_id: str, incoming: dict, *,
         # mutation fence. An upgrade must not swap capability between validation
         # and persistence, and two browsers must not overwrite each other's
         # independently selected applications.
-        _require_installed(app_id)
-        manifest = _read_manifest(app_id) or {}
+        manifest = _firmware_system_manifest(app_id)
+        if manifest is None:
+            _require_installed(app_id)
+            manifest = _read_manifest(app_id) or {}
         supported = _supports_detection_stream_osd(manifest)
         if requested and not supported:
             raise appvisualization.VisualizationError(
@@ -466,7 +478,7 @@ def do_set_browser_overlay(app_id: str, incoming: dict, *,
     with busy_gate(wait_timeout=_busy_timeout):
         # Firmware system cards have no installed app directory. Legacy and
         # workflow apps use the same stable installed ID as manifest-v2 apps.
-        if app_id not in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+        if not _is_firmware_system_app(app_id):
             _require_installed(app_id)
         document = appbrowseroverlay.replace(app_id, enabled, revision)
         _audit("v1_browser_overlay", id=app_id, op="replace",
@@ -3868,6 +3880,21 @@ def _require_installed(app_id: str) -> None:
         raise FileNotFoundError("app not installed: %s" % app_id)
 
 
+def _is_firmware_system_app(app_id: str) -> bool:
+    return app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
+                      motiondetect.MD_ID)
+
+
+def _firmware_system_manifest(app_id: str):
+    if app_id == builtin.BUILTIN_ID:
+        return builtin.manifest()
+    if app_id == acousticslab.AL_ID:
+        return acousticslab.manifest()
+    if app_id == motiondetect.MD_ID:
+        return motiondetect.manifest()
+    return None
+
+
 def _read_webui_token(app_id: str, name) -> str:
     """Current UI token from the app data dir, or "" when unavailable.
 
@@ -3922,11 +3949,10 @@ def do_v1_app_webui_launch(app_id: str, host_header) -> str:
 
 
 def do_v1_lifecycle(app_id: str, action: str) -> dict:
-    # ``builtin`` and ``acousticslab`` are synthetic first-class apps backed by
-    # firmware services. They deliberately have no /userdata/local/apps/<id>
-    # directory, so only self-hosted applications participate in the
-    # installed-directory gate.
-    if app_id not in (builtin.BUILTIN_ID, acousticslab.AL_ID):
+    # Firmware system apps are backed by services rather than
+    # /userdata/local/apps/<id>, so only self-hosted applications participate
+    # in the installed-directory gate.
+    if not _is_firmware_system_app(app_id):
         _require_installed(app_id)
     callbacks = {"start": do_start, "stop": do_stop, "restart": do_restart}
     callback = callbacks.get(action)
@@ -3946,8 +3972,7 @@ def do_v1_lifecycle(app_id: str, action: str) -> dict:
 
 
 def do_v1_delete(app_id: str) -> dict:
-    if app_id in (builtin.BUILTIN_ID, acousticslab.AL_ID,
-                  motiondetect.MD_ID):
+    if _is_firmware_system_app(app_id):
         raise ValueError("a firmware system application cannot be uninstalled")
     _require_installed(app_id)
 
@@ -4167,6 +4192,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "max_request_bytes": int(
                     paths.MAX_PKG_BYTES + appuploads.MAX_MULTIPART_OVERHEAD),
             })
+        elif isinstance(exc, installer.FirmwareInstallError):
+            return self._send(400, {"code": exc.code, "error": str(exc), **exc.details})
         elif isinstance(exc, (appuploads.StagingQuotaError,
                               installer.InsufficientStorageError)):
             code = 507
@@ -4429,7 +4456,7 @@ class _Handler(BaseHTTPRequestHandler):
             app_id, endpoint = match.groups()
             try:
                 if endpoint == "config":
-                    if app_id != builtin.BUILTIN_ID:
+                    if not _is_firmware_system_app(app_id):
                         _require_installed(app_id)
                     return self._send(200, do_get_config(app_id))
                 tail = (parse_qs(parsed.query).get("tail") or [200])[0]
@@ -4825,7 +4852,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         try:
             app_id = match.group(1)
-            if app_id != builtin.BUILTIN_ID:
+            if not _is_firmware_system_app(app_id):
                 _require_installed(app_id)
             body = self._body_json_v1()
             values = body.get("values")

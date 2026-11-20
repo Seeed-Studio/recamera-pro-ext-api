@@ -347,6 +347,7 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             print(f"WARN  {filename}: no .sig sidecar -- package is UNSIGNED "
                   f"(run sign.py; device refuses unsigned installs by default)",
                   file=sys.stderr)
+        compatibility = man.get("compatibility")
         apps.append({
             "id": app_id,
             "name": man.get("name", app_id),
@@ -383,6 +384,9 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
             # store compare it against the device's kit version and say "upgrade
             # the kit first" BEFORE spending a 50 MB download on a refusal.
             **({"kit": man["kit"]} if man.get("kit") else {}),
+            **({"firmware_version": compatibility["firmware_version"]}
+               if man.get("manifest_version") == 2
+               and isinstance(compatibility, dict) and "firmware_version" in compatibility else {}),
             "arch": "arm64",
             "package": package,
             # Shared models the browser drops into target_path before install.

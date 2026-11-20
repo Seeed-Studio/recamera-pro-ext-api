@@ -53,9 +53,11 @@ def manifest_v2(version="1.0.0", sequence=1):
 
 
 def package_v2(path, *, version="1.0.0", sequence=1, marker="ONE",
-               tamper_payload=False, icon_bytes=None,
+               tamper_payload=False, icon_bytes=None, firmware_version=None,
                icon_path="assets/icon.png", icon_media_type="image/png"):
     manifest = manifest_v2(version, sequence)
+    if firmware_version is not None:
+        manifest["compatibility"]["firmware_version"] = firmware_version
     if icon_bytes is not None:
         manifest["icon"] = {
             "path": icon_path, "media_type": icon_media_type}
@@ -207,6 +209,25 @@ def test_schema_and_release_bom_fail_before_existing_release_changes(layout):
         installer.install(tampered, allow_unsigned=True)
     assert (installed / "marker.txt").read_text() == "OLD"
     assert not any(".stage." in name for name in os.listdir(layout / "apps"))
+
+
+def test_firmware_rechecked_on_install_before_replacing_current_release(layout, monkeypatch):
+    ota = layout / "ota_version"
+    monkeypatch.setattr(contract, "OTA_VERSION_FILE", str(ota))
+    original, _, _ = package_v2(str(layout / "original.tar.gz"))
+    installer.install(original, allow_unsigned=True)  # No OTA file or requirement.
+    upgrade, _, _ = package_v2(str(layout / "upgrade.tar.gz"), version="2.0.0",
+                               sequence=2, firmware_version=">=1.2.0,<1.10.0")
+    ota.write_text("V1.2.0\n")
+    assert installer.inspect(upgrade, allow_unsigned=True)["version"] == "2.0.0"
+    ota.write_text("V1.10.0\n")
+    with pytest.raises(installer.FirmwareInstallError) as failure:
+        installer.install(upgrade, allow_unsigned=True)
+    assert failure.value.details == {"required": ">=1.2.0,<1.10.0", "current": "V1.10.0"}
+    assert installed_version(layout) == "1.0.0"
+    ota.write_text("1.9.0\n")
+    installer.install(upgrade, allow_unsigned=True)
+    assert installed_version(layout) == "2.0.0"
 
 
 def test_incompatible_arch_is_rejected_before_env_or_code_staging(layout, monkeypatch):

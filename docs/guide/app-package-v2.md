@@ -20,6 +20,17 @@ editor/tooling representation of the contract.
   `rv1126b-linux-gnu-cp311-rknn232-v1`, and exactly one instance per app.
 - Runtime endpoints are allocated. A fixed `output.port` is rejected.
 
+Applications that depend on an OTA firmware release can set the optional
+`compatibility.firmware_version`. Use `"==1.2.3"` for a single release or
+`">=1.2.0,<1.4.0"` for an inclusive lower bound and an exclusive upper bound.
+Each clause uses an explicit `==`, `!=`, `<`, `<=`, `>` or `>=` followed by
+three numeric components. Join clauses with commas and no spaces. The device
+reads `/etc/ota_version` (for example `V1.3.2`) and compares versions numerically.
+The store displays the requirement before download. The installer checks the
+manifest inside the package during preflight and again before installing or
+upgrading. If the device version is unavailable or unrecognized, only packages
+that declare a firmware requirement are blocked by this check.
+
 ## Upload and storage limits
 
 App Center accepts one `.tar.gz` application package up to **10 GiB**
