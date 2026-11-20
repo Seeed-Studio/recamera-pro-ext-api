@@ -106,8 +106,15 @@
   "type": "self-hosted",
   "entry": "app.py",
   "author": "reCamera",
-  "description": "InternVL3-1B streams Chinese descriptions of sampled camera frames on the RV1126B.",
-  "description_zh": "InternVL3-1B 在 RV1126B 上分析摄像头采样画面，逐段显示中文描述。",
+  "description": "InternVL3-1B captions camera frames on the RV1126B. Set a prompt to choose what to describe and the language of the captions.",
+  "description_zh": "InternVL3-1B 在 RV1126B 上为摄像头画面生成字幕，可通过提示词指定关注内容和字幕语言。",
+  "scene": "Scene description",
+  "scene_zh": "画面描述",
+  "image": "/appcenter/apps/scene-caption.png",
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
   "capabilities": [
     "output"
   ],
@@ -169,6 +176,11 @@
     ]
   },
   "models": [],
+  "x-asset-bundle": {
+    "url": "https://files.seeedstudio.com/Solution/models/vlm/scene-caption-0.4.0-models.tar.gz",
+    "sha256": "1a77ab0d3c9273407eaf7f93e8af37a2bfe639cc20753edc11d5bdf42fc1c618",
+    "size": 991799530
+  },
   "artifacts": [
     {
       "id": "vision-0",
