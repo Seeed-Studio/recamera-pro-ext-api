@@ -4,7 +4,7 @@
 
   - daemon（motion_daemon.py）：``derive_tables()`` 派生运行时校验表
     ``(CONFIG_SPEC, DEFAULTS, RESTART_KEYS)``；
-  - appmgr（market/appmgr/motiondetect.py）：原样读取 ``groups`` 驱动
+  - 应用 manifest（由一致性测试约束）：原样使用 ``groups`` 驱动
     App Center 配置页与服务端校验。
 
 改参数只改 config_schema.json，两侧各自在 import 时加载。本模块刻意保持

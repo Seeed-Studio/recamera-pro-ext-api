@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import stat
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 
@@ -112,6 +115,20 @@ def test_real_platform_sources_stage_without_test_or_cache_payload(tmp_path):
     assert not list(platform.rglob("test_*.py"))
     assert not list(platform.rglob("__pycache__"))
     assert not list(platform.rglob("*.pyc"))
+    defaults = rootfs / "usr/share/recamera/default-apps"
+    index = json.loads((defaults / "index.json").read_text())
+    assert [item["id"] for item in index["apps"]] == ["motion-detect"]
+    entry = index["apps"][0]
+    package = defaults / entry["package"]
+    assert hashlib.sha256(package.read_bytes()).hexdigest() == entry["sha256"]
+    assert stat.S_IMODE(package.stat().st_mode) == 0o644
+    assert stat.S_IMODE((defaults / "index.json").stat().st_mode) == 0o644
+    with tarfile.open(package) as archive:
+        assert "app.py" in archive.getnames()
+        assert "release.lock.json" in archive.getnames()
+        assert not any(name.startswith(("tests/", "deploy/")) for name in archive.getnames())
+    assert not (rootfs / "usr/share/motion-detect").exists()
+    assert not (rootfs / "etc/init.d/S95motion-detectd").exists()
 
 
 def test_incremental_stage_removes_old_launchers_and_ota_masters(tmp_path):
@@ -119,6 +136,9 @@ def test_incremental_stage_removes_old_launchers_and_ota_masters(tmp_path):
     retired = [rootfs / directory / name
                for directory in ("etc/init.d", "userdata/config/system/etc/init.d")
                for name in ("S93inferenced", "S94appmgr")]
+    retired += [image / directory / "S95motion-detectd"
+                for image in (rootfs, oem)
+                for directory in ("etc/init.d", "userdata/config/system/etc/init.d")]
     for path in retired:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/sh\n# old userdata code launcher\n")
