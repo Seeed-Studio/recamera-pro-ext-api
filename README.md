@@ -111,7 +111,7 @@ More runnable examples are available in [`examples/`](examples/).
 | [`docs/guide/`](docs/guide/) | [Developer guide](docs/guide/README.md) and topic guides covering control API, result publishing, GPIO, PCM audio, frontend extensions, FFmpeg / GStreamer integration, App Center publishing, deployment and operations, Kit design, adapter paths, and voice applications. See [`overlay-customization.md`](docs/guide/overlay-customization.md) for custom AI overlays and [`overlay-customization-handoff.md`](docs/guide/overlay-customization-handoff.md) for deployment handoff. |
 | [`sdk/`](sdk/) | Device-side SDK: `librecamera_ext.so.1`, the `recamera_ext` Python package (ctypes wrapper), and C/C++ headers. |
 | [`kit/`](kit/) | Reusable Python inference toolkit: L0 adapters, runtime preprocessing and postprocessing, logic modules, and `app.py`. |
-| [`apps/`](apps/) | Sample applications (yolo-detector, face-analysis, fall-detection, voice-transcribe, etc.) and [Inference Workflows](apps/inference-rv1126b/README.md). |
+| [`apps/`](apps/) | Sample applications (yolo-detector, face-analysis, fall-detection, voice-transcribe, etc.), the [Open Vocabulary Detection demo](apps/open-vocabulary/README.md), and [Inference Workflows](apps/inference-rv1126b/README.md). |
 | [`examples/`](examples/) | Minimal SDK examples: frame capture, result injection, frame → inference → OSD, GPIO triggers, C ABI usage, and browser overlay drawing (`11-overlay-geometry`). |
 | [`market/`](market/) | App Center control plane, inference scheduler service, manifest v2 packaging, and catalog tools. |
 | [`release/`](release/) | Historical delivery snapshots. Note: current `release/pkg` **cannot be deployed**; official artifacts must be generated from manifest-pinned source builds. |

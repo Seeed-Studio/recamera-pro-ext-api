@@ -1,0 +1,386 @@
+{
+  "manifest_version": 2,
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "kit_api": ">=0.1,<1",
+    "sdk_abi": ">=1.3,<2",
+    "rknn_runtime": "==2.3.2"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "wheels": [
+      {
+        "name": "ftfy",
+        "version": "6.3.1",
+        "filename": "ftfy-6.3.1-py3-none-any.whl",
+        "source": "bundled",
+        "file": "wheels/ftfy-6.3.1-py3-none-any.whl",
+        "sha256": "7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083",
+        "size": 44821,
+        "tags": ["py3-none-any"]
+      },
+      {
+        "name": "wcwidth",
+        "version": "0.9.4",
+        "filename": "wcwidth-0.9.4-py3-none-any.whl",
+        "source": "bundled",
+        "file": "wheels/wcwidth-0.9.4-py3-none-any.whl",
+        "sha256": "901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d",
+        "size": 301806,
+        "tags": ["py3-none-any"]
+      }
+    ],
+    "imports": [
+      "ftfy",
+      "wcwidth"
+    ]
+  },
+  "resources": {
+    "claims": [
+      {
+        "name": "camera.frames",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "npu.rknn",
+        "mode": "scheduled",
+        "required": true
+      },
+      {
+        "name": "rga",
+        "mode": "shared",
+        "required": true
+      },
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": true
+      }
+    ],
+    "limits": {
+      "memory_mb": 512,
+      "cpu_percent": 300,
+      "storage_mb": 256,
+      "shutdown_grace_sec": 10
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "frame.read",
+      "npu.infer",
+      "rga.use",
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "artifacts"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [],
+      "outbound": [
+        "configured.outputs"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 120,
+    "stabilization_sec": 3,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 3,
+      "window_sec": 300,
+      "backoff_sec": [
+        1,
+        5,
+        15
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "id": "open-vocabulary",
+  "name": "Open Vocabulary Detection",
+  "name_zh": "开放词汇目标检测",
+  "version": "0.1.6",
+  "type": "self-hosted",
+  "entry": "app.py",
+  "release": {
+    "sequence": 7,
+    "channel": "dev"
+  },
+  "author": "reCamera Pro Demo",
+  "image": "/appcenter/apps/open-vocabulary.png",
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "description": "Choose what to detect in the live camera feed by entering English object names or short noun phrases, such as cup, safety helmet, or backpack. Change the detection vocabulary as your task changes without restarting the app or retraining the model. The preview shows a bounding box, a label, and a confidence score for each match.",
+  "description_zh": "在应用设置中输入想查找的英文物体名称或简短名词词组，例如 cup、safety helmet、backpack。保存后应用会更新检测词汇，无需重启或重新训练模型。应用会在摄像头实时画面中查找匹配目标，并在预览中显示检测框、目标名称和置信度。",
+  "capabilities": [
+    "output"
+  ],
+  "scene": "Automation",
+  "scene_zh": "自动化",
+  "models": [
+    {
+      "id": "detector",
+      "file": "models/world_v21s.rknn",
+      "task": "detect",
+      "quant": "fp16"
+    },
+    {
+      "id": "text_encoder",
+      "file": "models/clip_v21.rknn",
+      "task": "embedding",
+      "quant": "fp16"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "clip-merges",
+      "kind": "dictionary",
+      "source": "bundled",
+      "file": "tokenizer/merges.txt",
+      "mount": "tokenizer/merges.txt",
+      "size": 524657,
+      "sha256": "f526393189112391ce6f9795d4695f704121ce452c3aad1f5335cc41337eba85",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "clip-vocab",
+      "kind": "dictionary",
+      "source": "bundled",
+      "file": "tokenizer/vocab.json",
+      "mount": "tokenizer/vocab.json",
+      "size": 862328,
+      "sha256": "5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "world-detector",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/world_v21s.rknn",
+      "mount": "models/world_v21s.rknn",
+      "size": 27257330,
+      "sha256": "03b14b7acbeda002f056151480de427d8aa4dde949e35d217672a560666e6114",
+      "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "clip-text",
+      "kind": "rknn",
+      "source": "bundled",
+      "file": "models/clip_v21.rknn",
+      "mount": "models/clip_v21.rknn",
+      "size": 129545073,
+      "sha256": "29362861b0f871bd3796960459132c3ec2ba82a4e94eb28b16c9d3fda2570287",
+      "required": true,
+      "share_scope": "content"
+    }
+  ],
+  "render": {
+    "schema_version": 1,
+    "boxes": {
+      "label": "cls_name",
+      "color_by": "cls_name",
+      "line_width": 2
+    },
+    "stream_osd": {
+      "supported": [
+        "boxes"
+      ],
+      "default": false
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "default_channel": [
+      "ws"
+    ],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "box",
+        "from": "results[].box",
+        "type": "bbox<float>[4]",
+        "description": "Original-frame xyxy pixel coordinates",
+        "coord": "pixel_xyxy"
+      },
+      {
+        "name": "cls",
+        "from": "results[].cls",
+        "type": "integer",
+        "description": "Index into the active vocabulary; changes on vocabulary updates"
+      },
+      {
+        "name": "cls_name",
+        "from": "results[].cls_name",
+        "type": "string",
+        "description": "User supplied display name"
+      },
+      {
+        "name": "prompt",
+        "from": "results[].prompt",
+        "type": "string",
+        "description": "Text used by CLIP"
+      },
+      {
+        "name": "score",
+        "from": "results[].score",
+        "type": "float",
+        "description": "Model detection confidence"
+      },
+      {
+        "name": "object_color",
+        "from": "results[].object_color",
+        "type": "string",
+        "description": "Dominant RGB crop color when a color query is active and the crop is conclusive"
+      },
+      {
+        "name": "display_label",
+        "from": "results[].display_label",
+        "type": "string",
+        "description": "Formatted detection summary with name, confidence and xyxy coordinates"
+      },
+      {
+        "name": "detection_kind",
+        "from": "events[kind=detection].kind",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Detection event kind"
+      },
+      {
+        "name": "detection_label",
+        "from": "events[kind=detection].label",
+        "type": "string",
+        "event_kind": "detection",
+        "description": "Active vocabulary display name"
+      },
+      {
+        "name": "detection_cls",
+        "from": "events[kind=detection].cls",
+        "type": "integer",
+        "event_kind": "detection",
+        "description": "Index into the active vocabulary"
+      },
+      {
+        "name": "detection_score",
+        "from": "events[kind=detection].score",
+        "type": "float",
+        "event_kind": "detection",
+        "description": "Detection event confidence"
+      },
+      {
+        "name": "detection_box",
+        "from": "events[kind=detection].box",
+        "type": "bbox<float>[4]",
+        "coord": "pixel_xyxy",
+        "event_kind": "detection",
+        "description": "Detection event box in original-frame xyxy pixels"
+      }
+    ],
+    "default_mapping": [
+      {
+        "source": "detection.entries",
+        "target": "detections",
+        "topic": "recamera/{{ app }}/detections",
+        "task": "detection"
+      }
+    ],
+    "schema": "results[]{box,cls,cls_name,prompt,score,display_label,object_color?} + events[]{kind,label,cls,score,box}"
+  },
+  "config_schema": {
+    "groups": [
+      {
+        "key": "detection",
+        "title": "Detection",
+        "title_zh": "检测",
+        "items": [
+          {
+            "key": "vocabulary",
+            "type": "string",
+            "apply": "live",
+            "title": "Detection vocabulary",
+            "title_zh": "检测词汇",
+            "default": "helmet, cup, person",
+            "help": "Separate English names with commas, for example red helmet, blue cup, person. A supported color prefix filters the object's dominant color. Optional label: 蓝杯=blue cup. Up to 80 entries. Clear to pause.",
+            "help_zh": "用逗号分隔英文物体名称，如 red helmet, blue cup, person。常见英文颜色前缀会过滤物体主色，支持 蓝杯=blue cup。最多 80 项，留空暂停并清框。"
+          },
+          {
+            "key": "conf",
+            "type": "number",
+            "apply": "live",
+            "title": "Confidence threshold",
+            "title_zh": "置信度阈值",
+            "default": 0.25,
+            "min": 0.05,
+            "max": 0.95,
+            "step": 0.05
+          },
+          {
+            "key": "iou",
+            "type": "number",
+            "apply": "live",
+            "title": "NMS IoU threshold",
+            "title_zh": "NMS IoU 阈值",
+            "default": 0.45,
+            "min": 0.1,
+            "max": 0.9,
+            "step": 0.05
+          },
+          {
+            "key": "max_fps",
+            "type": "number",
+            "apply": "live",
+            "title": "Maximum inference FPS",
+            "title_zh": "最高推理频率",
+            "default": 5.0,
+            "min": 0.1,
+            "max": 30.0,
+            "step": 0.5,
+            "help_zh": "仅限速，实际速度取决于设备和模型；未做真机帧率保证。"
+          },
+          {
+            "key": "max_detections",
+            "type": "integer",
+            "apply": "live",
+            "title": "Maximum detections",
+            "title_zh": "最多显示目标数",
+            "default": 40,
+            "min": 1,
+            "max": 40,
+            "step": 1
+          }
+        ]
+      }
+    ]
+  },
+  "package": {
+    "exclude": [
+      "tests",
+      "README.md",
+      "requirements.txt"
+    ]
+  }
+}
