@@ -1,13 +1,14 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 8,
+    "sequence": 9,
     "channel": "stable"
   },
   "compatibility": {
     "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
     "arch": "aarch64",
     "python": "==3.11.*",
+    "firmware_version": ">=1.3.3",
     "kit_api": ">=0.2,<1",
     "sdk_abi": ">=1.3,<2",
     "rknn_runtime": "==2.3.2"
@@ -102,12 +103,12 @@
   "id": "scene-caption",
   "name": "Scene Caption",
   "name_zh": "VLM 画面描述",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "self-hosted",
   "entry": "app.py",
   "author": "reCamera",
-  "description": "InternVL3-1B captions camera frames on the RV1126B. Set a prompt to choose what to describe and the language of the captions.",
-  "description_zh": "InternVL3-1B 在 RV1126B 上为摄像头画面生成字幕，可通过提示词指定关注内容和字幕语言。",
+  "description": "Required firmware: >=1.3.3. If your device runs older firmware, update it before installing. InternVL3-1B captions camera frames on the RV1126B. Set a prompt to choose what to describe and the language of the captions.",
+  "description_zh": "所需固件版本：>=1.3.3。旧固件请先升级再安装。InternVL3-1B 在 RV1126B 上为摄像头画面生成字幕，可通过提示词指定关注内容和字幕语言。",
   "scene": "Scene description",
   "scene_zh": "画面描述",
   "image": "/appcenter/apps/scene-caption.png",

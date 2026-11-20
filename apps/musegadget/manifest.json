@@ -3,16 +3,16 @@
   "id": "musegadget",
   "name": "Muse Gadget",
   "name_zh": "Muse 设备助手",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "self-hosted",
-  "description": "Pairs this Seeed reCamera Pro with the Muse phone app over Bluetooth LE and keeps it registered as a headless Muse gadget. The reCamera Pro has an 8 MP camera, speaker, microphone and RV1126B NPU; Muse can inspect camera/detection events, records, acoustic models, apps, GPIO and video settings through the bundled recamera-local skill's read-only commands.",
-  "description_zh": "通过蓝牙 LE 与 Muse 手机应用配对，并将 Seeed reCamera Pro 作为无显示器的 Muse 设备保持在线。reCamera Pro 带有 800 万像素摄像头、喇叭、麦克风和 RV1126B NPU；Muse 可通过内置 recamera-local skill 的只读命令查看相机/检测事件、录像、声音模型、应用、GPIO 和视频参数。",
+  "description": "Required firmware: >=1.3.3. If your device runs older firmware, update it before installing. Pairs this Seeed reCamera Pro with the Muse phone app over Bluetooth LE and keeps it registered as a headless Muse gadget. The reCamera Pro has an 8 MP camera, speaker, microphone and RV1126B NPU; Muse can inspect camera/detection events, records, acoustic models, apps, GPIO and video settings through the bundled recamera-local skill's read-only commands.",
+  "description_zh": "所需固件版本：>=1.3.3。旧固件请先升级再安装。通过蓝牙 LE 与 Muse 手机应用配对，并将 Seeed reCamera Pro 作为无显示器的 Muse 设备保持在线。reCamera Pro 带有 800 万像素摄像头、喇叭、麦克风和 RV1126B NPU；Muse 可通过内置 recamera-local skill 的只读命令查看相机/检测事件、录像、声音模型、应用、GPIO 和视频参数。",
   "scene": "Interaction & Control",
   "scene_zh": "交互控制",
   "image": "/appcenter/apps/musegadget.png",
   "entry": "app.py",
   "release": {
-    "sequence": 21,
+    "sequence": 22,
     "channel": "stable"
   },
   "compatibility": {
