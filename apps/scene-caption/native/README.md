@@ -1,6 +1,8 @@
 # InternVL3-1B 转换与流式预览
 
-从干净的源码目录打包 0.4.0 时，在仓库根目录运行
+Scene Caption 需要 reCamera Pro 固件 1.3.3 或更高版本。使用旧固件的设备请先升级，再安装应用。
+
+从干净的源码目录打包时，在仓库根目录运行
 `python3 market/packaging/fetch_assets.py apps/scene-caption`。发布 CI 会自动执行这一步。
 脚本从应用清单的 `x-asset-bundle` 下载已转换的模型，核对压缩包及各文件的大小和 SHA-256，
 再将六段视觉模型和语言模型放入 `apps/scene-caption/models/`。如需重新导出权重，可使用下文的转换步骤。
