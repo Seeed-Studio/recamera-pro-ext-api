@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "apps": [
+    {"id": "motion-detect", "source": "apps/motion-detect"}
+  ]
+}

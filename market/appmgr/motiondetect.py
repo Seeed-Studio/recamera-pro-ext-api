@@ -1,4 +1,10 @@
-"""motiondetect — motion-detect 系统应用在 AppMgr 内的适配层。
+"""历史 motion-detect 固件服务适配层（保留旧调用兼容）。
+
+当前 server 已移除本模块的系统应用路由与轮询桥接；发布入口为
+apps/motion-detect，固件预装及旧配置迁移由 default_apps.py 负责。
+下面保留原驱动实现，不再参与新固件的自动启动。
+
+motiondetect — motion-detect 系统应用在 AppMgr 内的适配层。
 
 与 builtin（内建 AI 推理）/ acousticslab 同级的"固件系统应用"：
 检测本体是 rootfs 常驻服务 motion-detectd（/etc/init.d/S95motion-detectd，
@@ -54,7 +60,7 @@ class MotionDetectError(Exception):
 def _load_config_schema() -> dict:
     repo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              os.pardir, os.pardir,
-                             "services", "motion-detect", "config_schema.json")
+                             "apps", "motion-detect", "config_schema.json")
     candidates = (os.environ.get("RECAMERA_MOTION_DETECT_SCHEMA"),
                   "/usr/share/motion-detect/config_schema.json", repo_file)
     for path in candidates:
@@ -512,14 +518,11 @@ def manifest() -> dict:
         "scene_zh": "系统",
         "version": "firmware",
         "author": "reCamera (firmware)",
-        "description": "Firmware-resident CPU motion detection "
-                       "(motion-detectd): windowed squared-difference "
-                       "analysis on the luma plane, motion state pushed over "
-                       "WebSocket and reported to Home Assistant via MQTT "
-                       "Discovery. Runs alongside the built-in AI.",
-        "description_zh": "固件内置纯 CPU 移动检测（motion-detectd）："
-                          "Y 平面窗口化平方差分析，运动状态经 WebSocket 推送、"
-                          "MQTT Discovery 上报 Home Assistant。"
-                          "与内建 AI 推理并行运行，互不干扰。",
+        "description": "Built-in motion detection: watches the camera view "
+                       "and reports motion state in real time, with optional "
+                       "Home Assistant reporting. Runs alongside the "
+                       "built-in AI.",
+        "description_zh": "内置移动检测：实时监测画面中的运动并输出状态，"
+                          "支持上报 Home Assistant。可与内建 AI 推理同时运行。",
         "config_schema": CONFIG_SCHEMA,
     }

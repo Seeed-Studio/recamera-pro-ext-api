@@ -135,6 +135,7 @@ _INTEGER_KEYS = {
 # a blanket "integral default => integer" sweep would have silently truncated
 # these the first time somebody typed a decimal.
 _DELIBERATE_NUMBER_KEYS = {
+    "motion-detect": {"sq_diff_threshold", "sample_fps"},
     # Recording cooldowns are elapsed seconds and intentionally allow fractions.
     "facemesh-reader": {"recording_cooldown_sec"},
     "fall-detection": {"torso_angle_threshold_deg", "recovery_torso_angle_deg",

@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
+import json
 import os
 import shutil
 import stat
 import tempfile
+import sys
 from pathlib import Path
 
 
@@ -104,6 +107,48 @@ def _assert_clean(root: Path) -> None:
             raise ValueError(f"unexpected platform service symlink: {path}")
 
 
+def _stage_default_apps(repo: Path, rootfs: Path) -> None:
+    # Build exactly the same deterministic manifest-v2 archives as the store.
+    # The firmware image carries the index/digests as its own trust boundary;
+    # publisher private keys are never required by a source firmware build.
+    if str(repo) not in sys.path:
+        sys.path.insert(0, str(repo))
+    from market.packaging.build import build
+
+    from market.appmgr.manifest import validate_manifest
+
+    with (repo / "market/default-apps.json").open() as stream:
+        presets = json.load(stream)
+    if presets.get("version") != 1 or not isinstance(presets.get("apps"), list):
+        raise ValueError("invalid default application build list")
+    with tempfile.TemporaryDirectory(prefix="recamera-default-apps-") as temporary:
+        output = Path(temporary)
+        index = {"version": 1, "apps": []}
+        seen = set()
+        for preset in presets["apps"]:
+            source = (repo / preset["source"]).resolve()
+            if not source.is_relative_to((repo / "apps").resolve()):
+                raise ValueError("default app source must be inside apps/")
+            manifest = json.loads((source / "manifest.json").read_text())
+            validate_manifest(manifest, allow_v1=False)
+            if manifest["id"] != preset["id"] or preset["id"] in seen:
+                raise ValueError("default application id mismatch or duplicate")
+            seen.add(preset["id"])
+            package = Path(build(str(source), str(output)))
+            index["apps"].append({
+                "id": manifest["id"], "version": manifest["version"],
+                "package": package.name,
+                "sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
+            })
+        (output / "index.json").write_text(json.dumps(index, indent=2) + "\n")
+        destination = rootfs / "usr/share/recamera/default-apps"
+        _replace_tree(output, destination)
+        os.chmod(destination.parent, 0o755)
+        os.chmod(destination, 0o755)
+        for member in destination.iterdir():
+            os.chmod(member, 0o644)
+
+
 def stage(repo: Path, rootfs: Path, oem: Path) -> None:
     platform = rootfs / "usr/lib/recamera"
     _replace_tree(repo / "market/appmgr", platform / "appmgr")
@@ -125,19 +170,13 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         for directory in ("etc/init.d", "userdata/config/system/etc/init.d"):
             (rootfs / directory / name).unlink(missing_ok=True)
     _copy_file(repo / "market/deploy/ext_appmgr.conf", oem / "etc/nginx/ext_appmgr.conf", 0o644)
-    # motion-detect system service: pure-Python daemon staged read-only into the
-    # rootfs, boot hook into rootfs /etc/init.d.  Runtime config lives in
-    # /userdata/local/motion-detect (created by the init script on first boot).
-    motion_src = repo / "services/motion-detect"
-    motion_dst = rootfs / "usr/share/motion-detect"
-    _replace_tree(motion_src, motion_dst)
-    # tests/、deploy/ 与文档留在仓库，不进镜像。
-    shutil.rmtree(motion_dst / "tests", ignore_errors=True)
-    shutil.rmtree(motion_dst / "deploy", ignore_errors=True)
-    for extra in ("API.md", "README.md"):
-        (motion_dst / extra).unlink(missing_ok=True)
-    _copy_file(motion_src / "deploy/S95motion-detectd",
-               rootfs / "etc/init.d/S95motion-detectd", 0o755)
+    _stage_default_apps(repo, rootfs)
+    # Retire all historical boot hooks, including incremental-build/OTA copies.
+    # AppMgr is the only lifecycle owner of the installed motion application.
+    shutil.rmtree(rootfs / "usr/share/motion-detect", ignore_errors=True)
+    for image in (rootfs, oem):
+        for directory in ("etc/init.d", "userdata/config/system/etc/init.d"):
+            (image / directory / "S95motion-detectd").unlink(missing_ok=True)
     _assert_clean(platform)
     required = (
         platform / "appmgr/__main__.py",
@@ -154,11 +193,7 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
         oem / "etc/init.d/S93inferenced",
         oem / "etc/init.d/S94appmgr",
         oem / "etc/nginx/ext_appmgr.conf",
-        rootfs / "usr/share/motion-detect/motion_daemon.py",
-        rootfs / "usr/share/motion-detect/motion_core.py",
-        rootfs / "usr/share/motion-detect/config_schema.py",
-        rootfs / "usr/share/motion-detect/config_schema.json",
-        rootfs / "etc/init.d/S95motion-detectd",
+        rootfs / "usr/share/recamera/default-apps/index.json",
     )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -166,7 +201,6 @@ def stage(repo: Path, rootfs: Path, oem: Path) -> None:
     init_scripts = (
         oem / "etc/init.d/S93inferenced",
         oem / "etc/init.d/S94appmgr",
-        rootfs / "etc/init.d/S95motion-detectd",
     )
     for script in init_scripts:
         if not stat.S_IMODE(script.stat().st_mode) & stat.S_IXUSR:
