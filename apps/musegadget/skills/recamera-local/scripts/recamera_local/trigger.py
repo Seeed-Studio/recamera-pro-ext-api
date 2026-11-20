@@ -1,28 +1,26 @@
 """Record rule system: config, schedule, trigger tagged-union, and the
-recording-source discovery surface.
+recording-source discovery surface (``/record/rule/...`` +
+``/api/app-center/v1/recording/sources``).
 
-The legacy ``sed`` (sound-event) trigger kind is retired: sound recording is
-an ``inference_set`` rule with ``source_filter=["acousticslab"]``."""
+Only ONE record trigger is active at a time: `inference_set`, `timer`,
+`gpio`, `tty`, `http`, or `always_on`. Switching kinds replaces the active
+trigger but preserves the other kinds' remembered settings.
+
+Firmware note: the legacy ``sed`` (sound-event) trigger kind is retired.
+Sound-triggered recording is an ``inference_set`` rule whose
+``source_filter`` names the ``acousticslab`` source; devices auto-migrate
+legacy ``dSED`` sections at boot.
+"""
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 from typing import Any, Dict, List, Optional
 
-from . import _config, _http
+from . import _local as http
 from ._coerce import to_bool
 from ._errors import RecameraError
 
 __all__ = [
-    "get_rule_system_info",
     "get_record_config",
     "set_record_config",
     "get_schedule_rule",
@@ -31,75 +29,20 @@ __all__ = [
     "set_record_trigger",
     "activate_http_trigger",
     "get_record_sources",
+    "parse_trigger",
+    "trigger_to_json",
 ]
 
 PATH_CONFIG = "/cgi-bin/entry.cgi/record/rule/config"
-PATH_INFO = "/cgi-bin/entry.cgi/record/rule/info"
 PATH_SCHEDULE = "/cgi-bin/entry.cgi/record/rule/schedule-rule-config"
 PATH_RECORD_RULE = "/cgi-bin/entry.cgi/record/rule/record-rule-config"
 PATH_HTTP_ACTIVATE = "/cgi-bin/entry.cgi/record/rule/http-rule-activate"
 PATH_SOURCES = "/api/app-center/v1/recording/sources"
 
 
-def get_rule_system_info(device_name: Optional[str] = None) -> Dict[str, Any]:
-    """Health / availability snapshot of the rule subsystem."""
-    dev = _config.resolve(device_name)
-    d = _http.get_json(dev, PATH_INFO) or {}
-    return {
-        "ready_for_new_event": bool(d.get("bReadyForNewEvent", False)),
-        "last_event": _parse_event(d.get("dLastRuleEvent")),
-        "last_event_owner": _parse_event_owner(d.get("dLastRuleEventOwner")),
-        "available_gpios": {
-            k: _parse_avail_gpio(v) for k, v in (d.get("dAvailableGPIOs") or {}).items()
-        },
-        "available_ttys": {
-            k: _parse_avail_tty(v) for k, v in (d.get("dAvailableTTYs") or {}).items()
-        },
-        "media_paused": bool(d.get("bMediaPaused", False)),
-        "video_clip_length_seconds": int(d.get("bVideoClipLengthSeconds", 0)),
-    }
-
-
-def _parse_event(v: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(v, dict):
-        return None
-    status = v.get("sStatus")
-    ts = v.get("iTimestamp")
-    if not isinstance(status, str) or not isinstance(ts, int):
-        return None
-    return {"status": status, "timestamp_unix_ms": ts}
-
-
-def _parse_event_owner(v: Any) -> Optional[Dict[str, Any]]:
-    if not isinstance(v, dict):
-        return None
-    return {
-        "rule_type": v.get("sRuleType", ""),
-        "rule_id": v.get("sRuleID", ""),
-        "timestamp_unix_ms": int(v.get("iTimestamp", 0)),
-    }
-
-
-def _parse_avail_gpio(v: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "num": int(v.get("iNum", 0)),
-        "state": v.get("sState"),
-        "capabilities": list(v.get("lCapabilities") or []),
-        "level": v.get("sLevel"),
-    }
-
-
-def _parse_avail_tty(v: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "socket_path": v.get("sSocketPath", ""),
-        "buffer_size": int(v.get("iBufferSize", 0)),
-    }
-
-
-def get_record_config(device_name: Optional[str] = None) -> Dict[str, Any]:
+def get_record_config() -> Dict[str, Any]:
     """Return `{rule_enabled, writer: {format, interval_ms}}`."""
-    dev = _config.resolve(device_name)
-    d = _http.get_json(dev, PATH_CONFIG) or {}
+    d = http.get_json(PATH_CONFIG) or {}
     writer = d.get("dWriterConfig") or {}
     return {
         "rule_enabled": bool(d.get("bRuleEnabled", False)),
@@ -111,14 +54,12 @@ def get_record_config(device_name: Optional[str] = None) -> Dict[str, Any]:
 
 
 def set_record_config(
-    device_name: Optional[str] = None,
     *,
     rule_enabled: bool,
     writer_format: str,
     writer_interval_ms: int = 0,
 ) -> None:
     """Enable/disable the rule pipeline and set the writer format (`JPG`/`MP4`/`RAW`)."""
-    dev = _config.resolve(device_name)
     payload = {
         "bRuleEnabled": to_bool(rule_enabled, "rule_enabled"),
         "dWriterConfig": {
@@ -126,14 +67,13 @@ def set_record_config(
             "iIntervalMs": int(writer_interval_ms),
         },
     }
-    resp = _http.post_json(dev, PATH_CONFIG, payload=payload)
-    _http.expect_ok(resp, "set rule config")
+    resp = http.post_json(PATH_CONFIG, payload=payload)
+    http.expect_ok(resp, "set rule config")
 
 
-def get_schedule_rule(device_name: Optional[str] = None) -> Optional[List[Dict[str, str]]]:
+def get_schedule_rule() -> Optional[List[Dict[str, str]]]:
     """Active-weekdays list, or `None` when the schedule is disabled."""
-    dev = _config.resolve(device_name)
-    d = _http.get_json(dev, PATH_SCHEDULE) or {}
+    d = http.get_json(PATH_SCHEDULE) or {}
     if not d.get("bEnabled"):
         return None
     ranges = []
@@ -145,12 +85,8 @@ def get_schedule_rule(device_name: Optional[str] = None) -> Optional[List[Dict[s
     return ranges or None
 
 
-def set_schedule_rule(
-    device_name: Optional[str] = None,
-    schedule: Optional[List[Dict[str, str]]] = None,
-) -> None:
+def set_schedule_rule(schedule: Optional[List[Dict[str, str]]] = None) -> None:
     """Pass `None` or `[]` (or omit) to disable (rule active 24/7)."""
-    dev = _config.resolve(device_name)
     ranges = schedule or []
     enabled = bool(ranges)
     weekdays = [
@@ -159,22 +95,25 @@ def set_schedule_rule(
         if isinstance(r, dict) and "start" in r and "end" in r
     ]
     payload = {"bEnabled": enabled, "lActiveWeekdays": weekdays}
-    resp = _http.post_json(dev, PATH_SCHEDULE, payload=payload)
-    _http.expect_ok(resp, "set schedule rule")
+    resp = http.post_json(PATH_SCHEDULE, payload=payload)
+    http.expect_ok(resp, "set schedule rule")
 
 
 _FULL_FRAME_REGION = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
 
 
-def get_record_sources(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Recording-rule sources, normalized: ``{id, kind, name, running,
-    frame_capable, event_capable, supports_roi, classes}``.
+def get_record_sources() -> List[Dict[str, Any]]:
+    """List the recording-rule sources this firmware exposes, normalized.
 
-    ``classes`` is empty when unknowable (the ``builtin`` source follows the
-    selected vision model — see ``get_detection_models_info``). Validate
-    ``source_filter``/``label_filter`` against this BEFORE compiling a rule."""
-    dev = _config.resolve(device_name)
-    data = _http.get_json(dev, PATH_SOURCES)
+    Each entry: ``{id, kind, name, running, frame_capable, event_capable,
+    supports_roi, classes}`` where ``classes`` is the union of labels the
+    source can currently produce (empty when unknowable, e.g. the ``builtin``
+    vision source — its labels follow the selected model, see
+    ``get_detection_models_info``). Use ``id`` values for a rule's
+    ``source_filter`` and ``classes`` to validate ``label_filter`` BEFORE
+    compiling a rule: an unknown source id or an unproducible label makes a
+    rule that never fires."""
+    data = http.get_json(PATH_SOURCES)
     if not isinstance(data, dict):
         raise RecameraError(
             f"get record sources failed: unexpected payload type {type(data).__name__}"
@@ -205,24 +144,24 @@ def get_record_sources(device_name: Optional[str] = None) -> List[Dict[str, Any]
     return out
 
 
-def _fetch_record_rule(dev: Dict[str, Any]) -> Dict[str, Any]:
+def _fetch_record_rule() -> Dict[str, Any]:
     """Raw `record-rule-config` payload (no tagged-union decoding)."""
-    d = _http.get_json(dev, PATH_RECORD_RULE)
+    d = http.get_json(PATH_RECORD_RULE)
     return d if isinstance(d, dict) else {}
 
 
-def get_record_trigger(device_name: Optional[str] = None) -> Dict[str, Any]:
+def get_record_trigger() -> Dict[str, Any]:
     """Return the current trigger as a tagged-union dict; see :func:`trigger_to_json`."""
-    dev = _config.resolve(device_name)
-    return parse_trigger(_fetch_record_rule(dev))
+    return parse_trigger(_fetch_record_rule())
 
 
-def _get_inference_rules(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Decoded INFERENCE_SET rules; `[]` for other kinds. Gates on the raw
-    ``sCurrentSelected`` so an unmigrated ``SED`` selection yields `[]`
+def _get_inference_rules() -> List[Dict[str, Any]]:
+    """Decoded INFERENCE_SET rules, or `[]` when another kind is selected.
+
+    Gates on the raw ``sCurrentSelected`` (single GET): a retired-but-not-yet-
+    migrated ``SED`` selection (migration runs at boot) yields `[]` here
     instead of tripping :func:`parse_trigger`'s refusal."""
-    dev = _config.resolve(device_name)
-    raw = _fetch_record_rule(dev)
+    raw = _fetch_record_rule()
     if str(raw.get("sCurrentSelected", "")).upper() != "INFERENCE_SET":
         return []
     return [_parse_detection_rule(r) for r in (raw.get("lInferenceSet") or [])]
@@ -306,7 +245,8 @@ def _detection_rule_to_json(rule: Dict[str, Any]) -> Dict[str, Any]:
         "iDebounceTimes": int(rule.get("debounce_times", 0)),
         "lConfidenceFilter": confidence,
         "lClassFilter": list(rule.get("label_filter", [])),
-        # Empty = match every source; name sources to scope the rule.
+        # Empty = match every source; name sources explicitly (e.g.
+        # ["builtin"] or ["acousticslab"]) to scope the rule.
         "lSourceFilter": list(rule.get("source_filter", [])),
         "lRegionFilter": [{"lPolygon": poly} for poly in regions],
     }
@@ -345,7 +285,7 @@ _SED_RETIRED = (
 )
 
 
-def _trigger_patch(trigger: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+def _trigger_patch(trigger: Dict[str, Any]) -> tuple:
     """Return `(sCurrentSelected, {key: value, ...})` for *trigger*.
 
     The patch dict contains only the sub-object(s) owned by the selected
@@ -430,9 +370,7 @@ def trigger_to_json(trigger: Dict[str, Any]) -> Dict[str, Any]:
     return _merge_trigger_payload(None, trigger)
 
 
-def set_record_trigger(
-    device_name: Optional[str] = None, *, trigger: Dict[str, Any]
-) -> None:
+def set_record_trigger(*, trigger: Dict[str, Any]) -> None:
     """Install *trigger* while preserving other kinds' remembered settings.
 
     Fetches the current `record-rule-config`, copies the sibling sub-objects
@@ -443,27 +381,24 @@ def set_record_trigger(
 
     See :func:`trigger_to_json` for accepted trigger shapes.
     """
-    dev = _config.resolve(device_name)
     try:
-        current = _http.get_json(dev, PATH_RECORD_RULE)
+        current = http.get_json(PATH_RECORD_RULE)
     except RecameraError:  # fresh/unreachable device: degrade to full-replace
         current = None
     payload = _merge_trigger_payload(
         current if isinstance(current, dict) else None, trigger
     )
-    resp = _http.post_json(dev, PATH_RECORD_RULE, payload=payload)
-    _http.expect_ok(resp, "set record trigger")
+    resp = http.post_json(PATH_RECORD_RULE, payload=payload)
+    http.expect_ok(resp, "set record trigger")
 
 
-def activate_http_trigger(device_name: Optional[str] = None) -> None:
+def activate_http_trigger() -> None:
     """Fire a one-shot record event on an HTTP-kind trigger."""
-    dev = _config.resolve(device_name)
-    resp = _http.post_json(dev, PATH_HTTP_ACTIVATE)
-    _http.expect_ok(resp, "activate HTTP trigger")
+    resp = http.post_json(PATH_HTTP_ACTIVATE)
+    http.expect_ok(resp, "activate HTTP trigger")
 
 
 COMMANDS = {
-    "get_rule_system_info": get_rule_system_info,
     "get_record_config": get_record_config,
     "set_record_config": set_record_config,
     "get_schedule_rule": get_schedule_rule,

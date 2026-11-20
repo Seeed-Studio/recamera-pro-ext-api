@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 from typing import Any, Dict, Optional
 
-from . import _config, _http
+from . import _local as http
 from ._errors import RecameraError
 
 __all__ = ["get_video_encode", "set_video_encode"]
@@ -22,12 +13,12 @@ PATH_ENCODE = "/cgi-bin/entry.cgi/video/{}/encode"
 
 _STREAM_IDS = {"main": 0, "sub": 1}
 
+_CODECS = ("H.264", "H.265")
+_RC_MODES = ("CBR", "VBR")
+_RC_QUALITIES = ("highest", "high", "medium", "low")
 
-def get_video_encode(
-    device_name: Optional[str] = None,
-    *,
-    stream: str = "main",
-) -> Dict[str, Any]:
+
+def get_video_encode(*, stream: str = "main") -> Dict[str, Any]:
     """Encode parameters for `stream` (``"main"``|``"sub"``):
     ``{stream, stream_type, enabled, codec, resolution, frame_rate, gop,
     rc_mode, rc_quality, max_rate(kbps)}``."""
@@ -36,8 +27,7 @@ def get_video_encode(
         raise ValueError(
             f"stream must be one of {sorted(_STREAM_IDS)}; got {stream!r}"
         )
-    dev = _config.resolve(device_name)
-    d = _http.get_json(dev, PATH_ENCODE.format(_STREAM_IDS[key]))
+    d = http.get_json(PATH_ENCODE.format(_STREAM_IDS[key]))
     if not isinstance(d, dict):
         raise RecameraError("get video encode failed: unexpected payload")
     return {
@@ -52,13 +42,6 @@ def get_video_encode(
         "rc_quality": d.get("sRCQuality", ""),
         "max_rate": int(d.get("iMaxRate", 0)),
     }
-
-
-COMMANDS = {"get_video_encode": get_video_encode}
-
-_CODECS = ("H.264", "H.265")
-_RC_MODES = ("CBR", "VBR")
-_RC_QUALITIES = ("highest", "high", "medium", "low")
 
 
 def _int_field(name: str, value: Any, lo: int, hi: int) -> int:
@@ -87,7 +70,6 @@ def _norm_resolution(value: Any) -> str:
 
 
 def set_video_encode(
-    device_name: Optional[str] = None,
     *,
     stream: str = "main",
     codec: Optional[str] = None,
@@ -103,7 +85,6 @@ def set_video_encode(
     changed (the rest keep their stored values), and the result is verified
     by re-reading the device. Changing these briefly re-inits the encoder.
     """
-    dev = _config.resolve(device_name)
     key = str(stream).strip().lower()
     if key not in _STREAM_IDS:
         raise ValueError(
@@ -149,11 +130,10 @@ def set_video_encode(
         raise ValueError(
             "nothing to change: pass codec, resolution, frame_rate, gop, "
             "rc_mode, rc_quality, max_rate, or enabled")
-    _http.expect_ok(
-        _http.post_json(dev, PATH_ENCODE.format(_STREAM_IDS[key]),
-                        payload=payload),
+    http.expect_ok(
+        http.post_json(PATH_ENCODE.format(_STREAM_IDS[key]), payload=payload),
         "set video encode")
-    after = get_video_encode(device_name, stream=key)
+    after = get_video_encode(stream=key)
     mismatched = {
         k: {"wanted": v, "got": after.get(k)}
         for k, v in checks.items()
@@ -165,4 +145,7 @@ def set_video_encode(
     return {"changed": True, "stream": key, "applied": checks}
 
 
-COMMANDS["set_video_encode"] = set_video_encode
+COMMANDS = {
+    "get_video_encode": get_video_encode,
+    "set_video_encode": set_video_encode,
+}

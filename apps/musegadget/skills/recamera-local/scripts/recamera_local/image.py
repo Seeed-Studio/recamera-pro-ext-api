@@ -7,19 +7,10 @@ table: friendly snake_case keys out, device `s*`/`i*` keys in.
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 import re
 from typing import Any, Dict, Optional
 
-from . import _config, _http
+from . import _local as http
 from ._errors import RecameraError
 
 __all__ = ["get_image_settings", "set_image_settings"]
@@ -104,8 +95,8 @@ _SECTIONS: Dict[str, _Section] = {
 _PROFILE_SECTIONS = ("adjustment", "exposure", "backlight", "white_balance", "enhancement")
 
 
-def _fetch_config(dev) -> Dict[str, Any]:
-    return _http.get_json(dev, PATH_IMAGE) or {}
+def _fetch_config() -> Dict[str, Any]:
+    return http.get_json(PATH_IMAGE) or {}
 
 
 def _normalize_section(spec: _Section, raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -114,10 +105,9 @@ def _normalize_section(spec: _Section, raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def get_image_settings(device_name: Optional[str] = None) -> Dict[str, Any]:
+def get_image_settings() -> Dict[str, Any]:
     """Full ISP config: video adjustment, night-to-day, and 3 scene profiles."""
-    dev = _config.resolve(device_name)
-    d = _fetch_config(dev)
+    d = _fetch_config()
     profiles = d.get("profile") or []
     return {
         "video_adjustment": _normalize_section(
@@ -194,7 +184,6 @@ def _active_scene(config: Dict[str, Any]) -> int:
 
 
 def set_image_settings(
-    device_name: Optional[str] = None,
     *,
     section: str,
     values: Dict[str, Any],
@@ -231,8 +220,7 @@ def set_image_settings(
         for key, value in values.items()
     }
 
-    dev = _config.resolve(device_name)
-    config = _fetch_config(dev)
+    config = _fetch_config()
     if spec.profile and scene_id is None:
         scene_id = _active_scene(config)
     if spec.profile:
@@ -251,13 +239,13 @@ def set_image_settings(
     _check_section_rules(section, payload)
 
     path = spec.path.replace("{scene}", str(scene_id)) if spec.profile else spec.path
-    resp = _http.put_json(dev, path, payload=payload)
-    _http.expect_ok(resp, f"set image settings {section}")
+    resp = http.put_json(path, payload=payload)
+    http.expect_ok(resp, f"set image settings {section}")
 
     out: Dict[str, Any] = {
         "section": section,
         "changed": dict(values),
-        "state": _section_state(spec, _fetch_config(dev), scene_id),
+        "state": _section_state(spec, _fetch_config(), scene_id),
     }
     if spec.profile:
         out["scene_id"] = scene_id

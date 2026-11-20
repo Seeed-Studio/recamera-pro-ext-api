@@ -1,19 +1,14 @@
-"""GPIO pins: list / info / read / write (auto-configures direction on first use)."""
+"""GPIO pins: list / info / read / write (auto-configures direction on first use).
+
+Note: `set_gpio_value` reconfigures the pin as push-pull output and
+`get_gpio_value` as floating input — both have hardware side effects.
+"""
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 from typing import Any, Dict, List, Optional
 
-from . import _config, _http
+from . import _local as http
 from ._errors import RecameraError
 
 __all__ = ["list_gpios", "get_gpio_info", "set_gpio_value", "get_gpio_value"]
@@ -51,10 +46,9 @@ def _parse_descriptor(pin_id: int, d: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def list_gpios(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_gpios() -> List[Dict[str, Any]]:
     """List all GPIO pins with info + current settings."""
-    dev = _config.resolve(device_name)
-    data = _http.get_json(dev, f"{_BASE}/gpios") or {}
+    data = http.get_json(f"{_BASE}/gpios") or {}
     out: List[Dict[str, Any]] = []
     for key, val in data.items():
         try:
@@ -67,32 +61,31 @@ def list_gpios(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
     return out
 
 
-def get_gpio_info(device_name: Optional[str] = None, *, pin_id: int) -> Dict[str, Any]:
+def get_gpio_info(*, pin_id: int) -> Dict[str, Any]:
     """Return info + settings for *pin_id*."""
-    dev = _config.resolve(device_name)
-    data = _http.get_json(dev, f"{_BASE}/gpio/{int(pin_id)}") or {}
+    data = http.get_json(f"{_BASE}/gpio/{int(pin_id)}") or {}
     return _parse_descriptor(int(pin_id), data)
 
 
-def _get_settings(dev, pin_id: int) -> Dict[str, Any]:
-    data = _http.get_json(dev, f"{_BASE}/gpio/{pin_id}/settings") or {}
+def _get_settings(pin_id: int) -> Dict[str, Any]:
+    data = http.get_json(f"{_BASE}/gpio/{pin_id}/settings") or {}
     return _parse_settings(data)
 
 
-def _set_settings(dev, pin_id: int, payload: Dict[str, Any]) -> None:
-    resp = _http.post_json(dev, f"{_BASE}/gpio/{pin_id}/settings", payload=payload)
-    _http.expect_ok(resp, "set gpio settings")
+def _set_settings(pin_id: int, payload: Dict[str, Any]) -> None:
+    resp = http.post_json(f"{_BASE}/gpio/{pin_id}/settings", payload=payload)
+    http.expect_ok(resp, "set gpio settings")
 
 
-def _ensure_output(dev, pin_id: int) -> None:
-    s = _get_settings(dev, pin_id)
+def _ensure_output(pin_id: int) -> None:
+    s = _get_settings(pin_id)
     if s["state"] in _OUTPUT_STATES:
         return
-    _set_settings(dev, pin_id, {"state": _OUTPUT_STATE})
+    _set_settings(pin_id, {"state": _OUTPUT_STATE})
 
 
-def _ensure_input(dev, pin_id: int, debounce_ms: Optional[int]) -> None:
-    s = _get_settings(dev, pin_id)
+def _ensure_input(pin_id: int, debounce_ms: Optional[int]) -> None:
+    s = _get_settings(pin_id)
     state_ok = s["state"] in _INPUT_STATES
     debounce_ok = debounce_ms is None or s["debounce_ms"] == int(debounce_ms)
     if state_ok and debounce_ok:
@@ -105,10 +98,10 @@ def _ensure_input(dev, pin_id: int, debounce_ms: Optional[int]) -> None:
         # Device rejects debounce when edge=none; enable both-edge detection.
         if int(debounce_ms) > 0 and s.get("edge", "none") == "none":
             payload["edge"] = "both"
-    _set_settings(dev, pin_id, payload)
+    _set_settings(pin_id, payload)
 
 
-def set_gpio_value(device_name: Optional[str] = None, *, pin_id: int, value: int) -> int:
+def set_gpio_value(*, pin_id: int, value: int) -> int:
     """Drive *pin_id* to 0 or 1.
 
     Reconfigures the pin as a push-pull output first if it is not already in an
@@ -116,30 +109,23 @@ def set_gpio_value(device_name: Optional[str] = None, *, pin_id: int, value: int
     """
     if value not in (0, 1):
         raise ValueError(f"GPIO value must be 0 or 1, got {value}")
-    dev = _config.resolve(device_name)
     pin_id = int(pin_id)
-    _ensure_output(dev, pin_id)
-    _http.post_text(dev, f"{_BASE}/gpio/{pin_id}/value", str(value))
+    _ensure_output(pin_id)
+    http.post_text(f"{_BASE}/gpio/{pin_id}/value", str(value))
     return value
 
 
-def get_gpio_value(
-    device_name: Optional[str] = None,
-    *,
-    pin_id: int,
-    debounce_ms: Optional[int] = _DEBOUNCE_MS_DEFAULT,
-) -> int:
+def get_gpio_value(*, pin_id: int, debounce_ms: Optional[int] = _DEBOUNCE_MS_DEFAULT) -> int:
     """Read *pin_id* as a 0/1 integer.
 
     Reconfigures the pin as a floating input first if it is not already in an
     input state — this has the side effect of changing the pin's direction.
-    When `debounce_ms > 0` and the current edge is `none`, the SDK also
-    enables both-edge detection (the device rejects debounce with edge=none).
+    When `debounce_ms > 0` and the current edge is `none`, both-edge detection
+    is enabled too (the device rejects debounce with edge=none).
     """
-    dev = _config.resolve(device_name)
     pin_id = int(pin_id)
-    _ensure_input(dev, pin_id, debounce_ms)
-    body, _ = _http.get_bytes(dev, f"{_BASE}/gpio/{pin_id}/value")
+    _ensure_input(pin_id, debounce_ms)
+    body, _ = http.get_bytes(f"{_BASE}/gpio/{pin_id}/value")
     text = body.decode("utf-8", errors="replace").strip()
     try:
         return int(text)

@@ -74,3 +74,7 @@ release/**/*.tar.gz
 release/**/*.bundle
 apps/face-recognition/evaluation/data/
 market/packaging/icons/
+
+# Muse Gadget 的固定目标 wheel 随应用入库，保证离线安装包可从干净 clone 复现
+!apps/musegadget/wheels/
+!apps/musegadget/wheels/*.whl

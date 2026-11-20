@@ -1,22 +1,16 @@
-"""App Center applications: listing and logs (``/api/app-center/v1/apps``).
+"""App Center applications: listing, logs, lifecycle (``/api/app-center/v1/apps``).
 
-Building NEW apps is the recamera-pysdk skill's domain."""
+A stopped app produces no frames for recording rules fed by it — check
+`list_apps` when a source from `get_record_sources` looks dead.
+"""
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from . import _config, _http
+from . import _local as http
+from ._coerce import to_bool
 from ._errors import RecameraError
 
 __all__ = ["list_apps", "get_app_logs", "start_app", "stop_app", "restart_app"]
@@ -39,14 +33,13 @@ def _require_app_id(app_id: Any) -> str:
     return app_id
 
 
-def list_apps(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_apps() -> List[Dict[str, Any]]:
     """App Center apps, normalized: ``{id, name, name_zh, version, status,
     system, installed, description}``.
 
     ``system`` marks firmware apps (``builtin``, ``acousticslab``) that cannot
     be uninstalled. A stopped app produces no frames for recording rules."""
-    dev = _config.resolve(device_name)
-    data = _http.get_json(dev, PATH_APPS)
+    data = http.get_json(PATH_APPS)
     if data is None:
         data = {}  # codebase GET norm: tolerate an empty body
     if not isinstance(data, dict):
@@ -70,19 +63,12 @@ def list_apps(device_name: Optional[str] = None) -> List[Dict[str, Any]]:
     return out
 
 
-def get_app_logs(
-    device_name: Optional[str] = None,
-    *,
-    app_id: str,
-    tail: int = 200,
-) -> Dict[str, Any]:
+def get_app_logs(*, app_id: str, tail: int = 200) -> Dict[str, Any]:
     """The app's recent log lines: ``{id, lines, text}``; ``tail`` clamps to
     [1, 2000] and spans the rotated log."""
-    dev = _config.resolve(device_name)
     app_id = _require_app_id(app_id)
     tail = min(MAX_LOG_TAIL, max(1, int(tail)))
-    data = _http.get_json(dev, f"{PATH_APPS}/{app_id}/logs",
-                          params={"tail": str(tail)})
+    data = http.get_json(f"{PATH_APPS}/{app_id}/logs", params={"tail": str(tail)})
     if not isinstance(data, dict):
         raise RecameraError(f"get app logs failed for {app_id!r}: unexpected payload")
     return {
@@ -92,47 +78,42 @@ def get_app_logs(
     }
 
 
-COMMANDS = {"list_apps": list_apps, "get_app_logs": get_app_logs}
-
-
-def _lifecycle(app_id: Any, action: str, device_name: Optional[str] = None,
-               *, confirm: bool = False) -> Dict[str, Any]:
+def _lifecycle(app_id: Any, action: str, *, confirm: bool = False) -> Dict[str, Any]:
     app_id = _require_app_id(app_id)
-    apps = list_apps(device_name)
+    apps = list_apps()
     app = next((a for a in apps if a["id"] == app_id), None)
     if app is None:
         raise ValueError(
             f"unknown app {app_id!r}; installed: {[a['id'] for a in apps]}")
-    if action != "start" and app.get("system") and not confirm:
+    if action != "start" and app.get("system") and not to_bool(confirm, "confirm"):
         raise ValueError(
             f"{action} on system app {app_id!r} interrupts a firmware-managed "
             "result source (recording rules fed by it go silent) — re-run "
             "with confirm=true")
     # Plain JSON response (no envelope): HTTP status is the error signal.
-    dev = _config.resolve(device_name)
-    _http.post_json(dev, f"{PATH_APPS}/{app_id}/{action}", payload={})
+    http.post_json(f"{PATH_APPS}/{app_id}/{action}", payload={})
     return {"changed": True, "id": app_id, "action": action, "async": True}
 
 
-def start_app(app_id: str, device_name: Optional[str] = None) -> Dict[str, Any]:
+def start_app(app_id: str) -> Dict[str, Any]:
     """Start an app (202 queued; poll `list_apps` for status ``running``)."""
-    return _lifecycle(app_id, "start", device_name)
+    return _lifecycle(app_id, "start")
 
 
-def stop_app(app_id: str, device_name: Optional[str] = None, *,
-             confirm: bool = False) -> Dict[str, Any]:
+def stop_app(app_id: str, *, confirm: bool = False) -> Dict[str, Any]:
     """Stop an app. Stopping a SYSTEM app requires ``confirm=true``."""
-    return _lifecycle(app_id, "stop", device_name, confirm=confirm)
+    return _lifecycle(app_id, "stop", confirm=confirm)
 
 
-def restart_app(app_id: str, device_name: Optional[str] = None, *,
-                confirm: bool = False) -> Dict[str, Any]:
+def restart_app(app_id: str, *, confirm: bool = False) -> Dict[str, Any]:
     """Restart an app. Restarting a SYSTEM app requires ``confirm=true``."""
-    return _lifecycle(app_id, "restart", device_name, confirm=confirm)
+    return _lifecycle(app_id, "restart", confirm=confirm)
 
 
-COMMANDS.update({
+COMMANDS = {
+    "list_apps": list_apps,
+    "get_app_logs": get_app_logs,
     "start_app": start_app,
     "stop_app": stop_app,
     "restart_app": restart_app,
-})
+}

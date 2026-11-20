@@ -1,8 +1,4 @@
-"""Strict bool coercion for API boundaries: ``bool("false") is True`` must never happen.
-
-Accepts real booleans, ``0``/``1``, and case-insensitive ``true/false``,
-``yes/no``, ``on/off``, ``1``/``0``; rejects everything else loudly.
-"""
+"""Strict bool coercion for API boundaries: ``bool("false") is True`` must never happen."""
 
 from __future__ import annotations
 
@@ -26,9 +22,7 @@ def to_bool(value: Any, name: str = "value") -> bool:
             return True
         if lowered in _FALSE:
             return False
-    raise ValueError(
-        f"{name} must be a boolean (true/false); got {value!r}."
-    )
+    raise ValueError(f"{name} must be a boolean (true/false); got {value!r}.")
 
 
 def require_confirm(confirm: Any, what: str) -> None:

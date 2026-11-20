@@ -4,10 +4,11 @@
 """Muse service runner with the reCamera Pro camera/audio inspection commands.
 
 Runs in the app's own root service process (the same process that owns the
-Muse link).  The reCamera-Intellisense SDK is vendored in this app directory;
-nothing is copied to a shared /userdata directory.  The extra commands are
-read-only local-API calls, so they are safe to handle in-process.  Muse's
-system.run/file.* commands still go through the normal run-as account.
+Muse link).  The reCamera-Intellisense `recamera-local` skill is bundled in
+this app directory under `skills/recamera-local/`; nothing is copied to a
+shared /userdata directory.  The extra commands are read-only local-API calls,
+so they are safe to handle in-process.  Muse's system.run/file.* commands
+still go through the normal run-as account.
 """
 
 from __future__ import annotations
@@ -22,9 +23,12 @@ import sys
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(APP_DIR / "vendor"))
+SKILLS_DIR = Path(os.environ.get("MUSEGADGET_SKILLS_DIR") or (APP_DIR / "skills"))
+SKILL_NAME = "recamera-local"
+SKILL_DIR = SKILLS_DIR / SKILL_NAME
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
 
-import recamera_intellisense as rci  # noqa: E402
+import recamera_local as rci  # noqa: E402
 
 from musegadget import __version__, commands, config, device_guide, identity  # noqa: E402
 from musegadget.executor import (  # noqa: E402
@@ -35,35 +39,65 @@ from musegadget.service import Service  # noqa: E402
 
 log = logging.getLogger("musegadget")
 
-DEVICE_NAME = "local"
-KEY_FILE = "/userdata/config/system/http_key.json"
+SKILL_READ_LIMIT = 256 * 1024
 
 
-def _device_token() -> str:
+def _skill_files() -> list[str]:
+    """Regular files in the bundled skill, excluding bytecode and cache dirs."""
+    root = SKILL_DIR.resolve()
+    files: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        files.append(path.relative_to(root).as_posix())
+    return files
+
+
+def _skill_metadata() -> dict:
     try:
-        with open(KEY_FILE, "r", encoding="utf-8") as source:
-            data = json.load(source)
-        key = data.get("key") if isinstance(data, dict) else ""
-        return key.strip() if isinstance(key, str) else ""
+        upstream = json.loads(
+            (SKILL_DIR / "upstream.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
+        upstream = {}
+    return {
+        "name": SKILL_NAME,
+        "package_version": getattr(rci, "__version__", None),
+        "path": str(SKILL_DIR),
+        "repository": upstream.get("repository"),
+        "branch": upstream.get("branch"),
+        "commit": upstream.get("commit"),
+        "commit_date": upstream.get("commit_date"),
+        "files": _skill_files(),
+    }
 
 
-def _ensure_device() -> None:
+def list_skills() -> dict:
+    return {"skills": [_skill_metadata()]}
+
+
+def read_skill(file: str = "SKILL.md") -> dict:
+    """Read a file from the bundled skill (default: its SKILL.md)."""
+    if not isinstance(file, str) or not file.strip():
+        raise ValueError("'file' must be a non-empty relative path")
+    root = SKILL_DIR.resolve()
+    candidate = (root / file.strip()).resolve()
     try:
-        names = {record.get("name") for record in rci.list_devices()
-                 if isinstance(record, dict)}
-    except Exception:  # noqa: BLE001 - unreadable store is handled by add_device
-        names = set()
-    if DEVICE_NAME in names:
-        return
-    rci.add_device(
-        DEVICE_NAME,
-        "127.0.0.1",
-        _device_token(),
-        protocol="https",
-        allow_unsecured=True,
-    )
+        candidate.relative_to(root)
+    except ValueError:
+        raise ValueError("'file' must stay inside the skill directory") from None
+    if not candidate.is_file():
+        raise ValueError(f"no such skill file: {file}")
+    if "__pycache__" in candidate.parts or candidate.suffix == ".pyc":
+        raise ValueError(f"not a readable skill file: {file}")
+    data = candidate.read_bytes()
+    if len(data) > SKILL_READ_LIMIT:
+        raise ValueError(f"skill file is too large: {file}")
+    return {
+        "name": SKILL_NAME,
+        "file": candidate.relative_to(root).as_posix(),
+        "bytes": len(data),
+        "content": data.decode("utf-8", errors="replace"),
+    }
 
 
 # Command name -> (function, allowed parameter names).  Read-only only.
@@ -82,6 +116,8 @@ HANDLERS = {
     "apps.list": (rci.list_apps, frozenset()),
     "gpio.list": (rci.list_gpios, frozenset()),
     "recamera.time": (rci.get_system_time, frozenset()),
+    "skills.list": (list_skills, frozenset()),
+    "skills.read": (read_skill, frozenset({"file"})),
 }
 
 SPECS = {
@@ -157,6 +193,18 @@ SPECS = {
         "description": "Read the reCamera Pro clock, timezone and NTP configuration.",
         "required": {}, "optional": {}, "timeout_ms": 30000,
     },
+    "skills.list": {
+        "description": "List the agent skills bundled with this app, including the recamera-local skill's upstream commit and files.",
+        "required": {}, "optional": {}, "timeout_ms": 30000,
+    },
+    "skills.read": {
+        "description": "Read a file from a bundled skill. Start with SKILL.md, then REFERENCE.md and OBSERVATION.md as needed.",
+        "required": {},
+        "optional": {
+            "file": {"type": "string", "description": "Path relative to the skill directory; defaults to SKILL.md."},
+        },
+        "timeout_ms": 30000,
+    },
 }
 
 # Publish the extra commands exactly like the SDK's built-ins.
@@ -164,7 +212,7 @@ COMMAND_SPECS.update(SPECS)
 
 
 def _snapshot(**params) -> dict:
-    result = rci.capture_image(device_name=DEVICE_NAME, **params)
+    result = rci.capture_image(**params)
     if isinstance(result, dict):
         result.pop("content_base64", None)
         result["inline_base64_omitted"] = True
@@ -176,10 +224,9 @@ def handle(command: str, params: dict):
     unknown = set(params) - allowed
     if unknown:
         raise ValueError("unknown parameter(s): " + ", ".join(sorted(unknown)))
-    _ensure_device()
     if command == "camera.snapshot":
         return _snapshot(**params)
-    return function(device_name=DEVICE_NAME, **params)
+    return function(**params)
 
 
 class RecameraExecutor(Executor):
