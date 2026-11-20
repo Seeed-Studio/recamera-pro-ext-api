@@ -1,0 +1,278 @@
+{
+  "manifest_version": 2,
+  "id": "musegadget",
+  "name": "Muse Gadget",
+  "name_zh": "Muse 设备助手",
+  "version": "0.1.0",
+  "type": "self-hosted",
+  "description": "Pairs this Seeed reCamera Pro with the Muse phone app over Bluetooth LE and keeps it registered as a headless Muse gadget. The reCamera Pro has an 8 MP camera, speaker, microphone and RV1126B NPU; Muse can inspect camera/detection events, records, acoustic models, apps, GPIO and video settings through the bundled reCamera-Intellisense read-only commands.",
+  "description_zh": "通过蓝牙 LE 与 Muse 手机应用配对，并将 Seeed reCamera Pro 作为无显示器的 Muse 设备保持在线。reCamera Pro 带有 800 万像素摄像头、喇叭、麦克风和 RV1126B NPU；Muse 可通过内置的 reCamera-Intellisense 只读命令查看相机/检测事件、录像、声音模型、应用、GPIO 和视频参数。",
+  "scene": "Interaction & Control",
+  "scene_zh": "交互控制",
+  "image": "/appcenter/apps/musegadget.png",
+  "entry": "app.py",
+  "release": {
+    "sequence": 20,
+    "channel": "stable"
+  },
+  "compatibility": {
+    "platform_profile": "rv1126b-linux-gnu-cp311-rknn232-v1",
+    "arch": "aarch64",
+    "python": "==3.11.*",
+    "firmware_version": ">=1.3.3",
+    "kit_api": ">=0.4,<0.5"
+  },
+  "python": {
+    "runtime_profile": "recamera-ai-cp311-v1",
+    "isolation": "per-release",
+    "imports": [
+      "musegadget",
+      "cryptography",
+      "websockets",
+      "cffi"
+    ],
+    "wheels": [
+      {
+        "name": "musegadget",
+        "version": "0.1.0",
+        "filename": "musegadget-0.1.0-py3-none-any.whl",
+        "file": "wheels/musegadget-0.1.0-py3-none-any.whl",
+        "sha256": "6cdadcf71ff2b8463f9e08f880082016bc6812ed7aefd16c58251441e4d5a768",
+        "size": 187077,
+        "tags": [
+          "py3-none-any"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "cffi",
+        "version": "1.15.1",
+        "filename": "cffi-1.15.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "file": "wheels/cffi-1.15.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "sha256": "3548db281cd7d2561c9ad9984681c95f7b0e38881201e157833a2342c30d5e8c",
+        "size": 470613,
+        "tags": [
+          "cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "cryptography",
+        "version": "45.0.7",
+        "filename": "cryptography-45.0.7-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "file": "wheels/cryptography-45.0.7-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+        "sha256": "67285f8a611b0ebc0857ced2081e30302909f571a46bfa7a3cc0ad303fe015c6",
+        "size": 4205799,
+        "tags": [
+          "cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "pycparser",
+        "version": "2.22",
+        "filename": "pycparser-2.22-py3-none-any.whl",
+        "file": "wheels/pycparser-2.22-py3-none-any.whl",
+        "sha256": "c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc",
+        "size": 117552,
+        "tags": [
+          "py3-none-any"
+        ],
+        "source": "bundled"
+      },
+      {
+        "name": "websockets",
+        "version": "17.1",
+        "filename": "websockets-17.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+        "file": "wheels/websockets-17.1-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+        "sha256": "47a62d6045c6eaa0d8f97bc2fb68b8cf90077a0cbfd4e83d6f2d2145611ee134",
+        "size": 225511,
+        "tags": [
+          "cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64"
+        ],
+        "source": "bundled"
+      }
+    ]
+  },
+  "artifacts": [],
+  "config_schema": {
+    "revision": 1,
+    "groups": [
+      {
+        "key": "connect",
+        "title": "Muse connection",
+        "title_zh": "Muse 连接",
+        "items": [
+          {
+            "key": "sdk_token",
+            "type": "password",
+            "title": "SDK token",
+            "title_zh": "SDK 令牌",
+            "default": "",
+            "apply": "restart",
+            "help": "mgst_... from gadgets.muse.ai. Stored 0600 under appdata and used on the next pairing.",
+            "help_zh": "在 gadgets.muse.ai 获取；以 0600 保存到 appdata，并在下次配对时使用。"
+          },
+          {
+            "key": "proxy_url",
+            "type": "string",
+            "title": "HTTPS proxy",
+            "title_zh": "HTTPS 代理",
+            "default": "",
+            "apply": "restart",
+            "help": "Optional http:// or https://host:port for outbound Muse traffic.",
+            "help_zh": "可选的 http:// 或 https://host:port，用于访问 Muse。"
+          },
+          {
+            "key": "no_proxy",
+            "type": "string",
+            "title": "Proxy bypass list",
+            "title_zh": "代理绕过列表",
+            "default": "",
+            "apply": "restart"
+          },
+          {
+            "key": "run_as",
+            "type": "string",
+            "title": "Command account",
+            "title_zh": "命令运行账户",
+            "default": "admin",
+            "apply": "restart",
+            "help": "Account whose permissions Muse commands get. Do not use root unless you accept the risk.",
+            "help_zh": "Muse 命令使用的账户权限。除非接受风险，否则不要使用 root。"
+          }
+        ]
+      },
+      {
+        "key": "pairing",
+        "title": "Pairing",
+        "title_zh": "配对",
+        "items": [
+          {
+            "key": "pair_timeout_s",
+            "type": "integer",
+            "title": "Pairing window (seconds)",
+            "title_zh": "配对窗口（秒）",
+            "default": 600,
+            "min": 60,
+            "max": 1800,
+            "step": 30,
+            "apply": "live"
+          },
+          {
+            "key": "autopair",
+            "type": "boolean",
+            "title": "Pair automatically on first start",
+            "title_zh": "首次启动自动进入配对",
+            "default": false,
+            "apply": "live"
+          },
+          {
+            "key": "pair_force",
+            "type": "boolean",
+            "title": "Allow replacing an existing pairing",
+            "title_zh": "允许替换现有配对",
+            "default": false,
+            "apply": "live"
+          },
+          {
+            "key": "wifi_provisioning",
+            "type": "boolean",
+            "title": "Provision WiFi during pairing",
+            "title_zh": "配对时配置 WiFi",
+            "default": false,
+            "apply": "live",
+            "help": "Off: only bind, using the device's current Ethernet/WiFi. On: scan and join a WiFi network through the reCamera API during pairing.",
+            "help_zh": "关闭：只绑定，使用设备当前以太网/WiFi；开启：配对时通过 reCamera API 扫描并连接 WiFi。"
+          }
+        ]
+      }
+    ]
+  },
+  "resources": {
+    "claims": [
+      {
+        "name": "result.publish",
+        "mode": "brokered",
+        "required": false
+      }
+    ],
+    "limits": {
+      "memory_mb": 256,
+      "cpu_percent": 100,
+      "storage_mb": 128,
+      "shutdown_grace_sec": 5
+    }
+  },
+  "permissions": {
+    "sdk": [
+      "result.publish"
+    ],
+    "filesystem": {
+      "read": [
+        "app",
+        "appdata"
+      ],
+      "write": [
+        "appdata",
+        "tmp"
+      ]
+    },
+    "network": {
+      "listen": [
+        "musegadget.ui"
+      ],
+      "outbound": [
+        "muse.api",
+        "muse.ws"
+      ]
+    }
+  },
+  "health": {
+    "protocol": "kit-health-v1",
+    "startup_timeout_sec": 60,
+    "stabilization_sec": 2,
+    "liveness_interval_sec": 10,
+    "liveness_failures": 3,
+    "restart": {
+      "policy": "on-failure",
+      "max_attempts": 5,
+      "window_sec": 600,
+      "backoff_sec": [
+        2,
+        5,
+        15,
+        30,
+        60
+      ]
+    }
+  },
+  "instances": {
+    "max": 1,
+    "config_scope": "app",
+    "data_scope": "app",
+    "endpoint_mode": "allocated"
+  },
+  "capabilities": [],
+  "webui": {
+    "port": 8099,
+    "scheme": "http",
+    "path": "/",
+    "token": {
+      "file": "webui_token",
+      "fragment_param": "token"
+    }
+  },
+  "icon": {
+    "path": "icon.png",
+    "media_type": "image/png"
+  },
+  "package": {
+    "exclude": [
+      "tests",
+      "README.md",
+      "requirements.txt",
+      "tools"
+    ]
+  }
+}
