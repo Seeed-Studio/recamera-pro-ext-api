@@ -139,8 +139,10 @@ class StoreTaskManager:
                 raise ValueError("store task install operation identity mismatch")
             status = (operation["status"] if operation["status"] in operations.TERMINAL
                       else "installing")
-            error = ({"code": "storeInstallFailed", "message": operation.get("error") or "Installation failed"}
-                     if status == "failed" else None)
+            error = None
+            if status == "failed":
+                error = {"code": "storeInstallFailed", "message": operation.get("error") or "Installation failed",
+                         **(operation.get("error_detail") or {})}
             changed = (record["status"] != status or record.get("operation_id") != operation["id"] or
                        record.get("error") != error)
             if changed:

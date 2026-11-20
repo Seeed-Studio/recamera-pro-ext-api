@@ -293,11 +293,27 @@ def _staged_icon(app_id: str, icons_dir: str) -> str | None:
     return None
 
 
+def with_firmware_notice(entry: dict) -> dict:
+    """Factory firmware displays descriptions even when it drops the OTA constraint."""
+    required = entry.get("firmware_version")
+    if not required:
+        return entry
+    english_notice = f"Required firmware: {required}."
+    chinese_notice = f"所需固件版本：{required}。"
+    description = (entry.get("description") or "").removeprefix(english_notice).lstrip()
+    chinese = (entry.get("description_zh") or description).removeprefix(chinese_notice)
+    return {
+        **entry,
+        "description": f"{english_notice} {description}".rstrip(),
+        "description_zh": f"{chinese_notice}{chinese}",
+    }
+
+
 def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS_DIR,
                   models_spec_path: str = DEFAULT_MODELS_SPEC,
                   models_base_url: str | None = None,
                   runtimes_dir: str = DEFAULT_RUNTIMES_DIR,
-                  icons_dir: str = DEFAULT_ICONS_DIR) -> dict:
+                  icons_dir: str = DEFAULT_ICONS_DIR, *, firmware_notices: bool = True) -> dict:
     pkgs = sorted(glob.glob(os.path.join(dist_dir, "*.tar.gz")))
     if not pkgs:
         raise SystemExit(f"no *.tar.gz packages found in {dist_dir}")
@@ -401,7 +417,7 @@ def build_catalog(dist_dir: str, base_url: str, models_dir: str = DEFAULT_MODELS
         "generated": datetime.datetime.now(datetime.timezone.utc)
                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "recamera_pro/market/packaging/dist",
-        "apps": apps,
+        "apps": [with_firmware_notice(app) for app in apps] if firmware_notices else apps,
     }
     runtimes = _build_runtimes(runtimes_dir, base)
     if runtimes:

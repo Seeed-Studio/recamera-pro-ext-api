@@ -148,6 +148,8 @@ def test_add_stages_only_live_packages(env):
         assert by[a["id"]] == a
     assert by["gamma"]["icon_url"] == pa.ICONS_BASE + "gamma.png"
     assert by["gamma"]["firmware_version"] == ">=1.2.0,<1.4.0"
+    assert by["gamma"]["description"] == "Required firmware: >=1.2.0,<1.4.0. gamma"
+    assert by["gamma"]["description_zh"] == "所需固件版本：>=1.2.0,<1.4.0。gamma"
     assert "firmware_version" not in by["alpha"]
     assert cat["runtimes"] == env["live"]["runtimes"]
     assert (st / "catalog.prev.json").read_bytes() == pa.fetch_live()
@@ -197,6 +199,31 @@ def test_identical_live_package_is_noop(env):
     rc, st = env["run"](env["dist"] / "alpha-1.0.0-arm64.tar.gz")
     assert rc == 0
     assert not (st / "packages").exists()
+
+
+def test_add_notice_to_identical_live_package_uploads_only_catalog_once(env, monkeypatch):
+    pkg = env["make_pkg"]("gamma", "1.0.0", env["out"], firmware_version=">=1.3.3")
+    rc, staged = env["run"](pkg, "--sign")
+    assert rc == 0
+    live = load_cat(staged)
+    gamma = next(app for app in live["apps"] if app["id"] == "gamma")
+    gamma.pop("firmware_version")
+    gamma.update(description="Existing listing", description_zh="现有说明")
+    monkeypatch.setattr(pa, "fetch_live", lambda: json.dumps(live).encode())
+    uploads = []
+    monkeypatch.setattr(pa, "upload_verified", lambda file, url: uploads.append(url))
+    monkeypatch.setattr(pa, "wait_cdn", lambda entry: True)
+    rc, staged = env["run"](pkg, "--yes")
+    assert rc == 0 and uploads == [f"{pa.OSS_BASE}/catalog.json"]
+    updated = load_cat(staged)
+    entry = next(app for app in updated["apps"] if app["id"] == "gamma")
+    assert entry == {**gamma, "firmware_version": ">=1.3.3",
+                     "description": "Required firmware: >=1.3.3. Existing listing",
+                     "description_zh": "所需固件版本：>=1.3.3。现有说明"}
+    live = updated
+    rc, staged = env["run"](pkg, "--yes")
+    assert rc == 0 and not (staged / "catalog.json").exists()
+    assert len(uploads) == 1
 
 
 def test_upgrade_replaces_old_version(env):

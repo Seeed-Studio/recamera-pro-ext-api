@@ -234,6 +234,22 @@ def test_signed_package_enforces_requirement_missing_from_catalog(layout, app, m
     assert os.listdir(paths.uploads_dir()) == []
 
 
+@pytest.mark.parametrize("app", [">=1.3.3"], indirect=True)
+def test_install_reports_version_change_after_successful_preflight(layout, app, monkeypatch):
+    ota = layout / "ota_version"
+    ota.write_text("V1.3.3")
+    monkeypatch.setattr(manifest_contract, "OTA_VERSION_FILE", str(ota))
+    manager = server._store_manager()
+    task = wait_task(manager, manager.create(body(app))["task"]["id"])
+    ota.write_text("V1.3.2")
+    manager.install(task["id"], {"permissions_confirmed": True, "permissions": app["manifest"]["permissions"]})
+    failed = wait_task(manager, task["id"], ("failed",))
+    detail = {"code": "firmwareIncompatible", "required": ">=1.3.3", "current": "V1.3.2"}
+    assert failed["operation"]["error_detail"] == detail
+    assert failed["error"] == {**detail, "message": failed["operation"]["error"]}
+    assert not Path(paths.app_dir(app["id"])).exists()
+
+
 def test_confirmation_reuses_v1_permissions_and_install_binding(layout, app, monkeypatch):
     manager = server._store_manager()
     task = wait_task(manager, manager.create(body(app))["task"]["id"])

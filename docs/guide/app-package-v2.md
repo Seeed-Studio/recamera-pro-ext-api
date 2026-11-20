@@ -30,6 +30,9 @@ The store displays the requirement before download. The installer checks the
 manifest inside the package during preflight and again before installing or
 upgrading. If the device version is unavailable or unrecognized, only packages
 that declare a firmware requirement are blocked by this check.
+Apps that support factory firmware should omit this field in future releases
+as well. The publisher adds a bilingual store description notice for apps with
+a hard requirement so factory devices can display it before download.
 
 ## Upload and storage limits
 

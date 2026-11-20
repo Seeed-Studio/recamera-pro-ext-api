@@ -332,7 +332,7 @@ def stage_signature(src_pkg: str, staged_pkg: str, do_sign: bool, key: str, pub:
 
 # --------------------------------------------------------------------------- catalog
 
-def regenerate(live: dict, pkg_dir: str, icons_dir: str, empty_dir: str) -> dict:
+def regenerate(live: dict, pkg_dir: str, icons_dir: str, empty_dir: str, app_id: str) -> dict:
     # Store packages are self-contained (bundled artifacts), so every app gets
     # models: [] regardless of the repo's models.json, which describes the
     # legacy shared-model layout and would require staged model files.
@@ -341,7 +341,13 @@ def regenerate(live: dict, pkg_dir: str, icons_dir: str, empty_dir: str) -> dict
         pkg_dir, PACKAGES_BASE,
         models_dir=gen_catalog.DEFAULT_MODELS_DIR,
         models_spec_path=os.path.join(empty_dir, "models.json"),
-        runtimes_dir=empty_dir, icons_dir=icons_dir)
+        runtimes_dir=empty_dir, icons_dir=icons_dir, firmware_notices=False)
+    # An unrelated listing may predate bilingual firmware notices. Preserve
+    # its published form while still checking regenerated metadata for drift.
+    previous = {entry["id"]: entry for entry in live["apps"]}
+    for index, entry in enumerate(cat["apps"]):
+        if entry["id"] == app_id or entry != previous.get(entry["id"]):
+            cat["apps"][index] = gen_catalog.with_firmware_notice(entry)
     # Runtime bundles are not apps and are not re-uploaded here: carry the live
     # descriptors over verbatim instead of re-hashing local copies.
     cat.pop("runtimes", None)
@@ -404,8 +410,7 @@ def wait_cdn(entry: dict) -> bool:
         try:
             cat = json.loads(http_get(f"{CATALOG_URL}?_={int(time.time())}"))
             hit = next((a for a in cat.get("apps", []) if a["id"] == entry["id"]), None)
-            if hit and hit["version"] == entry["version"] and \
-                    hit["package"]["sha256"] == entry["package"]["sha256"]:
+            if hit == entry:
                 log(f"  CDN catalog shows {entry['id']} {entry['version']} (try {i + 1})")
                 return True
         except Exception as e:  # noqa: BLE001 -- transient CDN errors are retried
@@ -448,6 +453,17 @@ def run(args) -> int:
     log("  manifest v2 / BOM / release lock / member paths: OK")
     action, old = classify(live, app_id, version, sha)
     if action == "noop":
+        required = info["manifest"]["compatibility"].get("firmware_version")
+        if required:
+            # The existing package hash already binds this manifest. Publish
+            # only its missing catalog notice and retain the live signature.
+            entry = gen_catalog.with_firmware_notice({**old, "firmware_version": required})
+            if entry != old:
+                cat = {**live, "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "apps": [entry if app["id"] == app_id else app for app in live["apps"]]}
+                check_diff(live, cat, app_id)
+                log(f"  refresh firmware notice for {app_id} {version}")
+                return publish_catalog(cat, entry, staging, [], args.yes)
         log(f"\n{app_id} {version} is already live with identical bytes. Nothing to do.")
         return 0
 
@@ -487,15 +503,11 @@ def run(args) -> int:
         log("  no icon (store will show the default tile)")
 
     log("\n[5] regenerate catalog")
-    cat = regenerate(live, pkg_dir, icons_dir, empty_dir)
+    cat = regenerate(live, pkg_dir, icons_dir, empty_dir, app_id)
     entry = check_diff(live, cat, app_id)
     if entry.get("models"):
         raise PublishError("new entry declares shared models[]; this script does not "
                            "upload models -- use publish_oss.sh")
-    cat_path = os.path.join(staging, "catalog.json")
-    with open(cat_path, "w") as f:
-        json.dump(cat, f, indent=2, ensure_ascii=False)
-        f.write("\n")
     log("  runtimes: carried over from the live catalog verbatim "
         "(gen_catalog 'no voice-runtime/gst-hwcodec' notes above are expected)")
     unchanged = len(live.get("apps", [])) - (1 if old else 0)
@@ -510,6 +522,14 @@ def run(args) -> int:
     uploads = [(staged_pkg, f"{OSS_BASE}/packages/{canonical}")]
     if icon_local:
         uploads.append((icon_local, f"{OSS_BASE}/icons/{os.path.basename(icon_local)}"))
+    return publish_catalog(cat, entry, staging, uploads, args.yes)
+
+
+def publish_catalog(cat: dict, entry: dict, staging: str, uploads: list, yes: bool) -> int:
+    cat_path = os.path.join(staging, "catalog.json")
+    with open(cat_path, "w") as f:
+        json.dump(cat, f, indent=2, ensure_ascii=False)
+        f.write("\n")
     uploads.append((cat_path, f"{OSS_BASE}/catalog.json"))
     log("\n[6] upload plan (in order; catalog.json last)")
     for local, url in uploads:
@@ -518,7 +538,7 @@ def run(args) -> int:
     rollback = f"ossutil cp -f {staging}/catalog.prev.json {OSS_BASE}/catalog.json"
     log(f"  rollback: {rollback}")
 
-    if not args.yes:
+    if not yes:
         log("\nDRY RUN -- nothing uploaded. Re-run with --yes after confirming the plan.")
         return 0
 
@@ -530,7 +550,7 @@ def run(args) -> int:
         log(f"OSS objects verified, but {CATALOG_URL} does not show the new entry yet. "
             f"Re-check later; rollback: {rollback}")
         return 3
-    log(f"\npublished {app_id} {version}. Rollback: {rollback}")
+    log(f"\npublished {entry['id']} {entry['version']}. Rollback: {rollback}")
     return 0
 
 
