@@ -1,18 +1,20 @@
-"""Shared error type for all SDK-level failures."""
+"""Shared error type for all local-skill failures."""
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 class RecameraError(RuntimeError):
-    """Device / config / connectivity failure. Carries HTTP `status`, device `code`, raw `body`."""
+    """Device / connectivity failure. Carries HTTP `status`, device `code`, raw `body`."""
 
     def __init__(
         self,
         message: str,
         *,
-        status: int | None = None,
-        code: int | None = None,
-        body: str | None = None,
+        status: Optional[int] = None,
+        code: Optional[int] = None,
+        body: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.status = status

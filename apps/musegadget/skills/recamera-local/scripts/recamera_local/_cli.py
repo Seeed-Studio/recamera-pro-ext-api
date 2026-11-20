@@ -1,64 +1,76 @@
-"""Unified CLI dispatcher.
+"""Unified CLI dispatcher for the local reCamera skill.
 
 Usage::
 
-    recamera <command> [key=value ...] [--key value ...] [--key=value ...]
-    recamera <command> '{"key": "value", ...}'
-    recamera <command> --help
+    rcl <command> [key=value ...] [--key value ...] [--key=value ...]
+    rcl <command> '{"key": "value", ...}'
+    rcl <command> --help
+    rcl --pretty <command> ...        # pretty-printed JSON output
+    rcl serve                         # persistent JSONL REPL (see below)
 
 Arguments are matched to the command function's keyword parameters and
 coerced using its type annotations:
 
 * ``str``               — passed through verbatim
-* ``int`` / ``float``   — parsed numerically (``quota_limit_bytes=-1`` works)
+* ``int`` / ``float``   — parsed numerically
 * ``bool``              — strict: ``true/false``, ``yes/no``, ``on/off``, ``1/0``
 * ``Optional[...]``     — ``null`` / ``none`` select ``None``
 * ``List`` / ``Dict``   — inline JSON, or ``@path/to/file.json`` (``@-`` = stdin)
 
-In the key=value form, any value may come from a file via ``@path``
-(``token=@token.txt`` keeps secrets out of shell history); ``@@`` gives a
-literal leading ``@``. A single argument starting with ``{`` is parsed as one
-JSON object for the whole call (no ``@`` expansion there). Keys are
-case-sensitive but dashes are normalized to underscores (``--device-name`` ==
-``device_name``). Results print as pretty JSON; errors print the failing
-command's usage and an example to stderr, exit non-zero.
+In the key=value form, any value may come from a file via ``@path``;
+``@@`` gives a literal leading ``@``. A single argument starting with ``{``
+is parsed as one JSON object for the whole call (no ``@`` expansion there).
+
+Output is compact one-line JSON on stdout (set ``--pretty`` or
+``RECAMERA_PRETTY=1`` for indented). Usage errors print the command's
+``usage:`` + ``example:`` lines to stderr and exit 2; device/IO errors print
+an error JSON object to stderr and exit 1.
+
+Serve mode keeps one process (and one keep-alive connection) alive for a
+whole agent session — the lowest-latency way to drive the camera from a
+harness that can hold a long-running process::
+
+    $ rcl serve
+    {"cmd": "get_status"}
+    {"ok": true, "result": {...}}
+    {"id": 7, "cmd": "wait_event", "args": {"timeout_s": 60}}
+    {"id": 7, "ok": true, "result": {"events": [...], ...}}
+
+Each input line is one JSON object: ``cmd`` (required), ``args`` (object,
+optional), ``id`` (echoed back, optional). Special commands:
+``list-commands``, ``exit``. One JSON response per line, always flushed.
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 import typing
 from typing import Any, Callable, Dict, Iterable, Tuple
 
 if __name__ == "__main__" and __package__ is None:
     # Direct execution: make absolute imports work like `python3 -m`.
-    import os
-
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense import (
+    from recamera_local import (
         acoustic,
         apps,
         backup,
         capture,
         clock,
-        detection,
-        device,
-        files,
+        detect,
         gpio,
         image,
-        model,
         notify,
         records,
-        relay,
-        rule,
+        status,
         storage,
-        system,
+        trigger,
         video,
     )
-    from recamera_intellisense._coerce import to_bool
-    from recamera_intellisense._errors import RecameraError
+    from recamera_local._coerce import to_bool
+    from recamera_local._errors import RecameraError
 else:
     from . import (
         acoustic,
@@ -66,46 +78,39 @@ else:
         backup,
         capture,
         clock,
-        detection,
-        device,
-        files,
+        detect,
         gpio,
         image,
-        model,
         notify,
         records,
-        relay,
-        rule,
+        status,
         storage,
-        system,
+        trigger,
         video,
     )
     from ._coerce import to_bool
     from ._errors import RecameraError
 
 _MODULES = (
-    device,
-    system,
+    status,
     clock,
-    image,
-    rule,
     storage,
-    relay,
-    records,
     capture,
-    gpio,
-    model,
+    detect,
     acoustic,
+    trigger,
+    records,
+    gpio,
+    image,
     apps,
     video,
     notify,
     backup,
-    detection,
-    files,
 )
 
+PROG = "rcl"
 
-# Parameters that exist for Python callers but are not valid CLI arguments.
+# Python-API-only parameters, excluded from CLI argument parsing.
 CLI_EXCLUDE = {"raw"}
 
 
@@ -133,124 +138,73 @@ def _collect() -> Tuple[Dict[str, Callable[..., Any]], Dict[str, Dict[str, set]]
 
 COMMANDS, COMMAND_SCHEMAS = _collect()
 
-# Shown on `--help` and after every usage error so callers self-correct in one retry.
 EXAMPLES: Dict[str, str] = {
-    "detect_local_device": "recamera detect_local_device host=192.168.1.100",
-    "add_device": "recamera add_device name=cam1 host=192.168.1.100 token=sk_xxxx",
-    "update_device": "recamera update_device device_name=cam1 token=sk_new",
-    "remove_device": "recamera remove_device device_name=cam1",
-    "get_device": "recamera get_device device_name=cam1",
-    "list_devices": "recamera list_devices",
-    "get_device_info": "recamera get_device_info device_name=cam1",
-    "get_resource_info": "recamera get_resource_info device_name=cam1",
-    "get_system_time": "recamera get_system_time device_name=cam1",
-    "set_system_time": (
-        "recamera set_system_time device_name=cam1 method=ntp timezone=Asia/Shanghai"
-    ),
-    "probe_timezone": "recamera probe_timezone device_name=cam1",
-    "sync_system_time": "recamera sync_system_time device_name=cam1 timezone=auto",
-    "reboot_device": "recamera reboot_device device_name=cam1 confirm=true",
-    "get_image_settings": "recamera get_image_settings device_name=cam1",
-    "set_image_settings": (
-        "recamera set_image_settings device_name=cam1 "
-        "section=adjustment 'values={\"saturation\":80}'"
-    ),
-    "get_rule_system_info": "recamera get_rule_system_info device_name=cam1",
-    "get_record_config": "recamera get_record_config device_name=cam1",
-    "set_record_config": (
-        "recamera set_record_config device_name=cam1 "
-        "rule_enabled=true writer_format=JPG writer_interval_ms=0"
-    ),
-    "get_schedule_rule": "recamera get_schedule_rule device_name=cam1",
-    "set_schedule_rule": "recamera set_schedule_rule device_name=cam1 schedule=null",
-    "get_record_trigger": "recamera get_record_trigger device_name=cam1",
-    "get_record_sources": "recamera get_record_sources device_name=cam1",
-    "get_notify_config": "recamera get_notify_config device_name=cam1",
-    "list_apps": "recamera list_apps device_name=cam1",
-    "get_app_logs": "recamera get_app_logs device_name=cam1 app_id=acousticslab tail=100",
-    "list_acoustic_models": "recamera list_acoustic_models device_name=cam1",
-    "get_video_encode": "recamera get_video_encode device_name=cam1 stream=sub",
-    "get_battery_status": "recamera get_battery_status device_name=cam1",
-    "export_device_config": "recamera export_device_config device_name=cam1 output=./cam1-config.tar",
-    "set_notify_config": (
-        "recamera set_notify_config device_name=cam1 mode=1 "
-        "'mqtt={\"url\":\"mqtt://broker.local\",\"port\":1883,\"topic\":\"cam/events\"}'"
-    ),
-    "start_app": "recamera start_app device_name=cam1 app_id=my-app",
-    "stop_app": "recamera stop_app device_name=cam1 app_id=my-app",
-    "restart_app": "recamera restart_app device_name=cam1 app_id=my-app",
-    "set_acoustic_model": (
-        "recamera set_acoustic_model device_name=cam1 "
-        "workspace_id=<workspace-uuid> head_id=<head-uuid>"
-    ),
-    "set_video_encode": (
-        "recamera set_video_encode device_name=cam1 stream=sub codec=H.265 max_rate=1024"
-    ),
-    "set_record_trigger": (
-        "recamera set_record_trigger device_name=cam1 "
-        "'trigger={\"kind\":\"timer\",\"interval_seconds\":60}'"
-    ),
-    "activate_http_trigger": "recamera activate_http_trigger device_name=cam1",
-    "get_storage_status": "recamera get_storage_status device_name=cam1",
-    "set_storage_slot": "recamera set_storage_slot device_name=cam1 by_dev_path=/dev/mmcblk0p8",
+    "get_status": "rcl get_status",
+    "get_device_info": "rcl get_device_info",
+    "get_resource_info": "rcl get_resource_info",
+    "get_system_time": "rcl get_system_time",
+    "set_system_time": "rcl set_system_time method=ntp timezone=Asia/Shanghai",
+    "probe_timezone": "rcl probe_timezone",
+    "sync_system_time": "rcl sync_system_time timezone=auto",
+    "get_battery_status": "rcl get_battery_status",
+    "export_device_config": "rcl export_device_config output=./backup-$(date +%s).tar",
+    "reboot_device": "rcl reboot_device confirm=true",
+    "get_storage_status": "rcl get_storage_status",
+    "set_storage_slot": "rcl set_storage_slot by_dev_path=/dev/mmcblk0p8",
     "configure_storage_quota": (
-        "recamera configure_storage_quota device_name=cam1 "
-        "dev_path=/dev/mmcblk0p8 quota_limit_bytes=-1 quota_rotate=true"
+        "rcl configure_storage_quota dev_path=/dev/mmcblk0p8 quota_limit_bytes=-1 quota_rotate=true"
     ),
-    "storage_task_submit": (
-        "recamera storage_task_submit device_name=cam1 "
-        "action=FREE_UP dev_path=/dev/mmcblk0p8 confirm=true"
-    ),
-    "storage_task_status": (
-        "recamera storage_task_status device_name=cam1 "
-        "action=FREE_UP dev_path=/dev/mmcblk0p8"
-    ),
-    "storage_task_cancel": (
-        "recamera storage_task_cancel device_name=cam1 "
-        "action=FREE_UP dev_path=/dev/mmcblk0p8"
-    ),
-    "list_records": "recamera list_records device_name=cam1 path=2026-04-20 limit=100",
-    "fetch_record": "recamera fetch_record device_name=cam1 path=2026-04-20/clip-001.jpg",
-    "get_capture_status": "recamera get_capture_status device_name=cam1",
-    "start_capture": "recamera start_capture device_name=cam1 format=JPG",
-    "stop_capture": "recamera stop_capture device_name=cam1",
-    "capture_image": "recamera capture_image device_name=cam1 timeout=30",
-    "list_gpios": "recamera list_gpios device_name=cam1",
-    "get_gpio_info": "recamera get_gpio_info device_name=cam1 pin_id=106",
-    "set_gpio_value": "recamera set_gpio_value device_name=cam1 pin_id=106 value=1",
-    "get_gpio_value": "recamera get_gpio_value device_name=cam1 pin_id=106 debounce_ms=100",
-    "get_detection_models_info": "recamera get_detection_models_info device_name=cam1",
-    "get_detection_model": "recamera get_detection_model device_name=cam1",
-    "set_detection_model": (
-        "recamera set_detection_model "
-        "device_name=cam1 model_name=yolo11n fps=30"
-    ),
-    "get_active_acoustic_model": "recamera get_active_acoustic_model device_name=cam1",
-    "get_detection_schedule": "recamera get_detection_schedule device_name=cam1",
-    "set_detection_schedule": "recamera set_detection_schedule device_name=cam1 schedule=null",
-    "get_detection_rules": "recamera get_detection_rules device_name=cam1",
+    "get_capture_status": "rcl get_capture_status",
+    "start_capture": "rcl start_capture format=JPG",
+    "stop_capture": "rcl stop_capture",
+    "capture_image": "rcl capture_image",
+    "get_detection_models_info": "rcl get_detection_models_info",
+    "get_detection_model": "rcl get_detection_model",
+    "set_detection_model": "rcl set_detection_model model_name=yolo11n fps=30",
+    "get_detection_schedule": "rcl get_detection_schedule",
+    "set_detection_schedule": "rcl set_detection_schedule schedule=null",
+    "get_detection_rules": "rcl get_detection_rules",
     "set_detection_rules": (
-        "recamera set_detection_rules device_name=cam1 "
-        "'rules=[{\"name\":\"person\",\"label_filter\":[\"person\"]}]'"
+        "rcl set_detection_rules 'rules=[{\"name\":\"person\",\"label_filter\":[\"person\"]}]'"
     ),
-    "get_detection_events": (
-        "recamera get_detection_events "
-        "device_name=cam1 start_unix_ms=1745150000000"
+    "get_detection_events": "rcl get_detection_events start_unix_ms=1745150000000",
+    "clear_detection_events": "rcl clear_detection_events",
+    "wait_event": "rcl wait_event timeout_s=60",
+    "get_active_acoustic_model": "rcl get_active_acoustic_model",
+    "list_acoustic_models": "rcl list_acoustic_models",
+    "set_acoustic_model": "rcl set_acoustic_model workspace_id=ws1 head_id=head_abc",
+    "get_record_sources": "rcl get_record_sources",
+    "get_record_config": "rcl get_record_config",
+    "set_record_config": "rcl set_record_config rule_enabled=true writer_format=JPG",
+    "get_schedule_rule": "rcl get_schedule_rule",
+    "set_schedule_rule": "rcl set_schedule_rule schedule=null",
+    "get_record_trigger": "rcl get_record_trigger",
+    "set_record_trigger": (
+        "rcl set_record_trigger 'trigger={\"kind\":\"timer\",\"interval_seconds\":60}'"
     ),
-    "clear_detection_events": "recamera clear_detection_events device_name=cam1",
-    "fetch_file": (
-        "recamera fetch_file device_name=cam1 "
-        "path=/mnt/rc_mmcblk0p8/reCamera/snapshot.jpg"
+    "activate_http_trigger": "rcl activate_http_trigger",
+    "list_records": "rcl list_records path=2026-04-20 limit=100",
+    "read_file": "rcl read_file path=/mnt/rc_mmcblk0p8/reCamera/snapshot.jpg",
+    "delete_file": "rcl delete_file path=/mnt/rc_mmcblk0p8/reCamera/snapshot.jpg confirm=true",
+    "list_gpios": "rcl list_gpios",
+    "get_gpio_info": "rcl get_gpio_info pin_id=106",
+    "set_gpio_value": "rcl set_gpio_value pin_id=106 value=1",
+    "get_gpio_value": "rcl get_gpio_value pin_id=106 debounce_ms=100",
+    "get_image_settings": "rcl get_image_settings",
+    "set_image_settings": (
+        "rcl set_image_settings section=adjustment 'values={\"saturation\":80}'"
     ),
-    "delete_file": (
-        "recamera delete_file device_name=cam1 "
-        "path=/mnt/rc_mmcblk0p8/reCamera/snapshot.jpg confirm=true"
+    "list_apps": "rcl list_apps",
+    "get_app_logs": "rcl get_app_logs app_id=acousticslab tail=100",
+    "start_app": "rcl start_app app_id=acousticslab",
+    "stop_app": "rcl stop_app app_id=acousticslab confirm=true",
+    "restart_app": "rcl restart_app app_id=acousticslab confirm=true",
+    "get_video_encode": "rcl get_video_encode stream=main",
+    "set_video_encode": "rcl set_video_encode stream=main resolution=1920x1080 frame_rate=30",
+    "get_notify_config": "rcl get_notify_config",
+    "set_notify_config": (
+        "rcl set_notify_config mode=1 'mqtt={\"url\":\"broker.local\",\"topic\":\"recamera/events\"}'"
     ),
-    "get_intellisense_events": (
-        "recamera get_intellisense_events "
-        "device_name=cam1 start_unix_ms=1745150000000"
-    ),
-    "clear_intellisense_events": "recamera clear_intellisense_events device_name=cam1",
 }
 
 
@@ -308,7 +262,7 @@ def _command_help(name: str) -> str:
             return f"{key}=<json-object>"
         return f"{key}=<string>"
 
-    parts = [f"recamera {name}"]
+    parts = [f"{PROG} {name}"]
     parts.extend(_label(k) for k in req)
     if opt:
         parts.append("[" + "] [".join(_label(k) for k in opt) + "]")
@@ -331,7 +285,7 @@ def _print_help(stream=sys.stdout) -> None:
         if opt:
             parts.append("optional=" + ",".join(opt))
         stream.write(f"  {name:32s} {'  '.join(parts)}\n")
-    stream.write("\nRun 'recamera <command> --help' for usage and an example.\n")
+    stream.write(f"\nRun '{PROG} <command> --help' for usage and an example.\n")
 
 
 _NULL_TOKENS = {"null", "none"}
@@ -494,24 +448,6 @@ def _parse_cli(name: str, argv: Iterable[str]) -> Dict[str, Any]:
     return kwargs
 
 
-def _apply_aliases(name: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """Rename `name` → `device_name` for selector commands, so a record emitted
-    by `list_devices` can be forwarded verbatim."""
-    spec = COMMAND_SCHEMAS.get(name)
-    if spec is None:
-        return kwargs
-    allowed = set(spec.get("required", set())) | set(spec.get("optional", set()))
-    if (
-        "name" in kwargs
-        and "device_name" not in kwargs
-        and "device_name" in allowed
-        and "name" not in allowed
-    ):
-        kwargs = dict(kwargs)
-        kwargs["device_name"] = kwargs.pop("name")
-    return kwargs
-
-
 def _validate(name: str, kwargs: Dict[str, Any]) -> None:
     spec = COMMAND_SCHEMAS.get(name)
     if spec is None:
@@ -528,11 +464,79 @@ def _validate(name: str, kwargs: Dict[str, Any]) -> None:
         raise _UsageError(f"{name}: unknown argument(s): {sorted(extra)}.{hint}")
 
 
+def _dumps(result: Any, pretty: bool) -> str:
+    if pretty:
+        return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=False)
+    return json.dumps(result, ensure_ascii=False, sort_keys=False, separators=(",", ":"))
+
+
+def run_command(name: str, kwargs: Dict[str, Any]) -> Any:
+    """Validate + invoke a command; used by both one-shot and serve mode."""
+    if name not in COMMANDS:
+        raise _UsageError(f"unknown command: {name}")
+    _validate(name, kwargs)
+    return COMMANDS[name](**kwargs)
+
+
+def _serve(pretty: bool) -> int:
+    """Persistent JSONL REPL: one command per input line, one JSON per output line."""
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        rid = None
+        try:
+            req = json.loads(line)
+            if not isinstance(req, dict):
+                raise _UsageError("each line must be a JSON object")
+            rid = req.get("id")
+            name = req.get("cmd", req.get("command"))
+            if not isinstance(name, str) or not name:
+                raise _UsageError("missing 'cmd' (command name)")
+            if name == "exit":
+                return 0
+            if name == "list-commands":
+                result: Any = sorted(COMMANDS)
+            else:
+                args = req.get("args") or {}
+                if not isinstance(args, dict):
+                    raise _UsageError("'args' must be a JSON object")
+                fn = COMMANDS.get(name)
+                if fn is None:
+                    raise _UsageError(f"unknown command: {name}")
+                hints = _hints(fn)
+                kwargs = {}
+                for k, v in args.items():
+                    key = str(k).replace("-", "_")
+                    kwargs[key] = _coerce(name, key, v, hints.get(key))
+                result = run_command(name, kwargs)
+            out: Dict[str, Any] = {"ok": True, "result": result}
+        except _UsageError as exc:
+            out = {"ok": False, "error": str(exc)}
+        except RecameraError as exc:
+            out = {"ok": False, "error": str(exc), "code": exc.code, "status": exc.status}
+        except (TypeError, ValueError) as exc:
+            out = {"ok": False, "error": str(exc)}
+        except Exception as exc:  # keep the session alive on unexpected errors
+            out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        if rid is not None:
+            out["id"] = rid
+        sys.stdout.write(_dumps(out, pretty) + "\n")
+        sys.stdout.flush()
+    return 0
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    pretty = bool(os.environ.get("RECAMERA_PRETTY"))
+    if args and args[0] == "--pretty":
+        pretty = True
+        args = args[1:]
     if not args or args[0] in ("-h", "--help", "help"):
         _print_help()
         return 0
+    if args[0] == "serve":
+        return _serve(pretty)
     if args[0] == "list-commands":
         print("\n".join(sorted(COMMANDS)))
         return 0
@@ -550,18 +554,14 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     try:
         kwargs = _parse_cli(name, rest)
-        kwargs = _apply_aliases(name, kwargs)
-        _validate(name, kwargs)
+        result = run_command(name, kwargs)
     except _UsageError as exc:
         print(str(exc), file=sys.stderr)
         print(_command_help(name), file=sys.stderr)
         return 2
-
-    try:
-        result = COMMANDS[name](**kwargs)
     except RecameraError as exc:
         print(
-            json.dumps({"error": str(exc), "code": exc.code, "status": exc.status}),
+            _dumps({"error": str(exc), "code": exc.code, "status": exc.status}, pretty),
             file=sys.stderr,
         )
         return 1
@@ -570,8 +570,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(_command_help(name), file=sys.stderr)
         return 2
 
-    # None -> null and {} -> {}: the distinction is part of the output contract.
-    print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=False))
+    print(_dumps(result, pretty))
     return 0
 
 

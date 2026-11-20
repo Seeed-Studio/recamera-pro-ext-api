@@ -7,18 +7,10 @@ device returns them in cleartext, and they must not enter agent contexts.
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 from typing import Any, Dict, Optional
 
-from . import _config, _http
+# NB: the setter's `http` parameter shadows the usual `as http` alias here.
+from . import _local
 from ._errors import RecameraError
 
 __all__ = ["get_notify_config", "set_notify_config"]
@@ -34,7 +26,7 @@ def _redact(value: Any) -> Any:
     return _REDACTED if isinstance(value, str) and value else value
 
 
-def get_notify_config(device_name: Optional[str] = None) -> Dict[str, Any]:
+def get_notify_config() -> Dict[str, Any]:
     """Result-push configuration (secrets redacted).
 
     Shape: ``{mode, mode_name, mqtt, http, uart, templates}``; ``mode`` is
@@ -42,15 +34,14 @@ def get_notify_config(device_name: Optional[str] = None) -> Dict[str, Any]:
     ``"***"`` when set. Empty ``templates`` values select the built-in
     per-task defaults.
     """
-    dev = _config.resolve(device_name)
-    d = _http.get_json(dev, PATH_CFG)
+    d = _local.get_json(PATH_CFG)
     if d is None:
         d = {}  # codebase GET norm: tolerate an empty body
     if not isinstance(d, dict):
         raise RecameraError("get notify config failed: unexpected payload")
     mqtt = d.get("dMqtt") or {}
-    http = d.get("dHttp") or {}
     # Wire quirk: MQTT spells its host field "sURL", HTTP "sUrl".
+    http_block = d.get("dHttp") or {}
     uart = d.get("dUart") or {}
     tpl = d.get("dTemplate") or {}
     mode = int(d.get("iMode", 0))
@@ -66,8 +57,8 @@ def get_notify_config(device_name: Optional[str] = None) -> Dict[str, Any]:
             "topic": mqtt.get("sTopic", ""),
         },
         "http": {
-            "url": http.get("sUrl", ""),
-            "token": _redact(http.get("sToken", "")),
+            "url": http_block.get("sUrl", ""),
+            "token": _redact(http_block.get("sToken", "")),
         },
         "uart": {
             "port": uart.get("sPort", ""),
@@ -82,8 +73,6 @@ def get_notify_config(device_name: Optional[str] = None) -> Dict[str, Any]:
         },
     }
 
-
-COMMANDS = {"get_notify_config": get_notify_config}
 
 _MQTT_FIELDS = {
     "url": "sURL", "port": "iPort", "client_id": "sClientId",
@@ -125,7 +114,6 @@ def _merge_channel(raw_block: Any, changes: Any, field_map: Dict[str, str],
 
 
 def set_notify_config(
-    device_name: Optional[str] = None,
     *,
     mode: Optional[int] = None,
     mqtt: Optional[Dict[str, Any]] = None,
@@ -148,8 +136,7 @@ def set_notify_config(
         raise ValueError("nothing to change: pass mode, mqtt, http, or templates")
     if mode is not None and (isinstance(mode, bool) or mode not in _MODE_NAMES):
         raise ValueError("mode must be 0 (off), 1 (MQTT), 2 (HTTP), or 3 (UART)")
-    dev = _config.resolve(device_name)
-    raw = _http.get_json(dev, PATH_CFG)
+    raw = _local.get_json(PATH_CFG)
     raw = raw if isinstance(raw, dict) else {}
     payload: Dict[str, Any] = {}
     if mode is not None:
@@ -184,8 +171,8 @@ def set_notify_config(
         raise ValueError("mode=1 (MQTT) requires mqtt.url")
     if merged_mode == 2 and not str(merged_http.get("sUrl") or "").strip():
         raise ValueError("mode=2 (HTTP) requires http.url")
-    _http.expect_ok(_http.post_json(dev, PATH_CFG, payload=payload),
-                    "set notify config")
+    _local.expect_ok(_local.post_json(PATH_CFG, payload=payload),
+                     "set notify config")
     return {
         "changed": True,
         "mode": merged_mode,
@@ -195,4 +182,7 @@ def set_notify_config(
     }
 
 
-COMMANDS["set_notify_config"] = set_notify_config
+COMMANDS = {
+    "get_notify_config": get_notify_config,
+    "set_notify_config": set_notify_config,
+}

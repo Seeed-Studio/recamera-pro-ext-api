@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/iChizer0/reCamera-Intellisense",
+  "path": "skills/recamera-local",
+  "branch": "dev",
+  "commit": "14636ee927cb2369764627f854bb757be50aed80",
+  "commit_date": "2026-11-19T10:39:02+00:00",
+  "commit_subject": "docs: add deterministic observation playbooks",
+  "package": "recamera_local",
+  "package_version": "1.0.0",
+  "synced_at": "2026-11-20",
+  "excluded": [
+    "tests/",
+    "ruff.toml"
+  ]
+}

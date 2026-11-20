@@ -639,6 +639,7 @@ class MuseGadgetApp(App):
             "MUSEGADGET_MODEL_ID": "recamera-pro",
             "MUSEGADGET_MODEL_NAME": "reCamera Pro",
             "MUSEGADGET_GUIDE_FILE": str(self._app_dir / "guide.md"),
+            "MUSEGADGET_SKILLS_DIR": str(self._app_dir / "skills"),
             "SSL_CERT_FILE": str(self._ca_file),
             "SSL_CERT_DIR": str(self._ca_dir),
         }

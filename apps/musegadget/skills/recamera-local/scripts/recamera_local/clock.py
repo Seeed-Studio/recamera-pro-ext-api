@@ -3,30 +3,24 @@
 Two facts shape this module:
 
 * Fixing the clock never requires knowing the timezone first. The clock is
-  UTC seconds; the timezone only relabels display. An agent asked to "fix the
-  time" must sync the clock first and treat the timezone as a separate,
-  independently-verifiable question.
+  UTC seconds; the timezone only relabels display. Sync the clock first and
+  treat the timezone as a separate, independently-verifiable question.
 * Every probe here is broken-clock safe: NTP is plain UDP, HTTP ``Date``
   headers and the geo-IP lookup use plain HTTP (no TLS — a wrong clock makes
   certificate validation fail), WiFi country IEs (802.11d) are passive RF
   beacons, and DHCP timezone options (RFC 4833, options 100/101) come from the
-  local broadcast domain. None of them can be derailed by a wrong clock, and
-  none of them retry-storm: each probe is a single bounded attempt.
+  local broadcast domain. None of them retry-storm: each is a single bounded
+  attempt.
+
+Everything runs on the camera itself, so the local clock is *suspect*, never
+a reference: "now" is measured via SNTP, then plain-HTTP Date headers, and if
+both fail the honest answer is to ask the user.
 """
 
 from __future__ import annotations
 
-if __name__ == "__main__" and __package__ is None:
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from recamera_intellisense._cli import main
-
-    raise SystemExit(main())
-
 import email.utils
-import http.client
+import http.client as http_client
 import json
 import os
 import re
@@ -39,10 +33,9 @@ import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import _config
 from ._errors import RecameraError
 from ._tzmap import timezones_for_country
-from .system import get_system_time, set_system_time
+from .status import get_system_time, set_system_time
 
 __all__ = ["probe_timezone", "sync_system_time"]
 
@@ -56,23 +49,11 @@ DEFAULT_HTTP_DATE_URLS = (
 )
 NTP_EPOCH_OFFSET = 2_208_988_800  # seconds between 1900-01-01 and 1970-01-01
 
-_LOOPBACK_HOSTS = _config.LOOPBACK_HOSTS
-
-
-def _is_local_device(dev: _config.DeviceRecord) -> bool:
-    return (dev.get("host") or "").strip().lower() in _LOOPBACK_HOSTS
-
 
 # MARK: Low-level probes (each bounded, each broken-clock safe)
 
 def _resolve_host(server: str, port: int, timeout: float) -> tuple:
-    """getaddrinfo with a hard bound — a hung resolver must not wedge a probe.
-
-    Runs in a daemon thread: if DNS truly hangs, the orphan thread lingers
-    until libc returns, but the caller moves on.
-    """
-    import threading
-
+    """getaddrinfo with a hard bound — a hung resolver must not wedge a probe."""
     box: Dict[str, Any] = {}
 
     def _job() -> None:
@@ -155,7 +136,7 @@ def _http_date(url: str, timeout: float = 4.0) -> Tuple[float, float]:
     path = parts.path or "/"
     if parts.query:
         path = f"{path}?{parts.query}"
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    conn = http_client.HTTPConnection(host, port, timeout=timeout)
     try:
         t0 = time.time()
         conn.request("GET", path, headers={"User-Agent": "recamera-clockprobe/1"})
@@ -183,7 +164,7 @@ def _geoip(url: str, timeout: float = 4.0) -> Dict[str, Any]:
     path = parts.path or "/"
     if parts.query:
         path = f"{path}?{parts.query}"
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
+    conn = http_client.HTTPConnection(host, port, timeout=timeout)
     try:
         conn.request("GET", path, headers={"User-Agent": "recamera-tzprobe/1"})
         resp = conn.getresponse()
@@ -367,8 +348,32 @@ def _vote_winner(votes: Dict[str, int]) -> Optional[str]:
     return max(sorted(votes), key=lambda c: votes[c])
 
 
+def _dhcp_iface_guess() -> Optional[str]:
+    """First interface likely to be DHCP-managed (eth0 first, then wlan0)."""
+    try:
+        with open("/userdata/config/rknetd.ini", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        text = ""
+    for iface, section in (("eth0", "ethernet"), ("wlan0", "wifi")):
+        if text:
+            m = re.search(
+                rf"\[network\.{section}\](.*?)(?=\n\[|\Z)", text, flags=re.DOTALL,
+            )
+            if m and re.search(r"^\s*method\s*=\s*dhcp\s*$", m.group(1), flags=re.MULTILINE):
+                return iface
+        else:
+            try:
+                with open(f"/sys/class/net/{iface}/carrier") as fh:
+                    carrier = fh.read().strip()
+            except OSError:
+                continue
+            if carrier == "1":
+                return iface
+    return None
+
+
 def probe_timezone(
-    device_name: Optional[str] = None,
     *,
     dhcp_probe: bool = False,
     geoip_url: Optional[str] = None,
@@ -379,19 +384,12 @@ def probe_timezone(
 
     * ``geoip`` — plain-HTTP IP geolocation (works with a broken clock);
       yields an IANA timezone directly.
-    * ``wifi_country`` — 802.11d Country IEs from visible APs (on-device
-      only), majority-voted; maps to one IANA zone for single-zone countries,
-      a candidate list for multi-zone ones.
+    * ``wifi_country`` — 802.11d Country IEs from visible APs,
+      majority-voted; one IANA zone for single-zone countries, a candidate
+      list for multi-zone ones.
     * ``dhcp`` — RFC 4833 options 100/101 from a DHCP-managed interface
-      (on-device only, opt-in via ``dhcp_probe=true``).
-
-    When this SDK runs on a different machine than the camera, the probes
-    describe the *SDK host's* network location — ``perspective`` says which,
-    and ``needs_user_confirmation`` is forced in that case.
+      (opt-in via ``dhcp_probe=true``; skipped on static addressing).
     """
-    dev = _config.resolve(device_name)
-    on_device = _is_local_device(dev)
-    perspective = "device" if on_device else "sdk-host"
     sources: List[Dict[str, Any]] = []
     candidates: Dict[str, List[str]] = {}  # timezone -> sources backing it
 
@@ -421,53 +419,42 @@ def probe_timezone(
     except (RecameraError, OSError) as exc:
         sources.append({"source": "geoip", "status": "unavailable", "reason": str(exc)})
 
-    # 2) WiFi country (802.11d), on-device only.
-    if on_device:
-        try:
-            votes = _wifi_countries()
-        except Exception as exc:  # never let a probe kill the report
-            votes = {}
-            sources.append({"source": "wifi_country", "status": "unavailable",
-                            "reason": str(exc)})
-        if votes:
-            winner = _vote_winner(votes)
-            zones = timezones_for_country(winner) if winner else None
-            entry = {
-                "source": "wifi_country",
-                "status": "ok",
-                "country_code": winner,
-                "votes": votes,
-            }
-            if geo_cc and winner and geo_cc != winner:
-                # e.g. a VPN egress abroad vs local RF — never auto-resolve.
-                entry["conflicts_with_geoip"] = True
-            if zones:
-                entry["timezones"] = zones
-                entry["ambiguous"] = len(zones) > 1
-                if len(zones) == 1:
-                    _back(zones[0], "wifi_country")
-            else:
-                entry["timezones"] = None
-                entry["ambiguous"] = True
-            sources.append(entry)
-        elif not any(s.get("source") == "wifi_country" for s in sources):
-            sources.append({
-                "source": "wifi_country", "status": "unavailable",
-                "reason": "no WiFi country IEs seen (radio off, no APs, or iw missing)",
-            })
-    else:
+    # 2) WiFi country (802.11d).
+    try:
+        votes = _wifi_countries()
+    except Exception as exc:  # never let a probe kill the report
+        votes = {}
+        sources.append({"source": "wifi_country", "status": "unavailable",
+                        "reason": str(exc)})
+    if votes:
+        winner = _vote_winner(votes)
+        zones = timezones_for_country(winner) if winner else None
+        entry = {
+            "source": "wifi_country",
+            "status": "ok",
+            "country_code": winner,
+            "votes": votes,
+        }
+        if geo_cc and winner and geo_cc != winner:
+            # e.g. a VPN egress abroad vs local RF — never auto-resolve.
+            entry["conflicts_with_geoip"] = True
+        if zones:
+            entry["timezones"] = zones
+            entry["ambiguous"] = len(zones) > 1
+            if len(zones) == 1:
+                _back(zones[0], "wifi_country")
+        else:
+            entry["timezones"] = None
+            entry["ambiguous"] = True
+        sources.append(entry)
+    elif not any(s.get("source") == "wifi_country" for s in sources):
         sources.append({
-            "source": "wifi_country", "status": "skipped",
-            "reason": "WiFi beacons can only be scanned on the camera itself",
+            "source": "wifi_country", "status": "unavailable",
+            "reason": "no WiFi country IEs seen (radio off, no APs, or iw missing)",
         })
 
-    # 3) DHCP timezone options, on-device + opt-in.
-    if not on_device:
-        sources.append({
-            "source": "dhcp", "status": "skipped",
-            "reason": "DHCP leases can only be probed on the camera itself",
-        })
-    elif not dhcp_probe:
+    # 3) DHCP timezone options (opt-in).
+    if not dhcp_probe:
         sources.append({
             "source": "dhcp", "status": "skipped",
             "reason": "passive capture unavailable on stock firmware; re-run with dhcp_probe=true for a one-shot lease probe",
@@ -519,17 +506,16 @@ def probe_timezone(
             f"geo-IP says {geo_entry['country_code']} but WiFi beacons say "
             f"{wifi_entry['country_code']} (VPN egress or misconfigured APs?) — confirm with the user"
         )
-    multi_evidence = sorted(candidates, key=lambda t: -len(candidates[t]))
-    if multi_evidence:
-        suggested = multi_evidence[0]
-        if len(multi_evidence) > 1:
+    ranked = sorted(candidates, key=lambda t: -len(candidates[t]))
+    if ranked:
+        suggested = ranked[0]
+        if len(ranked) > 1:
             needs_user = True
             notes.append(
                 "sources disagree: "
                 + "; ".join(f"{tz} (via {', '.join(srcs)})" for tz, srcs in candidates.items())
             )
     else:
-        # No direct IANA answer — fall back to wifi candidates.
         wifi = next((s for s in sources if s.get("source") == "wifi_country"
                      and s.get("status") == "ok"), None)
         if wifi and wifi.get("timezones"):
@@ -541,18 +527,11 @@ def probe_timezone(
                     f"country {wifi['country_code']} spans several timezones: "
                     + ", ".join(wifi["timezones"])
                 )
-    if not on_device:
-        if suggested:
-            needs_user = True
-        notes.append(
-            "probes ran on the SDK host, not the camera — confirm the camera "
-            "shares this network location before applying"
-        )
     if suggested is None and not needs_user:
         notes.append("no timezone evidence available; ask the user for their timezone")
 
     return {
-        "perspective": perspective,
+        "perspective": "device",
         "suggested_timezone": suggested,
         "needs_user_confirmation": needs_user,
         "candidates": [
@@ -573,46 +552,17 @@ def _offset_check(offset_s: int, candidates: Dict[str, List[str]]) -> Dict[str, 
     return {"utc_offset_s": offset_s, "matches": matches}
 
 
-def _dhcp_iface_guess() -> Optional[str]:
-    """First interface likely to be DHCP-managed (device-side heuristics)."""
-    ini = "/userdata/config/rknetd.ini"
-    try:
-        with open(ini, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-    except OSError:
-        text = ""
-    # rknetd records per-interface methods; eth0 first, then wlan0.
-    for iface in ("eth0", "wlan0"):
-        if text:
-            m = re.search(
-                rf"\[network\.{'ethernet' if iface == 'eth0' else 'wifi'}\](.*?)(?=\n\[|\Z)",
-                text, flags=re.DOTALL,
-            )
-            if m and re.search(r"^\s*method\s*=\s*dhcp\s*$", m.group(1), flags=re.MULTILINE):
-                return iface
-        else:
-            try:
-                with open(f"/sys/class/net/{iface}/carrier") as fh:
-                    carrier = fh.read().strip()
-            except OSError:
-                continue
-            if carrier == "1":
-                return iface
-    return None
-
-
 # MARK: Reference clock (never the broken local clock)
 
 def _reference_time(
     explicit: Optional[int],
     ntp_server: Optional[str],
     ntp_port: int,
-    on_device: bool,
 ) -> Tuple[Optional[float], Dict[str, Any]]:
-    """Resolve a trustworthy 'now' without trusting a possibly-broken clock.
+    """Resolve a trustworthy 'now' without trusting the possibly-broken clock.
 
-    Order: explicit parameter → one SNTP query → HTTP Date headers → the SDK
-    host clock (valid only when the SDK runs on a *different* machine).
+    Order: explicit parameter → one SNTP query → plain-HTTP Date headers.
+    The camera's own clock is never a reference — that would be circular.
     """
     if explicit is not None:
         return float(explicit), {"source": "parameter", "detail": "caller-provided reference_unix"}
@@ -636,24 +586,16 @@ def _reference_time(
             break
     if dates:
         best = min(dates, key=lambda d: d[1])
-        detail = best[2]
         if len(dates) > 1 and abs(dates[0][0] - dates[1][0]) > 10:
             errors.append("HTTP Date sources disagree by >10s")
-        ref = {"source": "http_date", "detail": detail, "rtt_s": round(best[1], 3)}
+        ref = {"source": "http_date", "detail": best[2], "rtt_s": round(best[1], 3)}
         if errors:
             ref["warnings"] = errors
         return best[0], ref
 
-    if not on_device:
-        return time.time(), {
-            "source": "sdk_host_clock",
-            "detail": "SDK runs on another machine; its clock is independent of the camera",
-            "ntp_error": sntp_err,
-            "http_date_errors": errors,
-        }
     return None, {
         "source": "none",
-        "detail": "running on the camera, so the local clock is not a valid reference",
+        "detail": "NTP and plain-HTTP time sources are all unreachable",
         "ntp_error": sntp_err,
         "http_date_errors": errors,
     }
@@ -662,7 +604,6 @@ def _reference_time(
 # MARK: Orchestration
 
 def sync_system_time(
-    device_name: Optional[str] = None,
     *,
     timezone: Optional[str] = "auto",
     method: str = "auto",
@@ -676,25 +617,22 @@ def sync_system_time(
     """Fix the device clock (and optionally the timezone) in one bounded call.
 
     * ``timezone``: an IANA name, ``"auto"`` (probe; applied only when the
-      evidence is unambiguous and probes ran on the camera itself), or
-      ``null`` to keep the current timezone.
+      evidence is unambiguous), or ``null`` to keep the current timezone.
     * ``method``: ``"auto"`` (NTP when reachable, manual fallback), ``"ntp"``
       (configure NTP and wait for the sync the PUT triggers), or ``"manual"``
       (set the clock to the reference time directly).
-    * The reference time never comes from a possibly-broken local clock: it is
-      measured via SNTP, then plain-HTTP ``Date`` headers, then (only when the
-      SDK runs on another machine) the SDK host clock.
+    * The reference time never comes from the local clock (which is what we
+      may be repairing): it is measured via SNTP, then plain-HTTP ``Date``
+      headers.
 
     When nothing works, no change is made and the result carries
     ``needs_user_help`` plus ``ask_user`` — relay it instead of retrying.
     """
-    dev = _config.resolve(device_name)
-    on_device = _is_local_device(dev)
     method = (method or "auto").strip().lower()
     if method not in ("auto", "ntp", "manual"):
         raise RecameraError(f"Invalid method {method!r}: expected auto|ntp|manual.")
 
-    before = get_system_time(device_name)
+    before = get_system_time()
     before_ts = int(before.get("timestamp") or 0)
     cur_ntp = before.get("ntp") or {}
     server = (ntp_server or "").strip() or cur_ntp.get("address") or "pool.ntp.org"
@@ -703,7 +641,7 @@ def sync_system_time(
     except (TypeError, ValueError):
         port = 123
 
-    ref_ts, ref_info = _reference_time(reference_unix, server, port, on_device)
+    ref_ts, ref_info = _reference_time(reference_unix, server, port)
     result: Dict[str, Any] = {
         "changed": False,
         "verified": False,
@@ -735,13 +673,14 @@ def sync_system_time(
         # The reference marches forward on a monotonic clock, immune to the
         # (possibly just-changed) system clock.
         return ref_ts + (time.monotonic() - mono0)
+
     need_clock = abs(drift_before) > tolerance_s
 
     # --- timezone decision (independent from the clock fix) ---
     tz_apply: Optional[str] = None
     if timezone == "auto":
         try:
-            probe = probe_timezone(device_name, dhcp_probe=dhcp_probe)
+            probe = probe_timezone(dhcp_probe=dhcp_probe)
         except Exception as exc:  # a probing bug must never block the clock fix
             probe = None
             result["warnings"].append(f"timezone probe failed (clock fix continues): {exc}")
@@ -763,16 +702,10 @@ def sync_system_time(
                 pass  # evidence agrees with the current timezone; nothing to ask
             elif suggested:
                 result["timezone"]["needs_user_confirmation"] = True
-                cand = ", ".join(c["timezone"] for c in probe["candidates"])
-                if probe["perspective"] != "device":
-                    result["follow_up"].append(
-                        f"timezone evidence ({cand}) comes from the SDK host's network, "
-                        "not the camera's — confirm with the user before applying"
-                    )
-                else:
-                    result["follow_up"].append(
-                        f"timezone evidence is ambiguous — ask the user; candidates: {cand}"
-                    )
+                result["follow_up"].append(
+                    "timezone evidence is ambiguous — ask the user; candidates: "
+                    + ", ".join(c["timezone"] for c in probe["candidates"])
+                )
             else:
                 result["follow_up"].append(
                     "timezone could not be determined automatically — ask the user"
@@ -796,6 +729,7 @@ def sync_system_time(
         )
         tz_apply = None
         need_tz = False
+
     cur_method = (before.get("method") or "").lower()
     want_ntp = method == "ntp" or (method == "auto" and ref_info.get("source") == "sntp")
     cur_server = (cur_ntp.get("address") or "").strip()
@@ -835,15 +769,15 @@ def sync_system_time(
         method_used = apply_method
         try:
             set_system_time(
-                device_name, method=apply_method,
+                method=apply_method,
                 timezone=tz_apply,
                 timestamp=before_ts if apply_method == "manual" else None,
                 ntp_server=server if apply_method == "ntp" else None,
             )
-            after = get_system_time(device_name)
+            after = get_system_time()
         except RecameraError as exc:
             result["warnings"].append(str(exc))
-            after = get_system_time(device_name)
+            after = get_system_time()
     else:
         if want_ntp:
             method_used = "ntp"
@@ -854,31 +788,31 @@ def sync_system_time(
         try:
             if method_used == "ntp":
                 set_system_time(
-                    device_name, method="ntp",
+                    method="ntp",
                     timezone=tz_apply if need_tz else None,
                     ntp_server=server,
                 )
                 # The PUT triggers an immediate sync on the device; poll for it.
                 deadline = time.monotonic() + max(1, wait_s)
-                after = get_system_time(device_name)
+                after = get_system_time()
                 while time.monotonic() < deadline:
                     drift = int(after.get("timestamp") or 0) - _ref_now()
                     if abs(drift) <= tolerance_s:
                         break
                     time.sleep(1.5)
-                    after = get_system_time(device_name)
+                    after = get_system_time()
             else:
                 set_system_time(
-                    device_name, method="manual",
+                    method="manual",
                     timezone=tz_apply if need_tz else None,
                     timestamp=int(ref_ts),
                 )
-                after = get_system_time(device_name)
+                after = get_system_time()
         except RecameraError as exc:
             # A timezone rejection raises *after* the clock part was applied;
             # surface it, keep verifying the clock, don't mask the partial success.
             result["warnings"].append(str(exc))
-            after = get_system_time(device_name)
+            after = get_system_time()
     result["method_used"] = method_used
 
     drift_after = int(after.get("timestamp") or 0) - _ref_now()
@@ -896,7 +830,7 @@ def sync_system_time(
         # the device keeps correcting itself once the server is reachable.
         # (An explicit method=manual is the user's choice — leave it alone.)
         try:
-            restored = set_system_time(device_name, method="ntp", ntp_server=server)
+            restored = set_system_time(method="ntp", ntp_server=server)
             result["method_restored"] = "ntp"
             result["ntp"] = restored.get("ntp")
             after["method"] = "ntp"
