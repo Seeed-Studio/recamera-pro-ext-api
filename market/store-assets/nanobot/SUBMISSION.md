@@ -21,8 +21,8 @@ and managing storage.
 
 | File | Purpose |
 |---|---|
-| `nanobot-1.0.0-arm64.tar.gz` | Application package (94.8 MB) |
-| `nanobot-1.0.0-arm64.tar.gz.sig` | Detached ECDSA-P256-SHA256 signature (base64 DER), produced with our owner key; intended for integrity verification of this transfer. Please re-sign with the vendor key for catalog listing. |
+| `nanobot-1.0.1-arm64.tar.gz` | Application package (95.2 MB) |
+| `nanobot-1.0.1-arm64.tar.gz.sig` | Detached ECDSA-P256-SHA256 signature (base64 DER), produced with our owner key; intended for integrity verification of this transfer. Please re-sign with the vendor key for catalog listing. |
 | `icon.png` | Store icon (PNG; conforms to the `icons/` naming rules) |
 | `nanobot-banner.png` | Card banner artwork, 1600x892 (2x of the card's 800/446 aspect ratio) |
 | `catalog-entry.json` | Draft catalog entry. URLs assume the standard `packages/` and `icons/` layout; sha256, size and signature are computed from the submitted files. The `image` field (card banner) is supplied as `nanobot-banner.png` (1600x892, exactly 2x the card's 800x446 aspect); host it at `/appcenter/apps/nanobot.png`. |
@@ -34,6 +34,11 @@ and managing storage.
 - Device testing on reCamera Pro firmware V1.2.1 covers fresh install,
   upgrade, stop/start, configuration restart and rollback-relevant states;
   all passing
+- Version 1.0.1 (release sequence 56) also passed upgrade from sequence 55,
+  startup-gate redirection, Web UI health, psutil/RKNN imports and
+  appdata/model preservation on 2026-11-23. The Vendor publish dry-run and
+  post-publication CDN byte/signature verification passed with SHA-256
+  `ce24c576bac1e1120ffe85a9f3c17241d5da48b3a0ffb7541992c3a5fb0d21ce`.
 - End-user documentation with device screenshots is maintained at
   `docs/CONFIG_GUIDE.md` in the source repository
 
