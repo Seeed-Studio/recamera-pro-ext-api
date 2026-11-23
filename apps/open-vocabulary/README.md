@@ -37,21 +37,15 @@ uv run pytest apps/open-vocabulary/tests apps/test_manifest_schema.py
 | `wheels/ftfy-6.3.1-py3-none-any.whl` | 文本清理 |
 | `wheels/wcwidth-0.9.4-py3-none-any.whl` | ftfy 的运行时依赖 |
 
-官方构建从模型池的 `models/open-vocabulary/<上表相对路径>` 下载资产。模型池提供这些文件后，可以使用仓库标准命令下载并打包。 [资产发布指南](../../docs/guide/app-publishing-and-permissions-guide.md#3-模型与大资源文件免上传-git)
+在 GitHub Actions 中选择 **Package Open Vocabulary**，点击 **Run workflow** 即可打包。涉及本应用的拉取请求和合入 `main` 的更新也会触发构建。完成后，从运行页面的 **Artifacts** 下载 `open-vocabulary-arm64`，解压即可取得设备用的 `.tar.gz` 安装包。
+
+本地与 CI 使用相同的命令。下载器按清单中的 `x-url` 从 Seeed 获取两个模型，从 PyPI 获取两个指定的通用 wheel，并校验各文件的大小和 SHA-256。
 
 ```sh
 uv run python market/packaging/fetch_assets.py apps/open-vocabulary
 uv run python market/packaging/build.py apps/open-vocabulary --out dist/open-vocabulary
 ```
 
-当前模型资产尚待发布到模型池。已有 0.1.6 开发包时，可以提取上表文件并保留相对路径，再用本地资产打包。
-
-```sh
-uv run python market/packaging/build.py apps/open-vocabulary \
-  --payload-root /path/to/open-vocabulary-assets \
-  --out dist/open-vocabulary
-```
-
-打包器校验 manifest 中的大小和 SHA-256，输出 `open-vocabulary-0.1.6-arm64.tar.gz`。模型和 wheel 由包携带，Kit、SDK、NumPy、RKNNLite 和 RGA 由设备提供。开发包安装所需的信任配置见[应用中心发布指南](../../docs/guide/app-center-publishing.md)。
+安装包位于 `dist/open-vocabulary/open-vocabulary-<版本>-arm64.tar.gz`。模型和 wheel 由包携带，Kit、SDK、NumPy、RKNNLite 和 RGA 由设备提供。开发包安装所需的信任配置见[应用中心发布指南](../../docs/guide/app-center-publishing.md)。
 
 模型与词表来源见 [SOURCES.json](SOURCES.json) 和 [THIRD_PARTY.md](THIRD_PARTY.md)。
