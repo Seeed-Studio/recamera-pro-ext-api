@@ -1,0 +1,39 @@
+name: Package Open Vocabulary
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/open-vocabulary/**'
+      - 'market/packaging/**'
+      - '.github/workflows/package-open-vocabulary.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/open-vocabulary/**'
+      - 'market/packaging/**'
+      - '.github/workflows/package-open-vocabulary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.11
+      - name: Test the app
+        run: uv run --locked pytest -q apps/open-vocabulary/tests
+      - name: Fetch assets and build the ARM64 package
+        run: |
+          uv run --locked python market/packaging/fetch_assets.py apps/open-vocabulary
+          uv run --locked python market/packaging/build.py apps/open-vocabulary --out dist/open-vocabulary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-vocabulary-arm64
+          path: dist/open-vocabulary/open-vocabulary-*-arm64.tar.gz
+          if-no-files-found: error
+          compression-level: 0

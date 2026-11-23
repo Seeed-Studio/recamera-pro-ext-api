@@ -18,6 +18,7 @@
         "filename": "ftfy-6.3.1-py3-none-any.whl",
         "source": "bundled",
         "file": "wheels/ftfy-6.3.1-py3-none-any.whl",
+        "x-url": "https://files.pythonhosted.org/packages/ab/6e/81d47999aebc1b155f81eca4477a616a70f238a2549848c38983f3c22a82/ftfy-6.3.1-py3-none-any.whl",
         "sha256": "7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083",
         "size": 44821,
         "tags": ["py3-none-any"]
@@ -28,6 +29,7 @@
         "filename": "wcwidth-0.9.4-py3-none-any.whl",
         "source": "bundled",
         "file": "wheels/wcwidth-0.9.4-py3-none-any.whl",
+        "x-url": "https://files.pythonhosted.org/packages/6f/0c/309b1813b230d1dbbd6f2c2ab2bb21ef68992358977605d9ef289bbfedcc/wcwidth-0.9.4-py3-none-any.whl",
         "sha256": "901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d",
         "size": 301806,
         "tags": ["py3-none-any"]
@@ -118,11 +120,11 @@
   "id": "open-vocabulary",
   "name": "Open Vocabulary Detection",
   "name_zh": "开放词汇目标检测",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "self-hosted",
   "entry": "app.py",
   "release": {
-    "sequence": 7,
+    "sequence": 8,
     "channel": "dev"
   },
   "author": "reCamera Pro Demo",
@@ -181,6 +183,7 @@
       "source": "bundled",
       "file": "models/world_v21s.rknn",
       "mount": "models/world_v21s.rknn",
+      "x-url": "https://files.seeedstudio.com/Solution/models/yolo-world/world_v21s.rknn",
       "size": 27257330,
       "sha256": "03b14b7acbeda002f056151480de427d8aa4dde949e35d217672a560666e6114",
       "required": true,
@@ -192,6 +195,7 @@
       "source": "bundled",
       "file": "models/clip_v21.rknn",
       "mount": "models/clip_v21.rknn",
+      "x-url": "https://files.seeedstudio.com/Solution/models/yolo-world/clip_v21.rknn",
       "size": 129545073,
       "sha256": "29362861b0f871bd3796960459132c3ec2ba82a4e94eb28b16c9d3fda2570287",
       "required": true,
