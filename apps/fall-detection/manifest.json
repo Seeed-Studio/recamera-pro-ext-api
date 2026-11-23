@@ -539,6 +539,17 @@
             "default": 1.5
           },
           {
+            "key": "late_confirmation_sec",
+            "type": "number",
+            "apply": "live",
+            "title": "Late confirmation window (s)",
+            "title_zh": "延迟确认窗口（秒）",
+            "min": 0,
+            "max": 10,
+            "step": 0.1,
+            "default": 3.2
+          },
+          {
             "key": "occlusion_grace_sec",
             "type": "number",
             "apply": "live",

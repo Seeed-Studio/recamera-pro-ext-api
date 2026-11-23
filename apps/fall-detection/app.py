@@ -404,6 +404,7 @@ class FallDetectionApp(App):
     min_suspected_features = 2
     confirmation_sec = 0.80
     suspected_timeout_sec = 1.50
+    late_confirmation_sec = 3.20
     occlusion_grace_sec = 0.75
     recovery_torso_angle_deg = 35.0
     recovery_aspect_ratio = 1.10
@@ -414,7 +415,7 @@ class FallDetectionApp(App):
     def _build_fall_config(self):
         """One FallConfig from the already-bound `self.<knob>` attributes.
 
-        The single place the 14 thresholds are assembled -- setup() uses it to
+        The single place the 15 thresholds are assembled -- setup() uses it to
         create the template new tracks inherit, and `on_params_changed()` uses it
         to rebuild that template after a SIGHUP.
         """
@@ -428,6 +429,7 @@ class FallDetectionApp(App):
             min_suspected_features=self.min_suspected_features,
             confirmation_sec=float(self.confirmation_sec),
             suspected_timeout_sec=float(self.suspected_timeout_sec),
+            late_confirmation_sec=float(self.late_confirmation_sec),
             occlusion_grace_sec=float(self.occlusion_grace_sec),
             recovery_torso_angle_deg=float(self.recovery_torso_angle_deg),
             recovery_aspect_ratio=float(self.recovery_aspect_ratio),
@@ -466,6 +468,11 @@ class FallDetectionApp(App):
         # (pts, box, track_id) of recently EMITTED fall events; survives track
         # churn, see `_location_cooldown_hit()`.
         self._recent_falls = []
+        # Per track: the last event id actually EMITTED, and the id of an
+        # event suppressed by the location cooldown.  The published per-track
+        # fields follow what was emitted, not the detector's raw counter.
+        self._emitted_event_ids = {}
+        self._suppressed_event_ids = {}
         print(f"[fall] setup conf={self.confidence} "
               f"kpt_thres={self.keypoint_confidence} "
               f"torso>={cfg.torso_angle_threshold_deg} aspect>="
@@ -479,7 +486,7 @@ class FallDetectionApp(App):
     def on_params_changed(self, changed):
         """★S1 live hot-reload★ -- only what the auto-bind cannot do by itself.
 
-        The 16 scalars are already re-bound onto `self`; what is left is the
+        The 17 scalars are already re-bound onto `self`; what is left is the
         derived state, and the rule is the one the pre-migration
         `on_config_reload` implemented:
 
@@ -622,6 +629,23 @@ class FallDetectionApp(App):
                 temporal_probability=temporal_probability,
             )
 
+            # Edge event: a fall was just confirmed for THIS identity.  A
+            # repeat at the location of a recent event whose track is gone
+            # (same person under a new track id) is logged but not emitted.
+            # The detector keeps its FALLEN state (and its own cooldown); only
+            # the published fields below hide the unemitted event.
+            suppressed_edge = out.fall_event and self._location_cooldown_hit(
+                track.track_id, track.box, frame.pts, visible_ids)
+            if suppressed_edge:
+                self._suppressed_event_ids[track.track_id] = out.event_id
+            elif out.fall_event:
+                self._emitted_event_ids[track.track_id] = out.event_id
+            fall_suppressed = (
+                out.fall_detected and
+                self._suppressed_event_ids.get(track.track_id) == out.event_id)
+            fall_detected = out.fall_detected and not fall_suppressed
+            event_id = self._emitted_event_ids.get(track.track_id, 0)
+
             # Always surface the current state, including during a short
             # occlusion.  ``visible`` lets consumers distinguish a retained
             # state from a pose result in this frame.
@@ -632,8 +656,8 @@ class FallDetectionApp(App):
                 "missed_frames": track.missing_frames,
                 "box": list(track.box),
                 "state": out.state,
-                "fall_detected": out.fall_detected,
-                "event_id": out.event_id,
+                "fall_detected": fall_detected,
+                "event_id": event_id,
                 "person_score": round(obs.person_score, 3),
                 "torso_angle_deg": round(out.diagnostics.get("torso_angle_deg", 0.0), 1),
                 "bbox_aspect_ratio": round(out.diagnostics.get("bbox_aspect_ratio", 0.0), 3),
@@ -652,23 +676,24 @@ class FallDetectionApp(App):
                     "temporal_positive": bool(out.diagnostics.get("temporal_positive", False)),
                 },
             })
+            if fall_suppressed:
+                # Present only while the detector is in a suppressed episode.
+                events[-1]["fall_suppressed"] = True
 
             if person is not None:
                 person["track_id"] = track.track_id
                 person["state"] = out.state
-                person["fall_detected"] = out.fall_detected
-                person["event_id"] = out.event_id
+                person["fall_detected"] = fall_detected
+                person["event_id"] = event_id
+                if fall_suppressed:
+                    person["fall_suppressed"] = True
                 person["person_detected"] = True
                 person["person_score"] = float(person.get("score", 0.0))
                 person["tracking"] = True
                 person["missed_frames"] = 0
                 person["features"] = events[-1]["features"]
 
-            # Edge event: a fall was just confirmed for THIS identity.  A
-            # repeat at the location of a recent event whose track is gone
-            # (same person under a new track id) is logged but not emitted.
-            if out.fall_event and self._location_cooldown_hit(
-                    track.track_id, track.box, frame.pts, visible_ids):
+            if suppressed_edge:
                 print(f"[fall] suppressed FALL track={track.track_id} "
                       f"#{out.event_id} at pts={frame.pts:.2f} "
                       f"(location cooldown)", flush=True)
@@ -689,6 +714,8 @@ class FallDetectionApp(App):
         for track_id in self.tracker.expired_ids:
             self.detectors.pop(track_id, None)
             self.temporal_classifiers.pop(track_id, None)
+            self._emitted_event_ids.pop(track_id, None)
+            self._suppressed_event_ids.pop(track_id, None)
 
         return events
 
