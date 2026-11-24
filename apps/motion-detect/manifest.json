@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 1,
+    "sequence": 2,
     "channel": "stable"
   },
   "compatibility": {
@@ -88,7 +88,7 @@
   },
   "id": "motion-detect",
   "name": "Motion Detection",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "image": "/appcenter/apps/motion-detect.png",
   "icon": {
     "path": "icon.png",
@@ -101,6 +101,31 @@
   "capabilities": [],
   "models": [],
   "postproc": "motion",
+  "render": {
+    "schema_version": 1,
+    "geometry": {
+      "types": ["point"],
+      "max_items": 1,
+      "max_points": 1
+    }
+  },
+  "output": {
+    "contract_version": 2,
+    "sink": "ws",
+    "schema": "geometry[]{type,points,id,label,style}",
+    "default_channel": ["ws"],
+    "default_mode": "raw",
+    "fields": [
+      {
+        "name": "geometry",
+        "from": "geometry[]",
+        "type": "geometry[]",
+        "coord": "normalized_points",
+        "description": "Motion status label for the browser preview"
+      }
+    ],
+    "default_mapping": []
+  },
   "tags": [
     "motion",
     "cpu",

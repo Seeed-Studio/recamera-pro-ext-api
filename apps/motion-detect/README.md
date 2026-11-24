@@ -8,6 +8,10 @@
 
 配置由应用中心管理，持久化到 `/userdata/local/appdata/motion-detect/config.json`。`sample_fps` 修改后重启，其余 UI 参数热更新。`manifest.json` 的配置分组与 `config_schema.json` 保持一致，由测试检查。
 
+## 浏览器预览叠加
+
+启动移动检测后，在实时预览中开启浏览器叠加，选择主码流和「移动检测」来源。画面左上角显示预热或检测状态。预热完成后，同一行显示运动得分、变化比例和分析画面中变化的像素数。叠加沿用平台浏览器图元的主码流及画面旋转限制。
+
 ## 保持兼容的 HA/MQTT 协议
 
 `ha_mqtt.py` 沿用原服务的专用上报适配器和 Kit `MqttSink`。使用应用自己的 `mqtt_host`、`mqtt_port`、`mqtt_user`、`mqtt_pass`；`mqtt_host` 为空时关闭 HA 上报。`owns_mqtt=True` 禁止 Kit 再按全局/CLI 设置创建第二个 MQTT 发布器。

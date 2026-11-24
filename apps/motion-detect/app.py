@@ -2,10 +2,18 @@
 import math
 
 from kit.app import App, run_app
+from kit.geometry import point
 
 from config_schema import derive_tables, load_schema
 from ha_mqtt import HaMqttBridge
 from motion_core import MotionCore, retention_seconds
+
+
+_EMPTY_METRICS = {"score": 0.0, "changed_ratio": 0.0, "changed_pixels": 0}
+# The browser expires geometry after 1.5 s. Refresh independently of analysis,
+# which can be configured as low as 0.2 fps.
+_OVERLAY_REFRESH_SEC = 0.75
+_MIN_FRAME_FPS = 2.0
 
 
 class MotionDetectApp(App):
@@ -31,21 +39,22 @@ class MotionDetectApp(App):
         self._last_sample_pts = -math.inf
         self._last_notify = 0.0
         self._last_hub_notify = -math.inf
-        self._last_result = {"score": 0.0, "changed_ratio": 0.0,
-                             "changed_pixels": 0}
+        self._last_overlay_pts = -math.inf
+        self._last_result = None
 
     def prepare_runtime(self):
         from recamera_ext import FrameConfig, FrameSource
 
-        divisor = max(1, round(30.0 / float(self.sample_fps)))
+        divisor = max(1, round(30.0 / max(_MIN_FRAME_FPS, float(self.sample_fps))))
         self._source = FrameSource(FrameConfig(fps_divisor=divisor),
                                    timeout_ms=5000)
         self._mqtt = HaMqttBridge(self.config)
-        self._publish_hub(False, self._last_result, 0.0)
+        self._publish_hub(False, _EMPTY_METRICS, 0.0)
 
     def on_params_changed(self, changed):
         if "analysis_width" in changed:
             self._core = MotionCore(analysis_width=int(self.analysis_width))
+            self._last_result = None
         if changed & {"mqtt_host", "mqtt_port", "mqtt_user", "mqtt_pass"}:
             if self._mqtt is not None:
                 self._mqtt.close()
@@ -58,22 +67,41 @@ class MotionDetectApp(App):
                 break
             now = float(frame.pts_us) / 1e6
             interval = 1.0 / float(self.sample_fps)
-            if now - self._last_sample_pts < interval * 0.9:
-                continue
-            self._last_sample_pts = now
-            # downscale() makes a small owned array before the SDK borrow expires.
-            self._core.push(now, self._core.downscale(frame.array))
-            self._core.trim(now, retention_seconds(
-                interval * 1000, self.baseline_gap_ms,
-                self.baseline_frames, self.current_frames))
-            result = self._core.evaluate(
-                now, baseline_gap_ms=self.baseline_gap_ms,
-                baseline_frames=self.baseline_frames,
-                current_frames=self.current_frames,
-                sq_diff_threshold=self.sq_diff_threshold,
-                min_changed_ratio=self.min_changed_ratio)
-            if result is not None:
-                self._step(result, now)
+            was_active = self._active
+            was_warming = self._last_result is None
+            if now - self._last_sample_pts >= interval * 0.9:
+                self._last_sample_pts = now
+                # downscale() makes an owned array before the SDK borrow expires.
+                self._core.push(now, self._core.downscale(frame.array))
+                self._core.trim(now, retention_seconds(
+                    interval * 1000, self.baseline_gap_ms,
+                    self.baseline_frames, self.current_frames))
+                result = self._core.evaluate(
+                    now, baseline_gap_ms=self.baseline_gap_ms,
+                    baseline_frames=self.baseline_frames,
+                    current_frames=self.current_frames,
+                    sq_diff_threshold=self.sq_diff_threshold,
+                    min_changed_ratio=self.min_changed_ratio)
+                if result is not None:
+                    self._step(result, now)
+            if (was_active != self._active
+                    or (was_warming and self._last_result is not None)
+                    or now - self._last_overlay_pts >= _OVERLAY_REFRESH_SEC):
+                self._publish_overlay(frame, now)
+
+    def _publish_overlay(self, frame, now):
+        result = self._last_result
+        if result is None:
+            label = "Motion: warming up"
+        else:
+            state = "detected" if self._active else "clear"
+            label = (f"Motion: {state} | Score {result['score']:.4f} | "
+                     f"Change {result['changed_ratio']:.2%} ({result['changed_pixels']:,} px)")
+        color = "#ffda73" if result is not None and self._active else "#ffffff"
+        self.emit(ts=now, geometry=[point(0.02, 0.09, id="motion-status",
+                                         label=label, color=color, opacity=0)],
+                  extra={"frame": {"width": frame.width, "height": frame.height}})
+        self._last_overlay_pts = now
 
     def _step(self, result, now):
         self._last_result = result
@@ -117,8 +145,7 @@ class MotionDetectApp(App):
         try:
             if self._rt is not None and getattr(self, "_source", None) is not None:
                 self.emit_status({"motion": False, "daemon_running": False,
-                                  "score": 0.0, "changed_ratio": 0.0,
-                                  "changed_pixels": 0})
+                                  **_EMPTY_METRICS})
         finally:
             try:
                 source, self._source = getattr(self, "_source", None), None

@@ -40,6 +40,8 @@
 
 平台 WebSocket `/ws/ai/results/v2` 的来源 ID 仍为 `motion-detect`，迁移后的身份为经过 AppMgr 验证的应用身份。应用发送 `status` envelope，`summary` 包含 `motion`、`score`、`changed_ratio`、`changed_pixels`、`daemon_running`；状态变化即发，并独立保持 10 秒平台心跳（不改变 HA 的 `heartbeat_sec`）。正常退出时发送 `motion:false`、`daemon_running:false`；异常退出由平台应用生命周期处理离线状态。
 
+同一来源还发布带归一化 `geometry[]` 标签的 `frame` envelope，供浏览器绘制左上角叠加。标签在运动状态切换时立即更新，并定期刷新最新的检测值。
+
 平台 envelope 与 HA 消息独立，不改变 HA MQTT 字段。原来按 `source.kind=system` 过滤的客户端应调整为按来源 ID 订阅。
 
 ## 配置
