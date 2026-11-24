@@ -146,10 +146,12 @@ def test_hot_reload_rebuilds_only_changed_resources(monkeypatch):
 def test_managed_loop_uses_raw_frames_and_closes_all_resources(monkeypatch):
     import recamera_ext
     import kit.app as kit_app
+    from market.appmgr.result_hub import ResultHub
 
-    calls, packets, messages = [], [], []
+    calls, packets, messages, overlays = [], [], [], []
     frames = [SimpleNamespace(
         pts_us=1_000_000 + index * 200_000,
+        width=32, height=32,
         array=np.full((32, 32), 255 if 6 <= index < 12 else 0, dtype=np.uint8),
     ) for index in range(20)]
     class Source:
@@ -163,7 +165,7 @@ def test_managed_loop_uses_raw_frames_and_closes_all_resources(monkeypatch):
         def __init__(self, config):
             calls.append("mqtt opened")
         def emit(self, events, pts):
-            messages.append(events)
+            messages.append((events, pts))
         def close(self):
             calls.append("mqtt closed")
     monkeypatch.setattr(recamera_ext, "FrameSource", Source)
@@ -172,7 +174,8 @@ def test_managed_loop_uses_raw_frames_and_closes_all_resources(monkeypatch):
                         lambda **kw: pytest.fail("opened an RGB frame adapter"))
     app = MotionDetectApp()
     monkeypatch.setattr(app, "_load_model", lambda *a: pytest.fail("loaded an NPU model"))
-    sink = SimpleNamespace(emit_typed=lambda payload, pts: packets.append(payload))
+    sink = SimpleNamespace(emit_typed=lambda payload, pts: packets.append(payload),
+                           emit=lambda payload, pts: overlays.append((payload, pts)))
     try:
         app.start(app_dir=str(ROOT), manifest=MANIFEST, sink=sink, verbose=False,
                   config={"baseline_frames": 1, "current_frames": 1,
@@ -185,4 +188,50 @@ def test_managed_loop_uses_raw_frames_and_closes_all_resources(monkeypatch):
     assert any(packet["summary"]["motion"] for packet in packets)
     assert packets[-1]["summary"]["daemon_running"] is False
     # Both the upward and downward luminance transitions are motion.
-    assert [events[-1]["motion"] for events in messages] == [True, False, True, False]
+    assert [events[-1]["motion"] for events, _ in messages] == [True, False, True, False]
+
+    hub = ResultHub()
+    identity = {"app_id": app.id, "instance_id": "test", "generation": 1}
+    assert hub.refresh_app_manifest(identity, MANIFEST, stream_contract={
+        "id": "main", "kind": "frame.sock", "path": "/live/0",
+    })
+    states = {pts: hub.publish_app({**payload, "pts": pts, "seq": seq}, identity)[0]
+              for seq, (payload, pts) in enumerate(overlays, 1)}
+    motion = states[2.2]
+    assert motion["type"] == "frame"
+    assert (motion["stream"]["id"], motion["stream"]["width"],
+            motion["stream"]["height"]) == ("main", 32, 32)
+    assert motion["geometry"][0] == {
+        "id": "motion-status", "type": "point", "points": [[0.02, 0.09]],
+        "space": "normalized_points", "style": {"color": "#ffda73", "opacity": 0.0},
+        "label": "Motion: detected | Score 1.0000 | Change 100.00% (1,024 px)",
+    }
+    assert states[1]["geometry"][0]["label"] == "Motion: warming up"
+    for events, pts in messages:
+        state = "detected" if events[-1]["motion"] else "clear"
+        assert states[pts]["geometry"][0]["label"].startswith(f"Motion: {state}")
+
+
+def test_overlay_refreshes_between_slow_detection_samples(monkeypatch):
+    import recamera_ext
+
+    frames = [SimpleNamespace(pts_us=index * 500_000, width=32, height=32)
+              for index in range(8)]
+    frames[0].array = np.zeros((32, 32), dtype=np.uint8)
+    opened, overlay_times = [], []
+
+    def open_source(config, **kwargs):
+        opened.append(config.fps_divisor)
+        return frames
+
+    monkeypatch.setattr(recamera_ext, "FrameSource", open_source)
+    monkeypatch.setattr(APP_MODULE, "HaMqttBridge", lambda config: None)
+    app = MotionDetectApp()
+    app.setup({"sample_fps": 0.2})
+    app.emit_status = lambda *args, **kwargs: None
+    app.emit = lambda *, ts, **kwargs: overlay_times.append(ts)
+    app.prepare_runtime()
+    app.run()
+
+    assert opened == [15]
+    assert overlay_times == [0.0, 1.0, 2.0, 3.0]

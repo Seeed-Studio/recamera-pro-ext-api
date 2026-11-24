@@ -82,7 +82,7 @@ def test_first_preinstall_is_a_normal_installed_stopped_application(layout, monk
     listing = server.do_v1_apps()["apps"]
     motion = [item for item in listing if item["id"] == "motion-detect"]
     assert len(motion) == 1
-    assert motion[0]["version"] == "1.0.0"
+    assert motion[0]["version"] == "1.1.0"
     assert motion[0]["status"] == "stopped"
     assert motion[0].get("system") is not True
     settings = server.do_get_config("motion-detect")
@@ -210,8 +210,8 @@ def test_store_signed_upgrade_preserves_config_and_ignores_older_firmware(layout
     shutil.copytree(REPO / "apps/motion-detect", source)
     manifest_path = source / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["version"] = "1.1.0"
-    manifest["release"]["sequence"] = 2
+    manifest["version"] = "1.2.0"
+    manifest["release"]["sequence"] = 3
     manifest_path.write_text(json.dumps(manifest))
     package = build(str(source), str(root / "uploads"))
     private, public = root / "private.pem", root / "public.pem"
@@ -228,6 +228,6 @@ def test_store_signed_upgrade_preserves_config_and_ignores_older_firmware(layout
     assert result["signature"]["verified"] is True
     _seed()
     current = json.loads(Path(paths.app_dir("motion-detect"), "manifest.json").read_text())
-    assert current["version"] == "1.1.0"
+    assert current["version"] == "1.2.0"
     assert config.load_user_config("motion-detect")["sq_diff_threshold"] == 700
     assert state.get_app("motion-detect")["desired_state"] == "stopped"
