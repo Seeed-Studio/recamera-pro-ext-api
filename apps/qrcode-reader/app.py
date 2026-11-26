@@ -19,9 +19,11 @@ Frame paths
 
 Moving-target stability (two-stage decode + quad hold)
 ------------------------------------------------------
-WeChat QR decode costs ~0.8 s on a full 4K frame but only ~0.2-0.3 s on a
-1280x720 ROI. So:
-  * no target held  -> full-frame scan;
+WeChat QR decode costs ~0.2-0.5 s on a full frame but MISSES small codes:
+measured on device, one whole-frame pass finds only 2 of 6 chart codes at
+every tier. The full scan therefore uses 2x2 overlapping tiles (~1.0 s,
+recovers all 6); ROI decode costs ~0.05-0.2 s per crop. So:
+  * no target held  -> tiled full-frame scan (all codes published);
   * target(s) held  -> decode only padded ROI crops around the last quads
     (coordinates mapped back to the full frame); after 2 consecutive ROI
     misses, fall back to a full scan;
@@ -59,7 +61,9 @@ RTSP_RESOLUTIONS = {"4k": (3840, 2160), "1080p": (1920, 1080)}
 HOLD_SEC = 1.0          # keep last quad this long after a fresh decode
 ROI_PAD = 0.6           # ROI padding as a fraction of the quad bbox size
 ROI_MIN = 256           # minimum ROI side (px) for the WeChat detector
-ROI_MAX_TARGETS = 2     # decode at most this many held ROIs per frame
+ROI_MAX_TARGETS = 8     # decode ALL held ROIs per frame (0.2.2: was 2, which
+                        # starved multi-code scenes -- only 2 of N codes got
+                        # refreshed between full scans)
 ROI_MISS_FULL_SCAN = 2  # consecutive ROI misses before a full-frame scan
 # Anti-ghost: a hold must be re-confirmed by a FULL-FRAME scan periodically.
 # ROI-only hits (possible detector false positives on small crops) can never
@@ -248,8 +252,12 @@ class QrcodeReaderApp(App):
             for r in results:
                 self._absorb(r, now, verified=False)
         else:
-            # Full-frame scan: original camera pixels, quad in full-frame px.
-            results = self._decoder.decode(arr)
+            # Full-frame scan: TILED 2x2 (0.2.2 multi-code fix). A single
+            # WeChat pass over the whole frame finds only 2 of 6 chart codes
+            # at EVERY resolution (measured on device); overlapping tiles
+            # normalized to ~1920px recover all 6. Quads come back in
+            # full-frame px, one result per physical code.
+            results = self._decoder.decode_tiled(arr)
             self._roi_miss = 0
             for r in results:
                 self._absorb(r, now, verified=True)

@@ -1,5 +1,5 @@
 """
-qrdecode.py -- app-bundled robust CPU QR decoder (qrcode-reader 0.2.1).
+qrdecode.py -- app-bundled robust CPU QR decoder (qrcode-reader 0.2.2).
 
 Based on kit/logic/qrcode.py (same wire protocol, same fork isolation), with
 three reliability fixes that the firmware kit does not have. It is bundled
@@ -302,6 +302,63 @@ class QrDecoder:
         if missing:
             raise RuntimeError(f"missing WeChat QR model files: {missing}")
         return paths
+
+    # -- tiled full-frame scan (0.2.2 multi-code fix) ---------------------- #
+    # Measured on device 2026-11-26 (A4 chart, 6 codes, same text): a single
+    # WeChat detectAndDecode over the WHOLE frame finds only 2 of 6 codes at
+    # EVERY tier (720p/1080p/4K) -- the CNN detector internally downscales and
+    # small codes vanish. A 2x2 overlapping tile scan (each tile normalized to
+    # ~1920px long side) finds ALL 6 at every tier (~1.0 s total on RV1126B).
+    TILE_LONG = 1920
+
+    def decode_tiled(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        """Full-frame multi-code scan: 2x2 overlapping tiles, merged quads.
+
+        Quad coordinates are mapped back to FULL-FRAME pixels. Duplicates
+        (same physical code seen by two overlapping tiles) are merged by
+        center proximity, independent of text -- the chart carries several
+        codes with identical text.
+        """
+        if frame is None or getattr(frame, "size", 0) == 0:
+            return []
+        h, w = frame.shape[:2]
+        if max(w, h) <= 640:
+            return self.decode(frame)   # tiny frame: tiling adds nothing
+        tw, th = w // 2, h // 2
+        ovx, ovy = tw // 8, th // 8
+        merged: List[Dict[str, Any]] = []
+        centers: List[tuple] = []
+        for oy in (0, h - th):
+            for ox in (0, w - tw):
+                x0, y0 = max(0, ox - ovx), max(0, oy - ovy)
+                x1, y1 = min(w, ox + tw + ovx), min(h, oy + th + ovy)
+                tile = frame[y0:y1, x0:x1]
+                sc = self.TILE_LONG / float(tile.shape[1])
+                if abs(sc - 1.0) > 0.05:
+                    tile = cv2.resize(
+                        tile, None, fx=sc, fy=sc,
+                        interpolation=cv2.INTER_LINEAR if sc > 1
+                        else cv2.INTER_AREA)
+                else:
+                    sc = 1.0
+                for r in self.decode(tile):
+                    quad = [[round(x / sc + x0, 1), round(y / sc + y0, 1)]
+                            for x, y in r["quad"]]
+                    xs = [p[0] for p in quad]
+                    ys = [p[1] for p in quad]
+                    cx = (min(xs) + max(xs)) / 2.0
+                    cy = (min(ys) + max(ys)) / 2.0
+                    size = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+                    dup = False
+                    for mcx, mcy, ms in centers:
+                        d = ((cx - mcx) ** 2 + (cy - mcy) ** 2) ** 0.5
+                        if d < 0.75 * max(size, ms):
+                            dup = True
+                            break
+                    if not dup:
+                        centers.append((cx, cy, size))
+                        merged.append({"text": r["text"], "quad": quad})
+        return merged
 
     # -- decode ----------------------------------------------------------- #
     def decode(self, frame: np.ndarray) -> List[Dict[str, Any]]:
