@@ -43,7 +43,10 @@ import numpy as np
 
 from kit.app import App, run_app
 from kit.logic.recording import request_configured_recording
-from kit.logic.qrcode import QrDecoder
+# App-bundled robust decoder (kit is firmware-owned and NOT shipped per app;
+# qrdecode.py adds stdout diagnostics, crash backoff and a wedged-worker
+# health probe -- the two 0.2.0 field defects).
+from qrdecode import QrDecoder
 from kit.adapters.frame_source import FfmpegRtspSource, open_frame_source
 
 # Bundled data files (the WeChat QR model dir) are resolved against the app's
@@ -58,6 +61,12 @@ ROI_PAD = 0.6           # ROI padding as a fraction of the quad bbox size
 ROI_MIN = 256           # minimum ROI side (px) for the WeChat detector
 ROI_MAX_TARGETS = 2     # decode at most this many held ROIs per frame
 ROI_MISS_FULL_SCAN = 2  # consecutive ROI misses before a full-frame scan
+# Anti-ghost: a hold must be re-confirmed by a FULL-FRAME scan periodically.
+# ROI-only hits (possible detector false positives on small crops) can never
+# keep a box alive longer than VERIFY_MAX_SEC without full-frame confirmation.
+VERIFY_EVERY_SEC = 1.2  # force a full scan when a hold is this stale
+VERIFY_MAX_SEC = 2.5    # drop holds unconfirmed by full scan for this long
+MAX_HOLDS = 8           # track up to this many codes (even with same text)
 
 
 class ScaledRtspSource(FfmpegRtspSource):
@@ -69,9 +78,16 @@ class ScaledRtspSource(FfmpegRtspSource):
 
     def _build_cmd(self):
         cmd = super()._build_cmd()
+        # Socket I/O timeout (ffmpeg 4.4 rtsp option, microseconds). Without
+        # it a stalled RTSP stream blocks stdout.read() FOREVER: no EOF, no
+        # emit, and the front-end overlay freezes with the last box while the
+        # go2rtc preview keeps playing -- the "ghost box" defect of 0.2.0.
+        # 15 s tolerates the 8-10 s first-frame GOP delay on go2rtc cold start.
+        i = cmd.index("-i")
+        cmd[i:i] = ["-stimeout", "15000000"]
         if (self.w, self.h) != (3840, 2160):
-            i = cmd.index("-pix_fmt")
-            cmd[i:i] = ["-vf", "scale=%d:%d" % (self.w, self.h)]
+            j = cmd.index("-pix_fmt")
+            cmd[j:j] = ["-vf", "scale=%d:%d" % (self.w, self.h)]
         return cmd
 
 
@@ -89,9 +105,15 @@ class QrcodeReaderApp(App):
         # These are Caffe files for the ARM cores -- NOT NPU models, which is
         # why they are not declared in the manifest `models[]`.
         model_dir = os.path.join(_here, "models", "wechat")
-        self._decoder = QrDecoder(model_dir=model_dir)
-        self._held = {}          # text -> {"quad": [[x,y]*4], "seen": monotonic}
+        self._decoder = QrDecoder(
+            model_dir=model_dir,
+            health_path=os.path.join(_here, "models", "qr_health.png"))
+        # Holds are a LIST, not a text-keyed dict: the A4 size chart carries
+        # several codes with identical text, and a dict collapsed them into
+        # one jumping box (0.2.0 ghost defect #2).
+        self._held = []          # [{text, quad, seen, verified}]
         self._roi_miss = 0
+        self._last_pts = None
 
     # -- resolution handling ---------------------------------------------- #
     def _resolution(self):
@@ -154,15 +176,61 @@ class QrcodeReaderApp(App):
             return None
         return np.ascontiguousarray(arr[y0:y1, x0:x1]), x0, y0
 
+    @staticmethod
+    def _center_size(quad):
+        xs = [float(p[0]) for p in quad]
+        ys = [float(p[1]) for p in quad]
+        cx = (min(xs) + max(xs)) / 2.0
+        cy = (min(ys) + max(ys)) / 2.0
+        size = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+        return cx, cy, size
+
+    def _match_hold(self, text, quad):
+        """Nearest hold with same text within 0.75x its size (IoU-lite)."""
+        cx, cy, size = self._center_size(quad)
+        best, best_d = None, float("inf")
+        for h in self._held:
+            if h["text"] != text:
+                continue
+            hx, hy, hs = self._center_size(h["quad"])
+            d = ((cx - hx) ** 2 + (cy - hy) ** 2) ** 0.5
+            if d < 0.75 * max(size, hs) and d < best_d:
+                best, best_d = h, d
+        return best
+
+    def _absorb(self, r, now, verified):
+        t = str(r.get("text", ""))
+        if not t:
+            return
+        h = self._match_hold(t, r["quad"])
+        if h is None:
+            if len(self._held) < MAX_HOLDS:
+                # ROI-only newcomers start unverified: the next frame forces
+                # a full scan, so a hallucinated ROI hit cannot settle in.
+                self._held.append({"text": t, "quad": r["quad"],
+                                   "seen": now,
+                                   "verified": now if verified else 0.0})
+        else:
+            h["quad"] = r["quad"]
+            h["seen"] = now
+            if verified:
+                h["verified"] = now
+
     def _decode_frame(self, frame):
         now = time.monotonic()
         arr = frame.data
-        # expire stale holds
-        self._held = {t: v for t, v in self._held.items()
-                      if now - v["seen"] <= HOLD_SEC}
+        # Expire stale holds: no decode for HOLD_SEC, or no FULL-FRAME
+        # confirmation for VERIFY_MAX_SEC (anti-hallucination ceiling).
+        self._held = [h for h in self._held
+                      if now - h["seen"] <= HOLD_SEC
+                      and now - h["verified"] <= VERIFY_MAX_SEC]
         results = []
-        targets = list(self._held.values())[:ROI_MAX_TARGETS]
-        if targets:
+        targets = self._held[:ROI_MAX_TARGETS]
+        need_full = (not targets
+                     or self._roi_miss >= ROI_MISS_FULL_SCAN
+                     or any(now - h["verified"] > VERIFY_EVERY_SEC
+                            for h in self._held))
+        if targets and not need_full:
             for v in targets:
                 crop = self._roi_crop(arr, v["quad"])
                 if crop is None:
@@ -177,46 +245,76 @@ class QrcodeReaderApp(App):
                 self._roi_miss = 0
             else:
                 self._roi_miss += 1
-        if not targets or self._roi_miss >= ROI_MISS_FULL_SCAN:
+            for r in results:
+                self._absorb(r, now, verified=False)
+        else:
             # Full-frame scan: original camera pixels, quad in full-frame px.
             results = self._decoder.decode(arr)
             self._roi_miss = 0
-        for r in results:
-            t = str(r.get("text", ""))
-            if t:
-                self._held[t] = {"quad": r["quad"], "seen": now}
+            for r in results:
+                self._absorb(r, now, verified=True)
         return results
 
     # -- main loop ---------------------------------------------------------- #
+    def _clear_overlay(self):
+        """Drop all holds and publish an empty snapshot.
+
+        Called whenever the frame stream ends (EOF / socket timeout): without
+        this the front-end keeps the LAST payload's boxes forever while the
+        go2rtc preview keeps playing -- the 0.2.0 ghost box.
+        """
+        self._held = []
+        self._roi_miss = 0
+        try:
+            pts = self._last_pts if self._last_pts is not None \
+                else time.monotonic()
+            self.emit([], pts, results=[])
+        except Exception:
+            pass
+
     def run(self):
         self._reopen_source()
         fell_back = False
+        retries = 0
         while True:
             n = 0
             for frame in self.frames():
                 n += 1
                 self._process(frame)
-            # RTSP EOF with zero frames -> go2rtc/stream unavailable.
-            # Fall back to the official 720p broker once, then stop normally.
-            if (n == 0 and not fell_back and not self._stop_flag
-                    and self._resolution() in RTSP_RESOLUTIONS):
+            if self._stop_flag:
+                break
+            # Stream ended. Clear the overlay FIRST so no ghost box survives
+            # the recovery window.
+            self._clear_overlay()
+            if (not fell_back and self._resolution() in RTSP_RESOLUTIONS):
+                if n > 0 and retries < 3:
+                    # Mid-stream stall (socket timeout EOF): reopen RTSP with
+                    # a short backoff instead of dropping to 720p forever.
+                    retries += 1
+                    time.sleep(min(2.0 * retries, 6.0))
+                    self._reopen_source()
+                    continue
+                # Zero frames (go2rtc down) or retries exhausted: fall back
+                # to the official 720p broker once, then stop normally.
                 fell_back = True
                 self._fallback_official()
                 continue
             break
 
     def _process(self, frame):
+        self._last_pts = frame.pts
         codes = self._decode_frame(frame)
         # Flat, overlay-friendly events -- the published contract the
         # /appcenter overlay reads is {kind, text, quad}. Held quads are
-        # re-emitted so the box stays steady between slow 4K scans.
+        # re-emitted so the box stays steady between slow 4K scans. One box
+        # per tracked code, even when several codes share the same text.
         events = [
             {
                 "kind": "qrcode",
-                "text": t,
-                "quad": v["quad"],   # [[x,y]*4] corners in original px
+                "text": h["text"],
+                "quad": h["quad"],   # [[x,y]*4] corners in original px
             }
-            for t, v in self._held.items()
+            for h in self._held
         ]
         # A code remaining in view is state, not another recording event.
         current_codes = {str(item.get("text", "")) for item in codes[:64]

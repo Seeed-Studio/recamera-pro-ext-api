@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 6,
+    "sequence": 7,
     "channel": "stable"
   },
   "compatibility": {
@@ -60,6 +60,17 @@
       "size": 5984,
       "mount": "models/wechat/sr.prototxt",
       "required": true,
+      "share_scope": "content"
+    },
+    {
+      "id": "qr-health-probe-image",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/qr_health.png",
+      "sha256": "49f7f194501be498ae6c4b38b1371f53e265c084c2c39dc7bb8bc13cce82f265",
+      "size": 6864,
+      "mount": "models/qr_health.png",
+      "required": false,
       "share_scope": "content"
     }
   ],
@@ -130,7 +141,7 @@
   },
   "id": "qrcode-reader",
   "name": "QR Code Reader",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "image": "/appcenter/apps/qrcode-reader.png",
   "icon": {
     "path": "icon.png",
