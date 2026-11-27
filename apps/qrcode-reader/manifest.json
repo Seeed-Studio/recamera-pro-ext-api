@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "release": {
-    "sequence": 5,
+    "sequence": 12,
     "channel": "stable"
   },
   "compatibility": {
@@ -61,6 +61,17 @@
       "mount": "models/wechat/sr.prototxt",
       "required": true,
       "share_scope": "content"
+    },
+    {
+      "id": "qr-health-probe-image",
+      "kind": "data",
+      "source": "bundled",
+      "file": "models/qr_health.png",
+      "sha256": "49f7f194501be498ae6c4b38b1371f53e265c084c2c39dc7bb8bc13cce82f265",
+      "size": 6864,
+      "mount": "models/qr_health.png",
+      "required": false,
+      "share_scope": "content"
     }
   ],
   "resources": {
@@ -77,8 +88,8 @@
       }
     ],
     "limits": {
-      "memory_mb": 192,
-      "cpu_percent": 300,
+      "memory_mb": 384,
+      "cpu_percent": 400,
       "storage_mb": 16,
       "shutdown_grace_sec": 10
     }
@@ -130,7 +141,7 @@
   },
   "id": "qrcode-reader",
   "name": "QR Code Reader",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "image": "/appcenter/apps/qrcode-reader.png",
   "icon": {
     "path": "icon.png",
@@ -249,6 +260,36 @@
   },
   "config_schema": {
     "groups": [
+      {
+        "key": "video",
+        "title": "Capture resolution",
+        "title_zh": "采集分辨率",
+        "items": [
+          {
+            "key": "resolution",
+            "type": "select",
+            "apply": "restart",
+            "title": "Resolution (4K/1080p via RTSP main stream; 720p via frame broker)",
+            "title_zh": "分辨率（4K/1080p 走 RTSP 主码流；720p 走帧 broker）",
+            "default": "4k",
+            "options": [
+              "4k",
+              "1080p",
+              "720p"
+            ],
+            "option_labels": [
+              "4K (3840x2160, ~4.5 fps)",
+              "1080p (1920x1080, ~7 fps)",
+              "720p (1280x720, ~27 fps)"
+            ],
+            "option_labels_zh": [
+              "4K（3840x2160，约 4.5 帧/秒）",
+              "1080p（1920x1080，约 7 帧/秒）",
+              "720p（1280x720，约 27 帧/秒）"
+            ]
+          }
+        ]
+      },
       {
         "key": "recording",
         "title": "Event recording (application decides)",
