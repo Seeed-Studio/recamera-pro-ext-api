@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import signal
 import struct
 import sys
 import time
@@ -63,6 +64,18 @@ def _wechat_worker(conn, paths: List[str], det=None) -> None:
     except Exception:
         pass
 
+    # fork() inherits kit's SIGTERM/SIGINT handlers, which RAISE _GracefulStop
+    # (a BaseException) inside whatever syscall the child happens to be in --
+    # observed on device as tracebacks through conn.recv_bytes() and
+    # det.detectAndDecode() on every app restart. The child has no graceful
+    # shutdown to perform; restore default disposition so SIGTERM just kills
+    # it silently and SIGINT never surfaces as a fake decode crash.
+    for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(_sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
+
     keep = {0, 1, 2, conn.fileno()}
     try:
         for name in os.listdir("/proc/self/fd"):
@@ -89,6 +102,11 @@ def _wechat_worker(conn, paths: List[str], det=None) -> None:
             blob = conn.recv_bytes()
         except (EOFError, OSError):
             break
+        except BaseException:
+            # Stray kit stop signals (_GracefulStop) inherited via fork():
+            # die silently instead of printing a bogus traceback (0.2.2
+            # field defect: worker "crashed" at conn.recv_bytes on restart).
+            os._exit(0)
         if len(blob) < 12:
             break
         h, w, c = struct.unpack("<III", blob[:12])
@@ -101,7 +119,9 @@ def _wechat_worker(conn, paths: List[str], det=None) -> None:
                     out.append({"text": text, "quad": QrDecoder._quad(quad)})
         except cv2.error:
             out = []
-        except Exception:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                os._exit(0)  # _GracefulStop / KeyboardInterrupt: silent exit
             err_count += 1
             if err_count <= 3:
                 _log("worker: decode exception #%d: %s"

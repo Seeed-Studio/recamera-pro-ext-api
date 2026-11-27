@@ -34,11 +34,32 @@ recovers all 6); ROI decode costs ~0.05-0.2 s per crop. So:
 If the RTSP source yields zero frames (go2rtc down / stream dead) the app
 falls back to the official 720p broker instead of crash-looping.
 
+v0.2.3: frozen-box fix for 4k/1080p. Decode (~1-1.5 s at 4K) used to run
+INSIDE the frame loop; while the main thread decoded, ffmpeg's stdout pipe
+filled and ffmpeg stopped draining the RTSP socket. Two failure modes
+followed (both measured on device, diag031/diag033):
+  * ffmpeg's default vsync re-emitted the SAME stale frame at 30 fps to
+    fill the CFR timeline -- 21 frames read across 12 s all had identical
+    content hashes -- so the overlay kept re-drawing boxes from one old
+    picture ("box frozen at the previous position", "new code never seen");
+  * go2rtc eventually dropped the back-pressured consumer -> EOF -> retry
+    -> official-broker fallback -> UNCAUGHT EINTERNAL(7) TransportError ->
+    process crash loop.
+Fix: (1) `-vsync 0` passthrough so every stdout frame is a genuinely new
+picture; (2) a background pump thread drains frames continuously and keeps
+only the NEWEST one (single slot), so decoding can never block the pipe and
+the decoded image is always current; (3) a stall watchdog (no frame for
+FRAME_GAP_SEC, or FIRST_FRAME_TIMEOUT for the cold start) clears the
+overlay and rebuilds the source; (4) every stream error -- including the
+official broker's EINTERNAL -- is caught, clears boxes, and backs off into
+a reopen instead of killing the process.
+
 Run on device (no root / no NPU needed):
 
     python3 -m kit.run /userdata/local/apps/qrcode-reader --sink stdout
 """
 import os
+import threading
 import time
 
 import numpy as np
@@ -71,6 +92,14 @@ ROI_MISS_FULL_SCAN = 2  # consecutive ROI misses before a full-frame scan
 VERIFY_EVERY_SEC = 1.2  # force a full scan when a hold is this stale
 VERIFY_MAX_SEC = 2.5    # drop holds unconfirmed by full scan for this long
 MAX_HOLDS = 8           # track up to this many codes (even with same text)
+# 0.2.3 pump/stall tuning. FIRST_FRAME_TIMEOUT covers the measured 8-10 s
+# go2rtc cold-start GOP delay plus warmup; FRAME_GAP_SEC is the max inter-
+# frame silence tolerated once the stream has produced frames (the pump
+# drains at the DECODER's rate -- ~2.4 fps at 4K -- so 0.5 s is normal).
+FIRST_FRAME_TIMEOUT = 25.0
+FRAME_GAP_SEC = 6.0
+RTSP_MAX_FAILS = 5      # consecutive dead RTSP cycles before broker demote
+OFFICIAL_MAX_FAILS = 8  # dead broker cycles before retrying RTSP again
 
 
 class ScaledRtspSource(FfmpegRtspSource):
@@ -92,7 +121,112 @@ class ScaledRtspSource(FfmpegRtspSource):
         if (self.w, self.h) != (3840, 2160):
             j = cmd.index("-pix_fmt")
             cmd[j:j] = ["-vf", "scale=%d:%d" % (self.w, self.h)]
+        # CRITICAL (0.2.3): passthrough frame timing. With the default vsync
+        # (CFR @ 30 fps) a consumer slower than the stream is fed REPEATS of
+        # the same stale frame to fill the timeline -- measured on device:
+        # 21 frames read across 12 s all had identical content hashes, which
+        # froze the overlay boxes at old positions. -vsync 0 emits every
+        # decoded frame exactly once, so each read is a genuinely new image.
+        k = cmd.index("-f")
+        cmd[k:k] = ["-vsync", "0"]
         return cmd
+
+
+class _FramePump:
+    """Drain the kit frame iterator in a background thread; keep ONE frame.
+
+    Single-slot latest-frame queue: when the producer (ffmpeg/ext broker)
+    outruns the consumer (QR decode, 0.2-1.5 s/frame), intermediate frames
+    are DROPPED, never queued. This decouples capture from decode so the
+    pipe/socket never back-pressures the source -- the 0.2.2 stale-frame
+    root cause -- and the decode thread always sees the newest picture.
+
+    Any exception from the underlying iterator (TransportError, EINTERNAL,
+    _GracefulStop, ...) is captured, not raised: the main loop reads it via
+    `error_text()` and rebuilds the source instead of dying.
+    """
+
+    def __init__(self, app):
+        self._app = app
+        self._cond = threading.Condition()
+        self._frame = None
+        self._seq = 0
+        self._err = None
+        self._closed = False
+        self._stop = False
+        self.started = time.monotonic()
+        self.last_arrival = None
+        self.dropped = 0
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name="qr-frame-pump")
+        self._thread.start()
+
+    def _run(self):
+        try:
+            for frame in self._app.frames():
+                with self._cond:
+                    if self._stop:
+                        break
+                    if self._frame is not None:
+                        self.dropped += 1
+                    self._frame = frame
+                    self._seq += 1
+                    self.last_arrival = time.monotonic()
+                    self._cond.notify_all()
+        except BaseException as exc:   # TransportError / _GracefulStop / ...
+            with self._cond:
+                self._err = exc
+        finally:
+            with self._cond:
+                self._closed = True
+                self._cond.notify_all()
+
+    def next(self, last_seq, timeout=0.5):
+        """Block until a frame newer than `last_seq` exists.
+
+        Returns (frame, seq), or None on timeout/closure. Because only the
+        newest frame is kept, a slow consumer skips the backlog automatically.
+        """
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while self._seq == last_seq:
+                if self._closed or self._stop:
+                    return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._cond.wait(remaining)
+            if self._stop:
+                return None
+            return self._frame, self._seq
+
+    @property
+    def closed(self):
+        with self._cond:
+            return self._closed
+
+    def idle_sec(self):
+        """Seconds since the last frame arrived (or since pump start)."""
+        with self._cond:
+            ref = self.last_arrival if self.last_arrival else self.started
+            return time.monotonic() - ref
+
+    def error_text(self):
+        with self._cond:
+            if self._err is None:
+                return "EOF/stall"
+            return "%s: %s" % (type(self._err).__name__, self._err)
+
+    def stop(self):
+        """Flag shutdown, unblock the producer, and reap the thread."""
+        with self._cond:
+            self._stop = True
+            self._cond.notify_all()
+        try:
+            self._app._rt.get("src").close()   # EOF the blocking read
+        except Exception:
+            pass
+        self._thread.join(timeout=3.0)
 
 
 class QrcodeReaderApp(App):
@@ -281,33 +415,68 @@ class QrcodeReaderApp(App):
             pass
 
     def run(self):
-        self._reopen_source()
-        fell_back = False
-        retries = 0
-        while True:
-            n = 0
-            for frame in self.frames():
-                n += 1
-                self._process(frame)
+        """Pump-driven main loop (0.2.3).
+
+        A background _FramePump drains self.frames() continuously and keeps
+        only the newest frame, so decode latency can never back-pressure the
+        source (the 0.2.2 stale/frozen-frame root cause). EOF, stall and ANY
+        transport exception (incl. the official broker's EINTERNAL that used
+        to kill the process) clear the overlay and rebuild the source with
+        bounded backoff; the process itself never dies from stream faults.
+        """
+        use_rtsp = self._resolution() in RTSP_RESOLUTIONS
+        self._reopen_source()          # no-op for 720p: keep official broker
+        on_official = not use_rtsp
+        fails = 0
+        while not self._stop_flag:
+            pump = _FramePump(self)
+            self._pump = pump   # for stats logging in _process
+            n, last_seq = 0, 0
+            try:
+                while not self._stop_flag:
+                    got = pump.next(last_seq, timeout=0.5)
+                    if got is not None:
+                        frame, last_seq = got
+                        n += 1
+                        self._process(frame)
+                        continue
+                    if pump.closed:
+                        break
+                    # No new frame yet. Cold start (GOP + go2rtc on-demand
+                    # pull) legitimately takes 8-10 s; once frames flowed, a
+                    # FRAME_GAP_SEC silence means the source is wedged.
+                    limit = FIRST_FRAME_TIMEOUT if n == 0 else FRAME_GAP_SEC
+                    if pump.idle_sec() > limit:
+                        break
+            finally:
+                pump.stop()
             if self._stop_flag:
                 break
-            # Stream ended. Clear the overlay FIRST so no ghost box survives
-            # the recovery window.
+            # Stream ended (EOF / stall / transport error). Clear the overlay
+            # FIRST so no ghost box survives the recovery window.
+            print("[app:%s] stream cycle ended after %d frames (%s, dropped "
+                  "%d); rebuilding source" % (self.id, n, pump.error_text(),
+                                               pump.dropped), flush=True)
             self._clear_overlay()
-            if (not fell_back and self._resolution() in RTSP_RESOLUTIONS):
-                if n > 0 and retries < 3:
-                    # Mid-stream stall (socket timeout EOF): reopen RTSP with
-                    # a short backoff instead of dropping to 720p forever.
-                    retries += 1
-                    time.sleep(min(2.0 * retries, 6.0))
+            fails += 1
+            if on_official:
+                time.sleep(min(2.0 * fails, 10.0))
+                if use_rtsp and fails >= OFFICIAL_MAX_FAILS:
+                    on_official = False   # give the RTSP tier another chance
+                    fails = 0
                     self._reopen_source()
-                    continue
-                # Zero frames (go2rtc down) or retries exhausted: fall back
-                # to the official 720p broker once, then stop normally.
-                fell_back = True
-                self._fallback_official()
+                else:
+                    self._fallback_official()
                 continue
-            break
+            if fails <= RTSP_MAX_FAILS:
+                time.sleep(min(2.0 * fails, 8.0))
+                self._reopen_source()
+                continue
+            # RTSP persistently dead: demote to the official 720p broker
+            # (degraded but alive) and keep retrying both from there.
+            on_official = True
+            fails = 0
+            self._fallback_official()
 
     def _process(self, frame):
         self._last_pts = frame.pts
@@ -335,6 +504,17 @@ class QrcodeReaderApp(App):
         self._recording_pending_codes = pending
         self._recording_codes = current_codes
         self.emit(events, frame.pts, results=codes)
+        # Own stats line: kit's verbose `frame#NNN dets=...` reads
+        # _last_payload right when the pump thread resumes the generator,
+        # which races the (slow) decode thread's emit and misleadingly shows
+        # dets=0 forever. This line reflects what was actually published.
+        self._proc_n = getattr(self, "_proc_n", 0) + 1
+        if self._proc_n % 16 == 1:
+            pump = getattr(self, "_pump", None)
+            print("[app:%s] proc#%d codes=%d events=%d held=%d dropped=%s"
+                  % (self.id, self._proc_n, len(codes), len(events),
+                     len(self._held),
+                     pump.dropped if pump is not None else "?"), flush=True)
 
 
 if __name__ == "__main__":
