@@ -398,6 +398,29 @@ class QrcodeReaderApp(App):
         return results
 
     # -- main loop ---------------------------------------------------------- #
+    def _announce_frame_size(self, w, h):
+        """Deterministically publish the frame reference size (0.2.4).
+
+        kit's emit() only calls sink.set_frame_size() when self._cur_frame
+        is set, but that attribute lives in the frames() generator, which
+        the 0.2.3 _FramePump drains on a BACKGROUND thread: by the time this
+        (decode) thread emits, the generator has long resumed and cleared
+        _cur_frame, so the sink never learns the frame size and every WS
+        payload lacks `frame` -- the /appcenter overlay then hides all
+        boxes ("应用结果缺少帧宽高"). Announce the size explicitly via the
+        public ResultSink API before each emit. Dims are constant per tier,
+        so a racing pump-side set_frame_size with another frame is harmless.
+        """
+        if not (w and h):
+            return
+        self._frame_wh = (int(w), int(h))
+        sink = (self._rt or {}).get("sink")
+        if sink is not None:
+            try:
+                sink.set_frame_size(int(w), int(h))
+            except Exception:
+                pass
+
     def _clear_overlay(self):
         """Drop all holds and publish an empty snapshot.
 
@@ -410,6 +433,9 @@ class QrcodeReaderApp(App):
         try:
             pts = self._last_pts if self._last_pts is not None \
                 else time.monotonic()
+            wh = getattr(self, "_frame_wh", None)
+            if wh:
+                self._announce_frame_size(*wh)
             self.emit([], pts, results=[])
         except Exception:
             pass
@@ -480,6 +506,9 @@ class QrcodeReaderApp(App):
 
     def _process(self, frame):
         self._last_pts = frame.pts
+        # 0.2.4: announce BEFORE decode/emit so even the first published
+        # payload carries frame{width,height} for the overlay alignment gate.
+        self._announce_frame_size(frame.w, frame.h)
         codes = self._decode_frame(frame)
         # Flat, overlay-friendly events -- the published contract the
         # /appcenter overlay reads is {kind, text, quad}. Held quads are
